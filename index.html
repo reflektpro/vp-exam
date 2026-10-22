@@ -10,7 +10,7 @@
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=__VER__">
 </head>
 <body>
 <header class="topbar">
@@ -21,9 +21,10 @@
 <main id="app"><div class="loading">Загрузка…</div></main>
 <footer class="foot">ГУ ВП · учебный портал · RMRP «Патрики»</footer>
 <div id="toast" class="toast" hidden></div>
-<script src="config.js"></script>
-<script src="app.js"></script>
-<script src="player.js"></script>
-<script src="admin.js"></script>
+<script>window.VP_VERSION = "__VER__";</script>
+<script src="config.js?v=__VER__"></script>
+<script src="app.js?v=__VER__"></script>
+<script src="player.js?v=__VER__"></script>
+<script src="admin.js?v=__VER__"></script>
 </body>
 </html>

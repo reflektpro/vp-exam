@@ -17,6 +17,38 @@ function formObj(form) {
 }
 function bindRows() { $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; }); }
 const yes = v => v ? '✔' : '—';
+// Блок «Статус публикации» + кнопки сохранения (общий для лекций и экзаменов).
+function pubBlock(published, female) {
+  const pub = female ? 'Опубликована' : 'Опубликован';
+  return `<div class="pubbox">
+    <div class="row between"><b>Статус:</b> <span id="pubNow">${published ? `<span class="badge ok">${pub} — видно кандидатам</span>` : '<span class="badge warn">Черновик — кандидаты не видят</span>'}</span></div>
+    <label class="f" style="margin:10px 0"><span>Статус после сохранения</span><select name="pubstatus" class="pubsel">
+      <option value="0" ${published ? '' : 'selected'}>Черновик (не виден кандидатам)</option>
+      <option value="1" ${published ? 'selected' : ''}>${pub} (виден кандидатам)</option></select></label>
+    <div class="row"><button type="submit" class="btn gold" id="saveBtn">Сохранить</button>
+      <button type="button" class="btn" data-pub="0">Сохранить черновик</button>
+      <button type="button" class="btn primary" data-pub="1">${published ? 'Сохранить и оставить опубликованным' : 'Опубликовать'}</button></div>
+    <div id="ferr" class="ferr"></div></div>`;
+}
+// Навешивает обработчики: save(published:boolean) должен вернуть Promise.
+function bindPub(form, save) {
+  const sel = form.querySelector('.pubsel');
+  const run = async (pub) => {
+    const btns = $$('.pubbox button', form); btns.forEach(b => b.disabled = true);
+    const ferr = form.querySelector('#ferr'); ferr.innerHTML = '';
+    try { await save(pub); }
+    catch (e) { ferr.innerHTML = `<div class="alert err"><b>Не сохранено:</b> ${esc(e.message)}</div>`; toast('Не сохранено: ' + e.message, true); }
+    btns.forEach(b => b.disabled = false);
+  };
+  form.onsubmit = (ev) => { ev.preventDefault(); run(sel.value === '1'); };
+  $$('[data-pub]', form).forEach(b => b.onclick = () => { sel.value = b.dataset.pub; run(b.dataset.pub === '1'); });
+  form.addEventListener('input', (ev) => { if (ev.target !== sel) form.querySelector('#ferr').innerHTML = ''; });
+}
+async function quickPublish(kind, id, pub, errBox) {
+  try { await api('PUT', `/api/admin/${kind}/${id}`, { published: pub }); toast(pub ? 'Опубликовано' : 'Снято с публикации'); render(); }
+  catch (e) { if (errBox) errBox.innerHTML = `<div class="alert err"><b>Не удалось ${pub ? 'опубликовать' : 'снять с публикации'}:</b> ${esc(e.message)}</div>`; toast(e.message, true); }
+}
+
 
 route('/admin', async () => {
   const s = await api('GET', '/api/admin/stats');
@@ -40,15 +72,17 @@ route('/admin', async () => {
 route('/admin/lectures', async () => {
   const { lectures } = await api('GET', '/api/admin/lectures');
   setView(`<h1>Лекции</h1>${adminNav('/admin/lectures')}
-    <p><a class="btn gold" href="#/admin/lecture/new">+ Добавить лекцию</a></p>
-    ${lectures.length ? `<table><tr><th>Порядок</th><th>Название</th><th>Длительность</th><th>Обязательная</th><th>Опубликована</th><th>Просмотрели</th><th></th></tr>
+    <p><a class="btn gold" href="#/admin/lecture/new">+ Добавить лекцию</a></p><div id="lerr"></div>
+    ${lectures.length ? `<table><tr><th>Порядок</th><th>Название</th><th>Длительность</th><th>Обязательная</th><th>Статус</th><th>Просмотрели</th><th></th></tr>
     ${lectures.map((l, i) => `<tr><td><button class="btn sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button> <button class="btn sm" data-down="${i}" ${i < lectures.length - 1 ? '' : 'disabled'}>↓</button></td>
-      <td><a href="#/admin/lecture/${l.id}">${esc(l.title)}</a> ${l.type === 'youtube' ? '<span class="badge info">YouTube</span>' : l.type === 'file' ? '<span class="badge">файл</span>' : '<span class="badge warn">нет видео</span>'}</td><td>${fmtTime(l.duration_sec)}</td><td>${yes(l.required)}</td><td>${l.published ? '<span class="badge ok">да</span>' : '<span class="badge">черновик</span>'}</td><td>${l.watched_count}</td>
-      <td><a class="btn sm" href="#/admin/lecture/${l.id}">Изменить</a></td></tr>`).join('')}</table>` : '<div class="alert info">Лекций пока нет.</div>'}`);
+      <td><a href="#/admin/lecture/${l.id}">${esc(l.title)}</a> ${l.type === 'youtube' ? '<span class="badge info">YouTube</span>' : l.type === 'file' ? '<span class="badge">файл</span>' : '<span class="badge warn">нет видео</span>'}</td><td>${fmtTime(l.duration_sec)}</td><td>${yes(l.required)}</td><td>${l.published ? '<span class="badge ok">опубликована</span>' : '<span class="badge warn">черновик</span>'}</td><td>${l.watched_count}</td>
+      <td style="white-space:nowrap"><a class="btn sm" href="#/admin/lecture/${l.id}">Изменить</a> ${l.published ? `<button class="btn sm" data-unpub="${l.id}">Снять с публикации</button>` : `<button class="btn sm primary" data-pubnow="${l.id}">Опубликовать</button>`}</td></tr>`).join('')}</table>` : '<div class="alert info">Лекций пока нет.</div>'}`);
   const ids = lectures.map(l => l.id);
   const move = async (i, d) => { const a = ids.slice(); [a[i], a[i + d]] = [a[i + d], a[i]]; await api('POST', '/api/admin/lectures/reorder', { ids: a }); render(); };
   $$('[data-up]').forEach(b => b.onclick = () => move(+b.dataset.up, -1));
   $$('[data-down]').forEach(b => b.onclick = () => move(+b.dataset.down, 1));
+  $$('[data-pubnow]').forEach(b => b.onclick = () => quickPublish('lectures', b.dataset.pubnow, true, $('#lerr')));
+  $$('[data-unpub]').forEach(b => b.onclick = () => quickPublish('lectures', b.dataset.unpub, false, $('#lerr')));
 }, { role: 'admin' });
 
 route('/admin/lecture/:id', async (id) => {
@@ -66,13 +100,12 @@ route('/admin/lecture/:id', async (id) => {
       <div class="row"><label class="f" style="width:220px"><span>Длительность (сек, мм:сс или чч:мм:сс)</span><input name="duration_sec" maxlength="10" value="${l.duration_sec ? fmtTime(l.duration_sec) : ''}" placeholder="например 12:34"></label>
         <button type="button" class="btn" id="detect">Определить по видео</button><span class="small" id="dinfo"></span></div>
       <label class="chk"><input type="checkbox" name="required" ${l.required ? 'checked' : ''}> Обязательная (нужна для допуска к экзамену)</label>
-      <label class="chk"><input type="checkbox" name="published" ${l.published ? 'checked' : ''}> Опубликована (видна кандидатам). Без галочки лекция сохраняется как черновик — длительность можно указать позже.</label>
-      <div class="row"><button class="btn gold" id="saveBtn">Сохранить</button>${isNew ? '' : '<button type="button" class="btn danger" id="del">Удалить лекцию</button>'}</div>
-      <div id="ferr" class="ferr"></div>
+      ${pubBlock(l.published, true)}
+      ${isNew ? '' : '<p style="margin-top:14px"><button type="button" class="btn danger sm" id="del">Удалить лекцию</button></p>'}
     </form>
     <div class="card flat"><h3>Предпросмотр видео</h3><div id="pv" class="mut small">Вставьте ссылку на видео.</div>
     <p class="small mut">Здесь перемотка разрешена — это только проверка для администратора. Кандидат увидит плеер без перемотки.</p></div>`);
-  const f = $('#lf'), pvBox = $('#pv'), dinfo = $('#dinfo'), vinfo = $('#vinfo'), ferr = $('#ferr');
+  const f = $('#lf'), pvBox = $('#pv'), dinfo = $('#dinfo'), vinfo = $('#vinfo');
   const setD = (t, cls) => { dinfo.innerHTML = t ? `<span class="${cls === 'err' ? 'o-wrong' : cls === 'ok' ? 'o-correct' : 'mut'}">${esc(t)}</span>` : ''; };
   const kind = (u) => {
     if (!u) return { t: 'none' };
@@ -109,28 +142,20 @@ route('/admin/lecture/:id', async (id) => {
   };
   refresh();
   f.video_url.addEventListener('input', () => refresh());
-  f.addEventListener('input', () => { ferr.innerHTML = ''; });
   f.video_url.addEventListener('change', () => { refresh(); const dv = f.duration_sec.value.trim(); if (!dv || dv === '0' || dv === '0:00') detect(true); });
   $('#detect').onclick = () => detect(false);
   if (l.video_url && !l.duration_sec) detect(true);
-  f.onsubmit = async (ev) => {
-    ev.preventDefault(); ferr.innerHTML = '';
-    const body = formObj(f);
+  bindPub(f, async (pub) => {
+    const body = formObj(f); delete body.pubstatus;
+    body.published = pub;
     body.duration_sec = String(body.duration_sec || '').trim();
-    if (!body.title.trim()) { ferr.innerHTML = '<div class="alert err">Укажите название лекции.</div>'; return; }
-    $('#saveBtn').disabled = true;
-    try {
-      const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/lectures' + (isNew ? '' : '/' + l.id), body);
-      const m = r.lecture.published ? 'Лекция сохранена и опубликована.' : 'Лекция сохранена как черновик (кандидаты её не видят). Отметьте «Опубликована», когда всё готово.';
-      toast('Лекция сохранена');
-      sessionStorage.setItem('vp_saved_msg', m);
-      if (isNew) location.hash = '#/admin/lecture/' + r.lecture.id; else render();
-    } catch (e) {
-      ferr.innerHTML = `<div class="alert err"><b>Не сохранено:</b> ${esc(e.message)}</div>`;
-      toast('Не сохранено: ' + e.message, true);
-      $('#saveBtn').disabled = false;
-    }
-  };
+    if (!body.title.trim()) throw new Error('Укажите название лекции.');
+    const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/lectures' + (isNew ? '' : '/' + l.id), body);
+    const m = r.lecture.published ? 'Лекция сохранена и опубликована — кандидаты её видят.' : 'Лекция сохранена как черновик (кандидаты её не видят). Нажмите «Опубликовать», когда всё готово.';
+    toast(r.lecture.published ? 'Лекция опубликована' : 'Черновик сохранён');
+    sessionStorage.setItem('vp_saved_msg', m);
+    if (isNew) location.hash = '#/admin/lecture/' + r.lecture.id; else render();
+  });
   const del = $('#del');
   if (del) del.onclick = async () => { if (!confirm('Удалить лекцию и весь прогресс кандидатов по ней?')) return; try { await api('DELETE', '/api/admin/lectures/' + l.id); location.hash = '#/admin/lectures'; } catch (e) { toast(e.message, true); } };
 }, { role: 'admin' });
@@ -139,10 +164,13 @@ route('/admin/lecture/:id', async (id) => {
 route('/admin/exams', async () => {
   const { exams } = await api('GET', '/api/admin/exams');
   setView(`<h1>Экзамены</h1>${adminNav('/admin/exams')}
-    <p><a class="btn gold" href="#/admin/exam/new">+ Создать экзамен</a></p>
-    ${exams.length ? `<table><tr><th>Название</th><th>Вопросов</th><th>Время</th><th>Проходной</th><th>Попыток</th><th>На проверке</th><th>Статус</th></tr>
-    ${exams.map(e => `<tr class="click" data-href="#/admin/exam/${e.id}"><td>${esc(e.title)}</td><td>${e.question_count}</td><td>${e.time_limit_min ? e.time_limit_min + ' мин' : '∞'}</td><td>${e.pass_pct}%</td><td>${e.attempt_count}</td><td>${e.pending_count}</td><td>${e.published ? '<span class="badge ok">опубликован</span>' : '<span class="badge">черновик</span>'}</td></tr>`).join('')}</table>` : '<div class="alert info">Экзаменов пока нет.</div>'}`);
+    <p><a class="btn gold" href="#/admin/exam/new">+ Создать экзамен</a></p><div id="lerr"></div>
+    ${exams.length ? `<table><tr><th>Название</th><th>Вопросов</th><th>Время</th><th>Проходной</th><th>Попыток</th><th>На проверке</th><th>Статус</th><th></th></tr>
+    ${exams.map(e => `<tr class="click" data-href="#/admin/exam/${e.id}"><td>${esc(e.title)}</td><td>${e.question_count}</td><td>${e.time_limit_min ? e.time_limit_min + ' мин' : '∞'}</td><td>${e.pass_pct}%</td><td>${e.attempt_count}</td><td>${e.pending_count}</td><td>${e.published ? '<span class="badge ok">опубликован</span>' : '<span class="badge warn">черновик</span>'}</td>
+      <td style="white-space:nowrap">${e.published ? `<button class="btn sm" data-unpub="${e.id}">Снять с публикации</button>` : `<button class="btn sm primary" data-pubnow="${e.id}">Опубликовать</button>`}</td></tr>`).join('')}</table>` : '<div class="alert info">Экзаменов пока нет.</div>'}`);
   bindRows();
+  $$('[data-pubnow]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); quickPublish('exams', b.dataset.pubnow, true, $('#lerr')); });
+  $$('[data-unpub]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); quickPublish('exams', b.dataset.unpub, false, $('#lerr')); });
 }, { role: 'admin' });
 
 const QTYPE_RU = { single: 'Один правильный ответ', multi: 'Несколько правильных ответов', text: 'Краткий текстовый ответ (ручная проверка)', long: 'Развёрнутый ответ (ручная проверка)' };
@@ -163,16 +191,18 @@ route('/admin/exam/:id', async (id) => {
       <label class="chk"><input type="checkbox" name="shuffle_questions" ${e.shuffle_questions ? 'checked' : ''}> Перемешивать вопросы</label>
       <label class="chk"><input type="checkbox" name="shuffle_options" ${e.shuffle_options ? 'checked' : ''}> Перемешивать варианты ответов</label>
       <label class="chk"><input type="checkbox" name="requires_lectures" ${e.requires_lectures ? 'checked' : ''}> Доступен только после просмотра всех обязательных лекций</label>
-      <label class="chk"><input type="checkbox" name="published" ${e.published ? 'checked' : ''}> Опубликован</label>
-      <div class="row"><button class="btn gold">Сохранить параметры</button>${isNew ? '' : '<button type="button" class="btn danger" id="del">Удалить экзамен</button>'}</div>
+      ${pubBlock(e.published, false)}
+      ${isNew ? '' : '<p style="margin-top:14px"><button type="button" class="btn danger sm" id="del">Удалить экзамен</button></p>'}
     </form>
     ${isNew ? '<div class="alert info">Сохраните экзамен, чтобы добавить вопросы.</div>' : `<h2>Вопросы (${qs.length}, всего баллов: ${qs.reduce((s, q) => s + q.points, 0)})</h2><div id="qlist"></div>
       <div class="row"><select id="newType">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select><button class="btn gold" id="addQ" type="button">+ Добавить вопрос</button></div>`}`);
-  $('#ef').onsubmit = async (ev) => {
-    ev.preventDefault();
-    try { const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/exams' + (isNew ? '' : '/' + e.id), formObj(ev.target)); toast('Экзамен сохранён'); if (isNew) location.hash = '#/admin/exam/' + r.exam.id; else render(); }
-    catch (err) { toast(err.message, true); }
-  };
+  bindPub($('#ef'), async (pub) => {
+    const body = formObj($('#ef')); delete body.pubstatus; body.published = pub;
+    if (!String(body.title || '').trim()) throw new Error('Укажите название экзамена.');
+    const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/exams' + (isNew ? '' : '/' + e.id), body);
+    toast(r.exam.published ? 'Экзамен опубликован' : 'Черновик экзамена сохранён');
+    if (isNew) location.hash = '#/admin/exam/' + r.exam.id; else render();
+  });
   if (isNew) return;
   $('#del').onclick = async () => { if (!confirm('Удалить экзамен со всеми вопросами и попытками?')) return; try { await api('DELETE', '/api/admin/exams/' + e.id); location.hash = '#/admin/exams'; } catch (err) { toast(err.message, true); } };
   const list = $('#qlist');

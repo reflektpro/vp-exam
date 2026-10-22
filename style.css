@@ -36,7 +36,7 @@ main{flex:1;width:100%;max-width:1120px;margin:0 auto;padding:26px 20px}
 .btn.discord{background:#5865f2;border-color:#7983f5;font-size:16px;padding:12px 22px}
 input,select,textarea{font:inherit;color:var(--txt);background:#121615;border:1px solid #3a4541;border-radius:4px;padding:8px 10px;width:100%}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gold)}
-input[type=checkbox],input[type=radio]{width:auto;accent-color:var(--gold)}
+input[type=checkbox],input[type=radio]{width:18px;height:18px;flex:0 0 18px;accent-color:var(--gold);cursor:pointer}
 textarea{min-height:90px;resize:vertical}
 label.f{display:block;margin-bottom:12px}
 label.f>span{display:block;font-size:13px;color:var(--mut);margin-bottom:4px}
@@ -123,3 +123,7 @@ pre.code{background:#101413;border:1px solid var(--line);padding:10px;border-rad
 .player:fullscreen .ytwrap{aspect-ratio:auto;max-height:none;height:100%}
 .player .ov{z-index:3}
 .ferr{margin-top:12px}
+
+.pubbox{border:1px solid var(--gold);border-radius:6px;padding:14px;background:#171c1a;margin-top:16px}
+.pubbox .pubsel{max-width:420px;font-weight:600}
+.updbar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:120;background:#1d2326;border:1px solid var(--gold);border-radius:6px;padding:10px 14px;display:flex;gap:12px;align-items:center;box-shadow:0 8px 30px rgba(0,0,0,.5)}

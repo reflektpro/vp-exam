@@ -661,11 +661,16 @@ async function saveExam(request, env, user, id) {
   if (id) {
     const cur = await env.DB.prepare('SELECT id FROM exams WHERE id = ?1').bind(id).first();
     if (!cur) throw new HttpError(404, 'Экзамен не найден');
+    if (o.published) {
+      const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(id).first();
+      if (!qc.c) throw new HttpError(400, 'Чтобы опубликовать экзамен, добавьте хотя бы один вопрос. Черновик можно сохранить и без вопросов.');
+    }
     const keys = Object.keys(o);
     if (keys.length) await env.DB.prepare(`UPDATE exams SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`).bind(...keys.map(k => o[k]), now, id).run();
     await audit(env, user, 'exam.update', id, o);
     return adminExam(env, id);
   }
+  if (o.published) throw new HttpError(400, 'Сначала сохраните экзамен как черновик и добавьте вопросы — потом его можно опубликовать.');
   const keys = Object.keys(o);
   const r = await env.DB.prepare(`INSERT INTO exams (${keys.join(', ')}, created_at, updated_at) VALUES (${keys.map((_, i) => '?' + (i + 1)).join(', ')}, ?${keys.length + 1}, ?${keys.length + 1}) RETURNING id`)
     .bind(...keys.map(k => o[k]), now).first();

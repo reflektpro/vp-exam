@@ -2,7 +2,7 @@
 'use strict';
 const CFG = window.VP_CONFIG;
 const TOKEN_KEY = 'vpexam_token';
-const App = { me: null, config: null, routes: [], cleanup: [] };
+const App = { me: null, config: null, routes: [], cleanup: [], seq: 0, doneSeq: 0 };
 
 // ---------- утилиты ----------
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -46,8 +46,12 @@ async function render() {
     const m = r.re.exec(path);
     if (!m) continue;
     if (r.opts.role && !hasRole(r.opts.role)) { setView('<div class="alert err">Недостаточно прав для этого раздела.</div>'); return; }
+    const mine = ++App.seq;
     try { await r.fn(...m.slice(1).map(decodeURIComponent)); }
-    catch (e) { setView(`<div class="alert err">${esc(e.message)}</div><a class="btn" href="#/">На главную</a>`); }
+    catch (e) { if (mine === App.seq) setView(`<div class="alert err">${esc(e.message)}</div><a class="btn" href="#/">На главную</a>`); }
+    // Устаревшая отрисовка (пользователь уже перешёл на другую страницу) могла затереть новую — перерисовать актуальную.
+    if (mine !== App.seq && App.doneSeq > mine) { render(); return; }
+    App.doneSeq = Math.max(App.doneSeq, mine);
     return;
   }
   setView('<div class="alert warn">Страница не найдена.</div><a class="btn" href="#/">На главную</a>');
@@ -79,7 +83,23 @@ async function boot() {
   if (token()) { try { App.me = (await api('GET', '/api/me')).user; } catch (e) { if (e.status !== 401) authError = authError || e.message; } }
   App.authError = authError;
   window.addEventListener('hashchange', render);
+  checkVersion(); setInterval(checkVersion, 5 * 60 * 1000);
   render();
+}
+
+// Если на сервере вышла новая версия сайта — предложить обновить страницу.
+async function checkVersion() {
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const { version } = await r.json();
+    if (version && window.VP_VERSION && version !== window.VP_VERSION && !$('#updbar')) {
+      const d = document.createElement('div'); d.id = 'updbar'; d.className = 'updbar';
+      d.innerHTML = '<span>Вышла новая версия сайта.</span><button class="btn sm gold">Обновить</button>';
+      d.querySelector('button').onclick = () => location.reload();
+      document.body.appendChild(d);
+    }
+  } catch (_) {}
 }
 
 // ---------- страницы кандидата ----------
