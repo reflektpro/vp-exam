@@ -1,0 +1,300 @@
+/* Панель управления (администратор / проверяющий). Права проверяются на сервере. */
+'use strict';
+function adminNav(active) {
+  const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Кандидаты', 'examiner'],
+    ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
+  return `<div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
+}
+function formObj(form) {
+  const o = {};
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    if (el.type === 'checkbox') o[el.name] = el.checked;
+    else if (el.type === 'number') o[el.name] = el.value === '' ? 0 : Number(el.value);
+    else o[el.name] = el.value;
+  }
+  return o;
+}
+function bindRows() { $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; }); }
+const yes = v => v ? '✔' : '—';
+
+route('/admin', async () => {
+  const s = await api('GET', '/api/admin/stats');
+  setView(`<h1>Управление</h1>${adminNav('/admin')}
+    <div class="grid">
+      <div class="stat"><b>${s.pending_review}</b>попыток ждут проверки</div>
+      <div class="stat"><b>${s.users}</b>пользователей</div>
+      <div class="stat"><b>${s.passed}</b>сдали экзамен</div>
+      <div class="stat"><b>${s.in_progress}</b>экзаменов идёт сейчас</div>
+      <div class="stat"><b>${s.lectures_published} / ${s.lectures}</b>лекций опубликовано</div>
+      <div class="stat"><b>${s.exams}</b>экзаменов</div>
+    </div>
+    ${hasRole('admin') ? `<div class="card flat" style="margin-top:18px"><h3>Как наполнить сайт</h3><ol class="small">
+      <li>«Лекции» → «Добавить лекцию»: название, ссылка на видео (mp4/webm), длительность (кнопка «Определить по видео»), порядок, «Опубликована».</li>
+      <li>«Экзамены» → «Создать экзамен»: параметры, затем вопросы (один ответ / несколько / краткий / развёрнутый). Опубликуйте экзамен.</li>
+      <li>Кандидаты смотрят лекции по порядку; после всех обязательных лекций открывается экзамен.</li>
+      <li>Попытки с текстовыми ответами попадают в «Проверка».</li></ol></div>` : ''}`);
+});
+
+// ---------- лекции ----------
+route('/admin/lectures', async () => {
+  const { lectures } = await api('GET', '/api/admin/lectures');
+  setView(`<h1>Лекции</h1>${adminNav('/admin/lectures')}
+    <p><a class="btn gold" href="#/admin/lecture/new">+ Добавить лекцию</a></p>
+    ${lectures.length ? `<table><tr><th>Порядок</th><th>Название</th><th>Длительность</th><th>Обязательная</th><th>Опубликована</th><th>Просмотрели</th><th></th></tr>
+    ${lectures.map((l, i) => `<tr><td><button class="btn sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button> <button class="btn sm" data-down="${i}" ${i < lectures.length - 1 ? '' : 'disabled'}>↓</button></td>
+      <td><a href="#/admin/lecture/${l.id}">${esc(l.title)}</a></td><td>${fmtTime(l.duration_sec)}</td><td>${yes(l.required)}</td><td>${l.published ? '<span class="badge ok">да</span>' : '<span class="badge">черновик</span>'}</td><td>${l.watched_count}</td>
+      <td><a class="btn sm" href="#/admin/lecture/${l.id}">Изменить</a></td></tr>`).join('')}</table>` : '<div class="alert info">Лекций пока нет.</div>'}`);
+  const ids = lectures.map(l => l.id);
+  const move = async (i, d) => { const a = ids.slice(); [a[i], a[i + d]] = [a[i + d], a[i]]; await api('POST', '/api/admin/lectures/reorder', { ids: a }); render(); };
+  $$('[data-up]').forEach(b => b.onclick = () => move(+b.dataset.up, -1));
+  $$('[data-down]').forEach(b => b.onclick = () => move(+b.dataset.down, 1));
+}, { role: 'admin' });
+
+route('/admin/lecture/:id', async (id) => {
+  const isNew = id === 'new';
+  let l = { title: '', description: '', video_url: '', duration_sec: 0, required: 1, published: 0 };
+  if (!isNew) { const { lectures } = await api('GET', '/api/admin/lectures'); l = lectures.find(x => String(x.id) === id); if (!l) throw new Error('Лекция не найдена'); }
+  setView(`<p><a href="#/admin/lectures">← Лекции</a></p><h1>${isNew ? 'Новая лекция' : 'Лекция: ' + esc(l.title)}</h1>
+    <form class="card" id="lf">
+      <label class="f"><span>Название *</span><input name="title" maxlength="200" required value="${esc(l.title)}"></label>
+      <label class="f"><span>Описание (показывается под видео)</span><textarea name="description" maxlength="10000">${esc(l.description)}</textarea></label>
+      <label class="f"><span>Ссылка на видео (прямая ссылка на .mp4/.webm, https://… или путь на сайте, например videos/lecture1.mp4)</span><input name="video_url" maxlength="1000" value="${esc(l.video_url)}"></label>
+      <div class="row"><label class="f" style="width:220px"><span>Длительность, секунд *</span><input type="number" name="duration_sec" min="0" max="21600" value="${l.duration_sec}"></label>
+        <button type="button" class="btn" id="detect">Определить по видео</button><span class="small mut" id="dinfo"></span></div>
+      <label class="chk"><input type="checkbox" name="required" ${l.required ? 'checked' : ''}> Обязательная (нужна для допуска к экзамену)</label>
+      <label class="chk"><input type="checkbox" name="published" ${l.published ? 'checked' : ''}> Опубликована (видна кандидатам)</label>
+      <div class="row"><button class="btn gold">Сохранить</button>${isNew ? '' : '<button type="button" class="btn danger" id="del">Удалить лекцию</button>'}</div>
+    </form>
+    <div class="card flat"><h3>Предпросмотр видео</h3><video id="pv" controls preload="metadata" style="width:100%;max-height:360px;background:#000"></video>
+    <p class="small mut">Здесь перемотка разрешена — это только проверка для администратора.</p></div>`);
+  const f = $('#lf'), pv = $('#pv');
+  const loadPv = () => { const u = f.video_url.value.trim(); if (u && pv.getAttribute('src') !== u) pv.src = u; };
+  loadPv(); f.video_url.addEventListener('change', loadPv);
+  $('#detect').onclick = () => {
+    loadPv(); $('#dinfo').textContent = 'Загрузка метаданных…';
+    const done = () => { if (isFinite(pv.duration) && pv.duration > 0) { f.duration_sec.value = Math.floor(pv.duration); $('#dinfo').textContent = 'Длительность видео: ' + fmtTime(pv.duration) + ' — проверьте и сохраните.'; } };
+    if (pv.readyState >= 1) done(); else { pv.addEventListener('loadedmetadata', done, { once: true }); pv.addEventListener('error', () => { $('#dinfo').textContent = 'Не удалось открыть видео по ссылке'; }, { once: true }); }
+  };
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    try {
+      const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/lectures' + (isNew ? '' : '/' + l.id), formObj(f));
+      toast('Лекция сохранена'); if (isNew) location.hash = '#/admin/lecture/' + r.lecture.id; else render();
+    } catch (e) { toast(e.message, true); }
+  };
+  const del = $('#del');
+  if (del) del.onclick = async () => { if (!confirm('Удалить лекцию и весь прогресс кандидатов по ней?')) return; try { await api('DELETE', '/api/admin/lectures/' + l.id); location.hash = '#/admin/lectures'; } catch (e) { toast(e.message, true); } };
+}, { role: 'admin' });
+
+// ---------- экзамены ----------
+route('/admin/exams', async () => {
+  const { exams } = await api('GET', '/api/admin/exams');
+  setView(`<h1>Экзамены</h1>${adminNav('/admin/exams')}
+    <p><a class="btn gold" href="#/admin/exam/new">+ Создать экзамен</a></p>
+    ${exams.length ? `<table><tr><th>Название</th><th>Вопросов</th><th>Время</th><th>Проходной</th><th>Попыток</th><th>На проверке</th><th>Статус</th></tr>
+    ${exams.map(e => `<tr class="click" data-href="#/admin/exam/${e.id}"><td>${esc(e.title)}</td><td>${e.question_count}</td><td>${e.time_limit_min ? e.time_limit_min + ' мин' : '∞'}</td><td>${e.pass_pct}%</td><td>${e.attempt_count}</td><td>${e.pending_count}</td><td>${e.published ? '<span class="badge ok">опубликован</span>' : '<span class="badge">черновик</span>'}</td></tr>`).join('')}</table>` : '<div class="alert info">Экзаменов пока нет.</div>'}`);
+  bindRows();
+}, { role: 'admin' });
+
+const QTYPE_RU = { single: 'Один правильный ответ', multi: 'Несколько правильных ответов', text: 'Краткий текстовый ответ (ручная проверка)', long: 'Развёрнутый ответ (ручная проверка)' };
+route('/admin/exam/:id', async (id) => {
+  const isNew = id === 'new';
+  let e = { title: '', description: '', time_limit_min: 30, max_attempts: 3, cooldown_min: 60, pass_pct: 70, shuffle_questions: 1, shuffle_options: 1, requires_lectures: 1, published: 0 }, qs = [];
+  if (!isNew) { const r = await api('GET', '/api/admin/exams/' + encodeURIComponent(id)); e = r.exam; qs = r.questions; }
+  setView(`<p><a href="#/admin/exams">← Экзамены</a></p><h1>${isNew ? 'Новый экзамен' : 'Экзамен: ' + esc(e.title)}</h1>
+    <form class="card" id="ef">
+      <label class="f"><span>Название *</span><input name="title" maxlength="200" required value="${esc(e.title)}"></label>
+      <label class="f"><span>Описание / инструкция для кандидата</span><textarea name="description" maxlength="10000">${esc(e.description)}</textarea></label>
+      <div class="fgrid">
+        <label class="f"><span>Лимит времени, мин (0 — без лимита)</span><input type="number" name="time_limit_min" min="0" max="1440" value="${e.time_limit_min}"></label>
+        <label class="f"><span>Макс. попыток (0 — без лимита)</span><input type="number" name="max_attempts" min="0" max="1000" value="${e.max_attempts}"></label>
+        <label class="f"><span>Пауза между попытками, мин</span><input type="number" name="cooldown_min" min="0" value="${e.cooldown_min}"></label>
+        <label class="f"><span>Проходной балл, %</span><input type="number" name="pass_pct" min="0" max="100" value="${e.pass_pct}"></label>
+      </div>
+      <label class="chk"><input type="checkbox" name="shuffle_questions" ${e.shuffle_questions ? 'checked' : ''}> Перемешивать вопросы</label>
+      <label class="chk"><input type="checkbox" name="shuffle_options" ${e.shuffle_options ? 'checked' : ''}> Перемешивать варианты ответов</label>
+      <label class="chk"><input type="checkbox" name="requires_lectures" ${e.requires_lectures ? 'checked' : ''}> Доступен только после просмотра всех обязательных лекций</label>
+      <label class="chk"><input type="checkbox" name="published" ${e.published ? 'checked' : ''}> Опубликован</label>
+      <div class="row"><button class="btn gold">Сохранить параметры</button>${isNew ? '' : '<button type="button" class="btn danger" id="del">Удалить экзамен</button>'}</div>
+    </form>
+    ${isNew ? '<div class="alert info">Сохраните экзамен, чтобы добавить вопросы.</div>' : `<h2>Вопросы (${qs.length}, всего баллов: ${qs.reduce((s, q) => s + q.points, 0)})</h2><div id="qlist"></div>
+      <div class="row"><select id="newType">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select><button class="btn gold" id="addQ" type="button">+ Добавить вопрос</button></div>`}`);
+  $('#ef').onsubmit = async (ev) => {
+    ev.preventDefault();
+    try { const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/exams' + (isNew ? '' : '/' + e.id), formObj(ev.target)); toast('Экзамен сохранён'); if (isNew) location.hash = '#/admin/exam/' + r.exam.id; else render(); }
+    catch (err) { toast(err.message, true); }
+  };
+  if (isNew) return;
+  $('#del').onclick = async () => { if (!confirm('Удалить экзамен со всеми вопросами и попытками?')) return; try { await api('DELETE', '/api/admin/exams/' + e.id); location.hash = '#/admin/exams'; } catch (err) { toast(err.message, true); } };
+  const list = $('#qlist');
+  const ids = qs.map(q => q.id);
+  qs.forEach((q, i) => list.appendChild(qEditor(q, i, e.id, ids)));
+  $('#addQ').onclick = () => {
+    const t = $('#newType').value;
+    const q = { id: null, type: t, text: '', points: 1, reference: '', options: t === 'single' || t === 'multi' ? [{ text: '' }, { text: '' }] : [], correct: [] };
+    const ed = qEditor(q, qs.length, e.id, ids); list.appendChild(ed); ed.querySelector('textarea').focus();
+  };
+}, { role: 'admin' });
+
+function qEditor(q, i, examId, ids) {
+  const el = document.createElement('div'); el.className = 'qedit';
+  const choice = q.type === 'single' || q.type === 'multi';
+  el.innerHTML = `<div class="row between"><b>Вопрос ${i + 1}${q.id ? '' : ' (новый)'}</b><span class="small mut">${QTYPE_RU[q.type]}</span></div>
+    <label class="f"><span>Текст вопроса</span><textarea class="qt" maxlength="5000" rows="2">${esc(q.text)}</textarea></label>
+    <div class="fgrid"><label class="f"><span>Тип</span><select class="qtype">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}" ${k === q.type ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label class="f"><span>Баллы</span><input type="number" class="qp" min="0" max="1000" value="${q.points}"></label></div>
+    <div class="opts" ${choice ? '' : 'hidden'}><div class="small mut" style="margin-bottom:6px">Варианты ответа — отметьте правильные:</div><div class="olist"></div><button type="button" class="btn sm addO">+ вариант</button></div>
+    <label class="f ref" ${choice ? 'hidden' : ''} style="border:0;padding:0"><span>Эталонный ответ / критерии (видит только проверяющий)</span><textarea class="qr" maxlength="5000" rows="2">${esc(q.reference || '')}</textarea></label>
+    <div class="row" style="margin-top:10px"><button type="button" class="btn gold sm save">Сохранить вопрос</button>
+      ${q.id ? `<button type="button" class="btn sm up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="btn sm down" ${i < ids.length - 1 ? '' : 'disabled'}>↓</button><button type="button" class="btn danger sm del">Удалить</button>` : '<button type="button" class="btn sm cancel">Отмена</button>'}</div>`;
+  const olist = el.querySelector('.olist');
+  const addOpt = (o) => {
+    const r = document.createElement('div'); r.className = 'optrow';
+    const t = el.querySelector('.qtype').value === 'single' ? 'radio' : 'checkbox';
+    r.innerHTML = `<input type="${t}" name="c${q.id || 'n' + i}" class="oc" ${o.id && q.correct.includes(o.id) ? 'checked' : ''}><input type="text" class="ot" maxlength="1000" value="${esc(o.text)}" placeholder="Текст варианта"><button type="button" class="btn sm danger rm">✕</button>`;
+    r.dataset.oid = o.id || '';
+    r.querySelector('.rm').onclick = () => r.remove();
+    olist.appendChild(r);
+  };
+  (q.options || []).forEach(addOpt);
+  el.querySelector('.addO').onclick = () => addOpt({ text: '' });
+  el.querySelector('.qtype').onchange = (ev) => {
+    const t = ev.target.value, ch = t === 'single' || t === 'multi';
+    el.querySelector('.opts').hidden = !ch; el.querySelector('.ref').hidden = ch;
+    $$('.oc', el).forEach(x => { x.type = t === 'single' ? 'radio' : 'checkbox'; });
+    if (ch && !olist.children.length) { addOpt({ text: '' }); addOpt({ text: '' }); }
+  };
+  el.querySelector('.save').onclick = async () => {
+    const type = el.querySelector('.qtype').value;
+    const body = { type, text: el.querySelector('.qt').value, points: Number(el.querySelector('.qp').value || 0), reference: el.querySelector('.qr').value };
+    if (type === 'single' || type === 'multi') body.options = $$('.optrow', olist).map(r => ({ id: r.dataset.oid || undefined, text: r.querySelector('.ot').value, correct: r.querySelector('.oc').checked }));
+    try { await api(q.id ? 'PUT' : 'POST', q.id ? '/api/admin/questions/' + q.id : `/api/admin/exams/${examId}/questions`, body); toast('Вопрос сохранён'); render(); }
+    catch (e) { toast(e.message, true); }
+  };
+  const c = el.querySelector('.cancel'); if (c) c.onclick = () => el.remove();
+  const d = el.querySelector('.del'); if (d) d.onclick = async () => { if (!confirm('Удалить вопрос?')) return; try { await api('DELETE', '/api/admin/questions/' + q.id); render(); } catch (e) { toast(e.message, true); } };
+  const mv = async (dir) => { const a = ids.slice(); [a[i], a[i + dir]] = [a[i + dir], a[i]]; try { await api('POST', `/api/admin/exams/${examId}/questions/reorder`, { ids: a }); render(); } catch (e) { toast(e.message, true); } };
+  const up = el.querySelector('.up'); if (up) up.onclick = () => mv(-1);
+  const dn = el.querySelector('.down'); if (dn) dn.onclick = () => mv(1);
+  return el;
+}
+
+// ---------- кандидаты ----------
+route('/admin/users', async () => {
+  const q = new URLSearchParams((location.hash.split('?')[1]) || '').get('q') || '';
+  const r = await api('GET', '/api/admin/users?q=' + encodeURIComponent(q));
+  setView(`<h1>Кандидаты и сотрудники</h1>${adminNav('/admin/users')}
+    <form class="row" id="sf" style="margin-bottom:14px"><input name="q" value="${esc(q)}" placeholder="Поиск: Discord ID, ник, игровое имя, статик" style="max-width:420px"><button class="btn">Найти</button></form>
+    <table><tr><th>Пользователь</th><th>Игровое имя / статик</th><th>Роль</th><th>Лекции</th><th>Попытки</th><th>Последний вход</th></tr>
+    ${r.users.map(u => `<tr class="click" data-href="#/admin/user/${u.id}"><td>${esc(u.global_name || u.username)}<div class="small mut">${esc(u.id)}</div></td><td>${esc(u.ic_name || '—')}<div class="small mut">${esc(u.static_id)}</div></td>
+      <td>${esc(ROLE_RU[u.role])}${u.super ? ' ★' : ''}${u.blocked ? ' <span class="badge err">заблокирован</span>' : ''}</td><td>${u.lectures_watched} / ${r.lectures_total}</td><td>${u.attempt_count} ${u.last_status ? badge(u.last_status) : ''}</td><td>${fmtDate(u.last_login_at)}</td></tr>`).join('')}</table>`);
+  $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/admin/users?q=' + encodeURIComponent(ev.target.q.value); };
+  bindRows();
+}, { role: 'examiner' });
+route('/admin/users\\?.*', () => App.routes.find(r => r.p === '/admin/users').fn(), { role: 'examiner' });
+
+route('/admin/user/:id', async (id) => {
+  const r = await api('GET', '/api/admin/users/' + encodeURIComponent(id));
+  const u = r.user, adm = hasRole('admin');
+  setView(`<p><a href="#/admin/users">← Кандидаты</a></p>
+    <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:56px;height:56px;border-radius:50%">` : ''}<div><h2 style="margin:0">${esc(u.global_name || u.username)}</h2>
+      <div class="small mut">@${esc(u.username)} · Discord ID ${esc(u.id)} · создан ${fmtDate(u.created_at)} · вход ${fmtDate(u.last_login_at)}</div>
+      <div>Игровое имя: <b>${esc(u.ic_name || '—')}</b> · Статик: <b>${esc(u.static_id || '—')}</b> · Звание: <b>${esc(u.rank || '—')}</b></div></div></div>
+      ${adm ? `<div class="row" style="margin-top:14px"><label>Роль: <select id="role" ${u.super ? 'disabled' : ''} style="width:auto">${['candidate', 'examiner', 'admin'].map(x => `<option value="${x}" ${u.role === x ? 'selected' : ''}>${ROLE_RU[x]}</option>`).join('')}</select></label>
+        ${u.super ? '<span class="small mut">главный администратор (ADMIN_IDS)</span>' : ''}
+        <button class="btn sm" id="blk" ${u.super ? 'disabled' : ''}>${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button></div>` : ''}</div>
+    <div class="card flat"><div class="row between"><h3>Прогресс лекций</h3>${adm ? '<button class="btn sm danger" id="rstAll">Сбросить весь прогресс</button>' : ''}</div>
+      <table><tr><th>Лекция</th><th>Досмотрено до</th><th>Засчитано времени</th><th>Отклонено heartbeat</th><th>Статус</th>${adm ? '<th></th>' : ''}</tr>
+      ${r.lectures.map(l => `<tr><td>${esc(l.title)}${l.published ? '' : ' <span class="badge">черновик</span>'}</td><td>${l.max_pos != null ? fmtTime(l.max_pos) + ' / ' + fmtTime(l.duration_sec) : '—'}</td><td>${l.watched_sec != null ? fmtTime(l.watched_sec) : '—'}</td><td>${l.rejected || 0}</td>
+        <td>${l.completed_at ? '<span class="badge ok">' + fmtDate(l.completed_at) + '</span>' : l.started_at ? '<span class="badge info">смотрит</span>' : '—'}</td>${adm ? `<td>${l.started_at ? `<button class="btn sm" data-rl="${l.id}">Сбросить</button>` : ''}</td>` : ''}</tr>`).join('')}</table></div>
+    <div class="card flat"><div class="row between"><h3>Попытки экзаменов</h3>${adm ? '<button class="btn sm danger" id="rstAtt">Удалить все попытки</button>' : ''}</div>
+      ${r.attempts.length ? `<table><tr><th>№</th><th>Экзамен</th><th>Начата</th><th>Статус</th><th>Результат</th></tr>${r.attempts.map(a => `<tr class="click" data-href="#/admin/attempt/${a.id}"><td>#${a.id}</td><td>${esc(a.exam_title)}</td><td>${fmtDate(a.started_at)}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : '<p class="mut">Нет попыток.</p>'}</div>`);
+  bindRows();
+  if (!adm) return;
+  const act = async (method, path, body, ok) => { try { await api(method, path, body); toast(ok); render(); } catch (e) { toast(e.message, true); } };
+  const role = $('#role'); if (role && !u.super) role.onchange = () => act('PUT', '/api/admin/users/' + u.id, { role: role.value }, 'Роль изменена');
+  const blk = $('#blk'); if (blk && !u.super) blk.onclick = () => { if (confirm(u.blocked ? 'Разблокировать?' : 'Заблокировать пользователя? Его сессии будут завершены.')) act('PUT', '/api/admin/users/' + u.id, { blocked: !u.blocked }, 'Готово'); };
+  $('#rstAll').onclick = () => { if (confirm('Сбросить прогресс всех лекций этого пользователя?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, {}, 'Прогресс сброшен'); };
+  $$('[data-rl]').forEach(b => b.onclick = () => { if (confirm('Сбросить прогресс этой лекции?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, { lecture_id: Number(b.dataset.rl) }, 'Прогресс сброшен'); });
+  $('#rstAtt').onclick = () => { if (confirm('Удалить все попытки экзаменов этого пользователя? Он сможет сдавать заново.')) act('POST', `/api/admin/users/${u.id}/reset-attempts`, {}, 'Попытки удалены'); };
+}, { role: 'examiner' });
+
+// ---------- проверка попыток ----------
+route('/admin/attempts', async () => {
+  const st = new URLSearchParams((location.hash.split('?')[1]) || '').get('status') ?? 'pending_review';
+  const { attempts } = await api('GET', '/api/admin/attempts?status=' + encodeURIComponent(st));
+  const tabs = [['pending_review', 'Ждут проверки'], ['passed', 'Сдали'], ['failed', 'Не сдали'], ['in_progress', 'Идут сейчас'], ['', 'Все']];
+  setView(`<h1>Проверка попыток</h1>${adminNav('/admin/attempts')}
+    <div class="row" style="margin-bottom:12px">${tabs.map(([k, v]) => `<a class="btn sm ${k === st ? 'gold' : ''}" href="#/admin/attempts?status=${k}">${v}</a>`).join('')}</div>
+    ${attempts.length ? `<table><tr><th>№</th><th>Кандидат</th><th>Экзамен</th><th>Отправлена</th><th>Статус</th><th>Баллы</th></tr>
+    ${attempts.map(a => `<tr class="click" data-href="#/admin/attempt/${a.id}"><td>#${a.id}</td><td>${esc(a.ic_name || a.global_name || a.username)}<div class="small mut">${esc(a.static_id || a.user_id)}</div></td><td>${esc(a.exam_title)}</td><td>${fmtDate(a.submitted_at)}${a.expired ? ' <span class="badge warn">по таймеру</span>' : ''}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : '<div class="alert info">Нет попыток в этом разделе.</div>'}`);
+  bindRows();
+}, { role: 'examiner' });
+route('/admin/attempts\\?.*', () => App.routes.find(r => r.p === '/admin/attempts').fn(), { role: 'examiner' });
+
+route('/admin/attempt/:id', async (id) => {
+  const r = await api('GET', '/api/admin/attempts/' + encodeURIComponent(id));
+  const a = r.attempt, u = r.user;
+  const items = r.items.map((it, i) => {
+    const q = it.question; let body = '';
+    if (q.type === 'single' || q.type === 'multi') {
+      const chosen = Array.isArray(it.answer) ? it.answer : it.answer ? [it.answer] : [];
+      body = '<ul>' + q.options.map(o => { const c = chosen.includes(o.id), ok = q.correct.includes(o.id);
+        return `<li class="${c ? 'o-chosen' : ''} ${ok ? 'o-correct' : c ? 'o-wrong' : ''}">${c ? '☑' : '☐'} ${esc(o.text)}${ok ? ' — правильный' : ''}</li>`; }).join('') + '</ul>';
+      body += `<div class="small">Автопроверка: <b>${it.auto_points ?? 0} / ${q.points}</b></div>`;
+      body += `<div class="row small" style="margin-top:6px">Изменить баллы вручную: <input type="number" class="pts" data-q="${q.id}" min="0" max="${q.points}" step="0.5" value="${it.manual_points ?? ''}" placeholder="авто" style="width:90px"></div>`;
+    } else {
+      body = `<div class="ans">${it.answer ? esc(it.answer) : '<span class="mut">(нет ответа)</span>'}</div>${q.reference ? `<div class="ref"><b>Эталон:</b> ${esc(q.reference)}</div>` : ''}
+        <div class="row">Баллы: <input type="number" class="pts" data-q="${q.id}" min="0" max="${q.points}" step="0.5" value="${it.manual_points ?? ''}" style="width:90px"> / ${q.points} ${it.needs_review && it.manual_points == null ? '<span class="badge warn">требует оценки</span>' : ''}</div>`;
+    }
+    return `<div class="q"><div class="row between"><span class="small mut">Вопрос ${i + 1} · ${esc(QTYPE_RU[q.type] || q.type)}</span><span class="small mut">${q.points} балл(ов)</span></div><div class="qt">${esc(q.text)}</div>${body}</div>`;
+  }).join('');
+  setView(`<p><a href="#/admin/attempts">← Проверка</a></p>
+    <div class="card"><div class="row between"><h2 style="margin:0">Попытка #${a.id} — ${esc(r.exam ? r.exam.title : '')}</h2>${badge(a.status)}</div>
+      <p>Кандидат: <a href="#/admin/user/${esc(a.user_id)}">${esc(userName(u))}</a> <span class="mut small">(${esc(u ? u.username : '')}, ${esc(a.user_id)}${u && u.static_id ? ', статик ' + esc(u.static_id) : ''})</span></p>
+      <p class="small mut">Начата ${fmtDate(a.started_at)} · отправлена ${fmtDate(a.submitted_at)}${a.expired ? ' (автоматически по таймеру)' : ''} · автобаллы ${a.auto_score} · ручные ${a.manual_score} · максимум ${a.max_score} · итог ${a.score_pct != null ? a.score_pct + '%' : '—'} (проходной ${r.exam ? r.exam.pass_pct : '?'}%)</p>
+      ${a.reviewed_at ? `<p class="small mut">Проверил: ${esc(r.reviewer ? (r.reviewer.global_name || r.reviewer.username) : a.reviewer_id)} · ${fmtDate(a.reviewed_at)}</p>` : ''}</div>
+    ${items}
+    ${a.status === 'in_progress' ? '<div class="alert info">Кандидат ещё проходит экзамен.</div>' : `<form class="card" id="rf"><h3>Итог проверки</h3>
+      <label class="f"><span>Решение</span><select name="verdict"><option value="auto">По баллам (≥ ${r.exam ? r.exam.pass_pct : '?'}% — сдан)</option><option value="passed" ${a.status === 'passed' ? '' : ''}>Сдан (вручную)</option><option value="failed">Не сдан (вручную)</option></select></label>
+      <label class="f"><span>Комментарий для кандидата</span><textarea name="comment" maxlength="5000">${esc(a.reviewer_comment || '')}</textarea></label>
+      <button class="btn gold">Сохранить проверку</button> ${hasRole('admin') ? '<button type="button" class="btn danger" id="delA">Удалить попытку</button>' : ''}</form>`}`);
+  const rf = $('#rf');
+  if (rf) rf.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const points = {}; $$('.pts').forEach(x => { if (x.value !== '') points[x.dataset.q] = Number(x.value); });
+    try { await api('POST', `/api/admin/attempts/${a.id}/review`, { points, verdict: rf.verdict.value, comment: rf.comment.value }); toast('Проверка сохранена'); render(); }
+    catch (e) { toast(e.message, true); }
+  };
+  const dA = $('#delA'); if (dA) dA.onclick = async () => { if (!confirm('Удалить попытку? Кандидат сможет пройти экзамен заново.')) return; try { await api('DELETE', '/api/admin/attempts/' + a.id); location.hash = '#/admin/attempts'; } catch (e) { toast(e.message, true); } };
+}, { role: 'examiner' });
+
+// ---------- настройки и журнал ----------
+route('/admin/settings', async () => {
+  const { settings: s } = await api('GET', '/api/admin/settings');
+  setView(`<h1>Настройки сайта</h1>${adminNav('/admin/settings')}
+    <form class="card" id="sf">
+      <label class="f"><span>Название сайта</span><input name="site_title" maxlength="120" value="${esc(s.site_title)}"></label>
+      <label class="f"><span>Приветственный текст (главная и страница входа)</span><textarea name="welcome_text" maxlength="5000" rows="5">${esc(s.welcome_text)}</textarea></label>
+      <label class="chk"><input type="checkbox" name="sequential_lectures" ${s.sequential_lectures ? 'checked' : ''}> Открывать лекции строго по порядку</label>
+      <button class="btn gold">Сохранить</button></form>
+    <div class="card flat"><h3>Вход через Discord</h3><p class="small">OAuth: ${App.config && App.config.oauth_configured ? '<span class="badge ok">настроен</span>' : '<span class="badge err">не настроен</span>'}</p>
+      <p class="small mut">Redirect URI для Discord-приложения:</p><pre class="code">${esc(App.config ? App.config.redirect_uri : '')}</pre>
+      <p class="small mut">Главные администраторы задаются переменной ADMIN_IDS в Worker. Другим пользователям роль назначается на странице пользователя.</p></div>`);
+  $('#sf').onsubmit = async (ev) => {
+    ev.preventDefault();
+    try { const r = await api('PUT', '/api/admin/settings', formObj(ev.target)); App.config.settings = r.settings; renderHeader(); toast('Настройки сохранены'); }
+    catch (e) { toast(e.message, true); }
+  };
+}, { role: 'admin' });
+
+const ACTION_RU = { 'lecture.create': 'Создана лекция', 'lecture.update': 'Изменена лекция', 'lecture.delete': 'Удалена лекция', 'lectures.reorder': 'Порядок лекций',
+  'exam.create': 'Создан экзамен', 'exam.update': 'Изменён экзамен', 'exam.delete': 'Удалён экзамен', 'question.create': 'Добавлен вопрос', 'question.update': 'Изменён вопрос',
+  'question.delete': 'Удалён вопрос', 'questions.reorder': 'Порядок вопросов', 'user.update': 'Изменён пользователь', 'user.reset_progress': 'Сброс прогресса лекций',
+  'user.reset_attempts': 'Сброс попыток', 'attempt.review': 'Проверка попытки', 'attempt.delete': 'Удалена попытка', 'settings.update': 'Настройки сайта' };
+route('/admin/audit', async () => {
+  const { log } = await api('GET', '/api/admin/audit');
+  setView(`<h1>Журнал действий</h1>${adminNav('/admin/audit')}
+    ${log.length ? `<table><tr><th>Время</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Детали</th></tr>${log.map(l => `<tr><td>${fmtDate(l.at)}</td><td>${esc(l.global_name || l.username || l.actor_id)}</td><td>${esc(ACTION_RU[l.action] || l.action)}</td><td>${esc(l.target || '')}</td><td class="small mut" style="max-width:380px;word-break:break-word">${esc((l.details || '').slice(0, 300))}</td></tr>`).join('')}</table>` : '<div class="alert info">Журнал пуст.</div>'}`);
+}, { role: 'admin' });

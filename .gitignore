@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+tests/shots/
+tests/*.webm
+tests/*.mp4
+tests/*.log
+tests/e2e-results.json
+.dev.vars

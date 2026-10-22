@@ -1,0 +1,13 @@
+# ЛОКАЛЬНЫЙ тестовый конфиг (wrangler dev). TEST_MODE включает /__test/login — только здесь.
+name = "vp-exam-api-local"
+main = "test-worker.js"
+compatibility_date = "2025-09-01"
+[vars]
+TEST_MODE = "1"
+ADMIN_IDS = "417660389723996170,711459160268734505"
+ALLOWED_ORIGINS = "http://localhost:8080,http://127.0.0.1:8080"
+FRONTEND_URL = "http://localhost:8080/"
+[[d1_databases]]
+binding = "DB"
+database_name = "vp-exam-db-local"
+database_id = "00000000-0000-0000-0000-000000000000"

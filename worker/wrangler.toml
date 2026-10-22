@@ -1,0 +1,20 @@
+# Боевой конфиг Worker (для деплоя через wrangler, если понадобится).
+# ВНИМАНИЕ: TEST_MODE здесь не задаётся и задаваться не должен.
+name = "vp-exam-api"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[vars]
+ADMIN_IDS = "417660389723996170,711459160268734505"
+ALLOWED_ORIGINS = "https://reflektpro.github.io"
+FRONTEND_URL = "https://reflektpro.github.io/vp-exam/"
+# DISCORD_CLIENT_ID и DISCORD_CLIENT_SECRET задаются как секреты:
+#   npx wrangler secret put DISCORD_CLIENT_ID
+#   npx wrangler secret put DISCORD_CLIENT_SECRET
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vp-exam-db"
+database_id = "ce68b5b2-5aa7-4b69-9f7a-edb1b1744cb9"
+migrations_dir = "migrations"
