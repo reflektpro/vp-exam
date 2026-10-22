@@ -10,7 +10,7 @@ function $(sel, root) { return (root || document).querySelector(sel); }
 function $$(sel, root) { return [...(root || document).querySelectorAll(sel)]; }
 function fmtTime(sec) { sec = Math.max(0, Math.floor(sec || 0)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); }
 function fmtDate(ms) { if (!ms) return '—'; return new Date(ms).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
-function toast(msg, isErr) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (isErr ? ' err' : ''); t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 4000); }
+function toast(msg, isErr) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (isErr ? ' err' : ''); t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, isErr ? 9000 : 4000); }
 function token() { return localStorage.getItem(TOKEN_KEY); }
 function setView(html) { $('#app').innerHTML = html; window.scrollTo(0, 0); }
 function onCleanup(fn) { App.cleanup.push(fn); }

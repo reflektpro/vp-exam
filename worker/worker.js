@@ -95,12 +95,52 @@ function int(v, min, max, name, def) {
 }
 function bool(v, def) { if (v === undefined || v === null) return def ? 1 : 0; return v === true || v === 1 || v === '1' || v === 'true' ? 1 : 0; }
 function idParam(v) { const n = Number(v); if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, 'Некорректный id'); return n; }
+// Распознаёт ссылку на YouTube и возвращает id ролика (11 символов) или null.
+function youtubeId(u) {
+  let url; try { url = new URL(u); } catch (_) { return null; }
+  const host = url.hostname.toLowerCase().replace(/^(www\.|m\.|music\.)/, '');
+  let id = null;
+  if (host === 'youtu.be') id = url.pathname.split('/')[1];
+  else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    if (url.pathname === '/watch') id = url.searchParams.get('v');
+    else { const m = /^\/(?:embed|shorts|live|v)\/([^/?#]+)/.exec(url.pathname); if (m) id = m[1]; }
+  } else return null;
+  return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : 'bad';
+}
+function videoInfo(u) {
+  if (!u) return { type: 'none' };
+  const yt = /^https?:\/\//i.test(u) ? youtubeId(u) : null;
+  if (yt && yt !== 'bad') return { type: 'youtube', youtube_id: yt };
+  return { type: 'file' };
+}
 function validVideoUrl(u) {
   if (!u) return '';
   if (u.length > 1000) throw new HttpError(400, 'Слишком длинная ссылка на видео');
-  if (/^https?:\/\//i.test(u)) { try { new URL(u); return u; } catch (_) { throw new HttpError(400, 'Некорректная ссылка на видео'); } }
-  if (/^[a-zA-Z0-9_\-./%]+$/.test(u) && !u.includes('..') && !u.startsWith('//')) return u; // относительный путь на сайте
-  throw new HttpError(400, 'Ссылка на видео должна начинаться с https:// или быть относительным путём (например videos/lecture1.mp4)');
+  if (/^https?:\/\//i.test(u)) {
+    let url; try { url = new URL(u); } catch (_) { throw new HttpError(400, 'Некорректная ссылка на видео'); }
+    const host = url.hostname.toLowerCase();
+    const yt = youtubeId(u);
+    if (yt === 'bad') throw new HttpError(400, 'Не удалось распознать ссылку YouTube. Подходят ссылки вида https://www.youtube.com/watch?v=XXXXXXXXXXX, https://youtu.be/XXXXXXXXXXX, /shorts/… или /embed/…');
+    if (yt) return 'https://www.youtube.com/watch?v=' + yt;   // храним в едином виде
+    if (/(^|\.)(drive|docs)\.google\.com$/.test(host)) throw new HttpError(400, 'Ссылки Google Диска не подходят: Google не отдаёт видео для встроенного плеера без перемотки. Загрузите видео на YouTube с доступом «По ссылке» и вставьте ссылку YouTube.');
+    if (/(^|\.)(cdn\.discordapp\.com|media\.discordapp\.net|discordapp\.net)$/.test(host) || host === 'cdn.discordapp.com') throw new HttpError(400, 'Ссылки Discord CDN не подходят: они перестают работать через сутки. Используйте YouTube («По ссылке») или прямую ссылку на .mp4.');
+    if (/(^|\.)(vk\.com|vkvideo\.ru|rutube\.ru|twitch\.tv|disk\.yandex\.ru|yadi\.sk)$/.test(host)) throw new HttpError(400, 'Этот видеохостинг не поддерживается. Используйте YouTube («По ссылке») или прямую ссылку на файл .mp4/.webm.');
+    return url.toString();
+  }
+  if (/^[a-zA-Z0-9_\-./%]+$/.test(u) && !u.includes('..') && !u.startsWith('//') && !u.startsWith('/')) return u; // относительный путь на сайте
+  throw new HttpError(400, 'Ссылка на видео должна начинаться с https:// (YouTube или прямой файл .mp4/.webm) или быть путём на сайте, например videos/lecture1.mp4');
+}
+// Длительность: число секунд или строка «сс», «мм:сс», «чч:мм:сс».
+function parseDuration(v) {
+  if (v === undefined || v === null || v === '') return 0;
+  if (typeof v === 'number') return int(Math.round(v), 0, 6 * 3600, 'длительность');
+  const t = String(v).trim();
+  const m = /^(?:(\d{1,2}):)?(?:(\d{1,3}):)?(\d{1,5})$/.exec(t);
+  if (!m) throw new HttpError(400, 'Длительность: укажите секунды или формат мм:сс / чч:мм:сс');
+  const parts = t.split(':').map(Number);
+  if (parts.slice(1).some(x => x >= 60)) throw new HttpError(400, 'Длительность: минуты и секунды должны быть меньше 60');
+  const sec = parts.reduce((a, x) => a * 60 + x, 0);
+  return int(sec, 0, 6 * 3600, 'длительность (макс. 6 часов)');
 }
 function parseJ(s, def) { try { return JSON.parse(s); } catch (_) { return def; } }
 function shuffle(a) {
@@ -281,7 +321,7 @@ function lectureOut(it, withVideo) {
     position: l.position, status: it.status, locked: it.locked,
     progress: p ? { max_pos: p.max_pos, last_pos: p.last_pos, watched_sec: Math.round(p.watched_sec), completed_at: p.completed_at } : null,
   };
-  if (withVideo) o.video_url = l.video_url;
+  if (withVideo) { o.video_url = l.video_url; Object.assign(o, videoInfo(l.video_url)); }
   return o;
 }
 async function listLectures(env, user) {
@@ -527,7 +567,7 @@ function lectureInput(b, partial) {
   if (!partial || b.title !== undefined) o.title = str(b.title, 200, { required: true, name: 'название' });
   if (!partial || b.description !== undefined) o.description = str(b.description, 10000, { name: 'описание' });
   if (!partial || b.video_url !== undefined) o.video_url = validVideoUrl(str(b.video_url, 1000, { name: 'ссылка на видео' }));
-  if (!partial || b.duration_sec !== undefined) o.duration_sec = int(b.duration_sec, 0, 6 * 3600, 'длительность', 0);
+  if (!partial || b.duration_sec !== undefined) o.duration_sec = parseDuration(b.duration_sec);
   if (!partial || b.position !== undefined) o.position = int(b.position, 0, 100000, 'порядок', 0);
   if (!partial || b.required !== undefined) o.required = bool(b.required, true);
   if (!partial || b.published !== undefined) o.published = bool(b.published, false);
@@ -538,7 +578,7 @@ function lectureInput(b, partial) {
 }
 async function adminLectures(env) {
   const { results } = await env.DB.prepare(`SELECT l.*, (SELECT COUNT(*) FROM lecture_progress p WHERE p.lecture_id = l.id AND p.completed_at IS NOT NULL) AS watched_count FROM lectures l ORDER BY position, id`).all();
-  return json({ lectures: results });
+  return json({ lectures: results.map(l => ({ ...l, ...videoInfo(l.video_url) })) });
 }
 async function saveLecture(request, env, user, id) {
   const b = await readJson(request);
@@ -548,21 +588,22 @@ async function saveLecture(request, env, user, id) {
     const cur = await env.DB.prepare('SELECT * FROM lectures WHERE id = ?1').bind(id).first();
     if (!cur) throw new HttpError(404, 'Лекция не найдена');
     const m = { ...cur, ...o };
-    if (m.published && (!m.video_url || !m.duration_sec)) throw new HttpError(400, 'Для публикации нужны ссылка на видео и длительность');
+    if (m.published && (!m.video_url || !m.duration_sec)) throw new HttpError(400, 'Чтобы опубликовать лекцию, укажите ссылку на видео и длительность (больше 0). Черновик можно сохранить и без них.');
     const keys = Object.keys(o);
     if (keys.length) {
       await env.DB.prepare(`UPDATE lectures SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`)
         .bind(...keys.map(k => o[k]), now, id).run();
     }
     await audit(env, user, 'lecture.update', id, o);
-    return json({ lecture: await env.DB.prepare('SELECT * FROM lectures WHERE id = ?1').bind(id).first() });
+    const lr = await env.DB.prepare('SELECT * FROM lectures WHERE id = ?1').bind(id).first();
+    return json({ lecture: { ...lr, ...videoInfo(lr.video_url) } });
   }
-  if (o.published && (!o.video_url || !o.duration_sec)) throw new HttpError(400, 'Для публикации нужны ссылка на видео и длительность');
+  if (o.published && (!o.video_url || !o.duration_sec)) throw new HttpError(400, 'Чтобы опубликовать лекцию, укажите ссылку на видео и длительность (больше 0). Черновик можно сохранить и без них.');
   if (b.position === undefined) { const mx = await env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM lectures').first(); o.position = mx.m + 10; }
   const r = await env.DB.prepare('INSERT INTO lectures (title, description, video_url, duration_sec, position, required, published, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) RETURNING *')
     .bind(o.title, o.description, o.video_url, o.duration_sec, o.position, o.required, o.published, now).first();
   await audit(env, user, 'lecture.create', r.id, { title: o.title });
-  return json({ lecture: r });
+  return json({ lecture: { ...r, ...videoInfo(r.video_url) } });
 }
 async function deleteLecture(env, user, id) {
   const cur = await env.DB.prepare('SELECT id, title FROM lectures WHERE id = ?1').bind(id).first();

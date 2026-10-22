@@ -41,6 +41,32 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   r = await call('POST', '/api/admin/lectures', A, { title: 'Лекция 2. Процессуальные действия', description: 'Вторая тестовая лекция.', video_url: vurl, duration_sec: 20, published: true, required: true });
   const L2 = r.d.lecture.id;
   await call('POST', '/api/admin/lectures', A, { title: 'Лекция 3. Черновик', video_url: '', duration_sec: 0, published: false });
+  // --- YouTube / форматы ссылок / черновики ---
+  r = await call('POST', '/api/admin/lectures', A, { title: 'Черновик без длительности и видео', published: false });
+  check('черновик без видео и длительности сохраняется', r.status === 200 && r.d.lecture.published === 0, r.d);
+  const DRAFT = r.d.lecture.id;
+  r = await call('POST', '/api/admin/lectures', A, { title: 'Черновик YouTube без длительности', video_url: 'https://www.youtube.com/watch?v=MaW7GrNHHCc', published: false });
+  check('YouTube-черновик без длительности сохраняется', r.status === 200 && r.d.lecture.type === 'youtube' && r.d.lecture.youtube_id === 'MaW7GrNHHCc', r.d);
+  await call('DELETE', '/api/admin/lectures/' + r.d.lecture.id, A);
+  for (const u of ['https://youtu.be/MaW7GrNHHCc?si=xyz', 'https://www.youtube.com/shorts/MaW7GrNHHCc', 'https://www.youtube.com/embed/MaW7GrNHHCc', 'https://m.youtube.com/watch?v=MaW7GrNHHCc&t=5s']) {
+    r = await call('PUT', '/api/admin/lectures/' + DRAFT, A, { video_url: u });
+    check('YouTube-ссылка принимается и нормализуется: ' + u, r.status === 200 && r.d.lecture.video_url === 'https://www.youtube.com/watch?v=MaW7GrNHHCc', r.d);
+  }
+  for (const [u, re] of [['https://drive.google.com/file/d/1abc/view?usp=sharing', /Google Диск/], ['https://cdn.discordapp.com/attachments/1/2/v.mp4?ex=abc', /Discord/], ['https://youtube.com/watch?v=short', /YouTube/], ['https://vk.com/video1_2', /не поддерживается/]]) {
+    r = await call('PUT', '/api/admin/lectures/' + DRAFT, A, { video_url: u });
+    check('отклоняется с понятным сообщением: ' + u, r.status === 400 && re.test(r.d.error), r.d);
+  }
+  r = await call('PUT', '/api/admin/lectures/' + DRAFT, A, { duration_sec: '2:04' }); check('длительность "2:04" → 124 с', r.d.lecture.duration_sec === 124, r.d.lecture);
+  r = await call('PUT', '/api/admin/lectures/' + DRAFT, A, { duration_sec: '1:02:03' }); check('длительность "1:02:03" → 3723 с', r.d.lecture.duration_sec === 3723);
+  r = await call('PUT', '/api/admin/lectures/' + DRAFT, A, { duration_sec: '5:99' }); check('длительность "5:99" отклонена', r.status === 400, r.d);
+  r = await call('PUT', '/api/admin/lectures/' + DRAFT, A, { duration_sec: 0, published: true }); check('публикация без длительности → 400 с объяснением', r.status === 400 && /длительность/.test(r.d.error), r.d);
+  r = await call('POST', '/api/admin/lectures', A, { title: 'Прямой mp4 на другом хосте', video_url: 'https://example.com/media/lecture.mp4', duration_sec: '10:00', published: false });
+  check('прямой mp4 на другом хосте принимается', r.status === 200 && r.d.lecture.type === 'file', r.d);
+  await call('DELETE', '/api/admin/lectures/' + r.d.lecture.id, A);
+  r = await call('POST', '/api/admin/lectures', A, { title: 'Относительный путь', video_url: 'videos/x.mp4', published: false });
+  check('относительный путь videos/x.mp4 принимается', r.status === 200 && r.d.lecture.video_url === 'videos/x.mp4', r.d);
+  await call('DELETE', '/api/admin/lectures/' + r.d.lecture.id, A);
+  await call('DELETE', '/api/admin/lectures/' + DRAFT, A);
   r = await call('POST', '/api/admin/lectures', A, { title: 'bad', video_url: 'javascript:alert(1)' }); check('валидация ссылки на видео', r.status === 400, r.d);
   r = await call('POST', '/api/admin/lectures', A, { title: 'Нет длительности', video_url: vurl, published: true }); check('публикация без длительности запрещена', r.status === 400, r.d);
   r = await call('POST', '/api/admin/exams', A, { title: 'Экзамен на допуск в ГУ ВП', description: 'Ответьте на вопросы. Развёрнутые ответы проверит экзаменатор.', time_limit_min: 15, max_attempts: 2, cooldown_min: 0, pass_pct: 60, shuffle_questions: false, shuffle_options: true, published: true });
@@ -65,10 +91,29 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   r = await call('POST', `/api/lectures/${L1}/heartbeat`, C2, { position: 20 }); check('лекция не засчитана после фейковых heartbeat', r.d.completed === false, r.d);
 
   // --- браузер ---
-  const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
+  const browser = await chromium.launch({ channel: process.env.PW_CHANNEL || 'chrome', args: ['--autoplay-policy=no-user-gesture-required'] });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, locale: 'ru-RU' });
   const page = await ctx.newPage();
   const jsErrors = []; page.on('pageerror', e => jsErrors.push(e.message));
+  // --- админ создаёт YouTube-лекцию через интерфейс (автоопределение длительности) ---
+  await page.goto(SITE); await page.evaluate(t => localStorage.setItem('vpexam_token', t), A); await page.reload(); await page.waitForSelector('#logoutBtn');
+  await page.goto(SITE + '#/admin/lecture/new'); await page.waitForSelector('#lf');
+  await page.fill('#lf [name=title]', 'Лекция 3. Видео с YouTube');
+  await page.check('#lf [name=published]');
+  await page.click('#saveBtn'); await page.waitForSelector('#ferr .alert.err');
+  check('UI: ошибка сервера показывается в форме (публикация без видео)', /Не сохранено/.test(await page.textContent('#ferr')), await page.textContent('#ferr'));
+  await page.screenshot({ path: SHOTS + '22_admin_lecture_error.png', fullPage: true });
+  await page.fill('#lf [name=video_url]', 'https://www.youtube.com/watch?v=MaW7GrNHHCc');
+  await page.dispatchEvent('#lf [name=video_url]', 'change');
+  await page.waitForFunction(() => document.querySelector('#lf [name=duration_sec]').value !== '', null, { timeout: 30000 }).catch(() => {});
+  const ytDur = await page.inputValue('#lf [name=duration_sec]');
+  check('UI: длительность YouTube определена автоматически (getDuration)', ytDur === '2:04', { ytDur, info: await page.textContent('#dinfo') });
+  await page.screenshot({ path: SHOTS + '23_admin_lecture_youtube.png', fullPage: true });
+  await page.click('#saveBtn'); await page.waitForSelector('.alert.ok');
+  r = await call('GET', '/api/admin/lectures', A); const L3 = r.d.lectures.find(l => l.title === 'Лекция 3. Видео с YouTube').id;
+  const l3 = r.d.lectures.find(l => l.id === L3);
+  check('YouTube-лекция сохранена и опубликована с длительностью 124', l3 && l3.published === 1 && l3.duration_sec === 124 && l3.type === 'youtube', l3);
+  await page.evaluate(() => localStorage.removeItem('vpexam_token')); await page.reload();
   await page.goto(SITE); await page.waitForSelector('#loginBtn');
   check('страница входа показывает "OAuth не настроен"', (await page.textContent('#app')).includes('OAuth не настроен'));
   check('кнопка входа неактивна без OAuth', await page.isDisabled('#loginBtn'));
@@ -82,9 +127,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check('UI: экзамен закрыт до лекций', (await page.textContent('#app')).includes('Сначала просмотрите'));
   await page.screenshot({ path: SHOTS + '04_exam_locked.png', fullPage: true });
 
-  for (const [n, L] of [[1, L1], [2, L2]]) {
-    await page.goto(SITE + '#/lecture/' + L); await page.waitForSelector('.player video');
-    await page.waitForFunction(() => document.querySelector('.player video').readyState >= 1);
+  for (const [n, L] of [[1, L1], [2, L2], [3, L3]]) {
+    await page.goto(SITE + '#/lecture/' + L); await page.waitForSelector('.player .media');
+    if (n < 3) await page.waitForFunction(() => document.querySelector('.player video') && document.querySelector('.player video').readyState >= 1);
+    else await page.waitForSelector('.player iframe', { timeout: 30000 }), await sleep(3000);
     await page.click('.player .ov .big');
     await sleep(4000);
     if (n === 1) {
@@ -100,11 +146,23 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       await sleep(1500);
       await page.screenshot({ path: SHOTS + '05_player.png' });
     }
-    await page.waitForFunction(() => /Лекция засчитана/.test(document.querySelector('#pmsg').textContent), null, { timeout: 60000 }).catch(() => {});
+    if (n === 3) {
+      await sleep(6000);
+      const t1 = await page.evaluate(() => window.__vpPlayer.A.time());
+      check('YouTube: воспроизведение идёт', t1 > 3, t1);
+      await page.evaluate(() => window.__vpPlayer.A.seek(100));
+      await sleep(1500);
+      const t2 = await page.evaluate(() => window.__vpPlayer.A.time());
+      check('YouTube: перемотка вперёд (на 100с) откатывается', t2 < 20, { t1, t2 });
+      check('YouTube: клики по iframe перекрыты щитом', await page.evaluate(() => { const s = document.querySelector('.shield'); const r = s.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 3) === s; }));
+      r = await call('POST', `/api/lectures/${L}/heartbeat`, C, { position: 120 }); check('YouTube: фейковый heartbeat 120с отклонён', r.d.accepted === false, r.d);
+      await page.screenshot({ path: SHOTS + '24_player_youtube.png' });
+    }
+    await page.waitForFunction(() => /Лекция засчитана/.test(document.querySelector('#pmsg').textContent), null, { timeout: n === 3 ? 200000 : 60000 }).catch(() => {});
     check(`лекция ${n} засчитана после полного просмотра`, (await page.textContent('#pmsg')).includes('засчитана'), await page.textContent('#pmsg'));
   }
   await page.screenshot({ path: SHOTS + '06_player_done.png' });
-  r = await call('GET', '/api/lectures', C); check('API: обе лекции watched', r.d.lectures.every(l => l.status === 'watched') && r.d.all_required_done, r.d.lectures.map(l => [l.status, l.progress]));
+  r = await call('GET', '/api/lectures', C); check('API: все 3 лекции watched', r.d.lectures.every(l => l.status === 'watched') && r.d.all_required_done, r.d.lectures.map(l => [l.status, l.progress]));
   await page.goto(SITE + '#/lectures'); await page.waitForSelector('.lec'); await page.screenshot({ path: SHOTS + '07_lectures_done.png', fullPage: true });
 
   // --- экзамен ---

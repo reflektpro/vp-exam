@@ -43,7 +43,7 @@ route('/admin/lectures', async () => {
     <p><a class="btn gold" href="#/admin/lecture/new">+ Добавить лекцию</a></p>
     ${lectures.length ? `<table><tr><th>Порядок</th><th>Название</th><th>Длительность</th><th>Обязательная</th><th>Опубликована</th><th>Просмотрели</th><th></th></tr>
     ${lectures.map((l, i) => `<tr><td><button class="btn sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button> <button class="btn sm" data-down="${i}" ${i < lectures.length - 1 ? '' : 'disabled'}>↓</button></td>
-      <td><a href="#/admin/lecture/${l.id}">${esc(l.title)}</a></td><td>${fmtTime(l.duration_sec)}</td><td>${yes(l.required)}</td><td>${l.published ? '<span class="badge ok">да</span>' : '<span class="badge">черновик</span>'}</td><td>${l.watched_count}</td>
+      <td><a href="#/admin/lecture/${l.id}">${esc(l.title)}</a> ${l.type === 'youtube' ? '<span class="badge info">YouTube</span>' : l.type === 'file' ? '<span class="badge">файл</span>' : '<span class="badge warn">нет видео</span>'}</td><td>${fmtTime(l.duration_sec)}</td><td>${yes(l.required)}</td><td>${l.published ? '<span class="badge ok">да</span>' : '<span class="badge">черновик</span>'}</td><td>${l.watched_count}</td>
       <td><a class="btn sm" href="#/admin/lecture/${l.id}">Изменить</a></td></tr>`).join('')}</table>` : '<div class="alert info">Лекций пока нет.</div>'}`);
   const ids = lectures.map(l => l.id);
   const move = async (i, d) => { const a = ids.slice(); [a[i], a[i + d]] = [a[i + d], a[i]]; await api('POST', '/api/admin/lectures/reorder', { ids: a }); render(); };
@@ -55,33 +55,81 @@ route('/admin/lecture/:id', async (id) => {
   const isNew = id === 'new';
   let l = { title: '', description: '', video_url: '', duration_sec: 0, required: 1, published: 0 };
   if (!isNew) { const { lectures } = await api('GET', '/api/admin/lectures'); l = lectures.find(x => String(x.id) === id); if (!l) throw new Error('Лекция не найдена'); }
+  const saved = sessionStorage.getItem('vp_saved_msg'); sessionStorage.removeItem('vp_saved_msg');
   setView(`<p><a href="#/admin/lectures">← Лекции</a></p><h1>${isNew ? 'Новая лекция' : 'Лекция: ' + esc(l.title)}</h1>
-    <form class="card" id="lf">
-      <label class="f"><span>Название *</span><input name="title" maxlength="200" required value="${esc(l.title)}"></label>
+    ${saved ? `<div class="alert ok">${esc(saved)}</div>` : ''}
+    <form class="card" id="lf" novalidate>
+      <label class="f"><span>Название *</span><input name="title" maxlength="200" value="${esc(l.title)}"></label>
       <label class="f"><span>Описание (показывается под видео)</span><textarea name="description" maxlength="10000">${esc(l.description)}</textarea></label>
-      <label class="f"><span>Ссылка на видео (прямая ссылка на .mp4/.webm, https://… или путь на сайте, например videos/lecture1.mp4)</span><input name="video_url" maxlength="1000" value="${esc(l.video_url)}"></label>
-      <div class="row"><label class="f" style="width:220px"><span>Длительность, секунд *</span><input type="number" name="duration_sec" min="0" max="21600" value="${l.duration_sec}"></label>
-        <button type="button" class="btn" id="detect">Определить по видео</button><span class="small mut" id="dinfo"></span></div>
+      <label class="f"><span>Ссылка на видео: YouTube (можно «По ссылке») или прямая ссылка на файл .mp4/.webm, либо путь на сайте videos/lecture1.mp4</span><input name="video_url" maxlength="1000" value="${esc(l.video_url)}" placeholder="https://www.youtube.com/watch?v=…"></label>
+      <div class="small" id="vinfo" style="margin:-6px 0 12px"></div>
+      <div class="row"><label class="f" style="width:220px"><span>Длительность (сек, мм:сс или чч:мм:сс)</span><input name="duration_sec" maxlength="10" value="${l.duration_sec ? fmtTime(l.duration_sec) : ''}" placeholder="например 12:34"></label>
+        <button type="button" class="btn" id="detect">Определить по видео</button><span class="small" id="dinfo"></span></div>
       <label class="chk"><input type="checkbox" name="required" ${l.required ? 'checked' : ''}> Обязательная (нужна для допуска к экзамену)</label>
-      <label class="chk"><input type="checkbox" name="published" ${l.published ? 'checked' : ''}> Опубликована (видна кандидатам)</label>
-      <div class="row"><button class="btn gold">Сохранить</button>${isNew ? '' : '<button type="button" class="btn danger" id="del">Удалить лекцию</button>'}</div>
+      <label class="chk"><input type="checkbox" name="published" ${l.published ? 'checked' : ''}> Опубликована (видна кандидатам). Без галочки лекция сохраняется как черновик — длительность можно указать позже.</label>
+      <div class="row"><button class="btn gold" id="saveBtn">Сохранить</button>${isNew ? '' : '<button type="button" class="btn danger" id="del">Удалить лекцию</button>'}</div>
+      <div id="ferr" class="ferr"></div>
     </form>
-    <div class="card flat"><h3>Предпросмотр видео</h3><video id="pv" controls preload="metadata" style="width:100%;max-height:360px;background:#000"></video>
-    <p class="small mut">Здесь перемотка разрешена — это только проверка для администратора.</p></div>`);
-  const f = $('#lf'), pv = $('#pv');
-  const loadPv = () => { const u = f.video_url.value.trim(); if (u && pv.getAttribute('src') !== u) pv.src = u; };
-  loadPv(); f.video_url.addEventListener('change', loadPv);
-  $('#detect').onclick = () => {
-    loadPv(); $('#dinfo').textContent = 'Загрузка метаданных…';
-    const done = () => { if (isFinite(pv.duration) && pv.duration > 0) { f.duration_sec.value = Math.floor(pv.duration); $('#dinfo').textContent = 'Длительность видео: ' + fmtTime(pv.duration) + ' — проверьте и сохраните.'; } };
-    if (pv.readyState >= 1) done(); else { pv.addEventListener('loadedmetadata', done, { once: true }); pv.addEventListener('error', () => { $('#dinfo').textContent = 'Не удалось открыть видео по ссылке'; }, { once: true }); }
+    <div class="card flat"><h3>Предпросмотр видео</h3><div id="pv" class="mut small">Вставьте ссылку на видео.</div>
+    <p class="small mut">Здесь перемотка разрешена — это только проверка для администратора. Кандидат увидит плеер без перемотки.</p></div>`);
+  const f = $('#lf'), pvBox = $('#pv'), dinfo = $('#dinfo'), vinfo = $('#vinfo'), ferr = $('#ferr');
+  const setD = (t, cls) => { dinfo.innerHTML = t ? `<span class="${cls === 'err' ? 'o-wrong' : cls === 'ok' ? 'o-correct' : 'mut'}">${esc(t)}</span>` : ''; };
+  const kind = (u) => {
+    if (!u) return { t: 'none' };
+    const yt = window.VPMedia.detectYoutubeId(u);
+    if (yt) return { t: 'youtube', id: yt };
+    if (/youtu\.?be/i.test(u)) return { t: 'bad', msg: 'Не удалось распознать ссылку YouTube — скопируйте ссылку из адресной строки или кнопки «Поделиться».' };
+    if (/drive\.google|docs\.google/i.test(u)) return { t: 'bad', msg: 'Google Диск не подходит. Загрузите видео на YouTube с доступом «По ссылке».' };
+    if (/discordapp\.(com|net)/i.test(u)) return { t: 'bad', msg: 'Ссылки Discord CDN перестают работать через сутки. Используйте YouTube («По ссылке»).' };
+    return { t: 'file' };
   };
-  f.onsubmit = async (ev) => {
-    ev.preventDefault();
+  let lastPv = null;
+  const refresh = () => {
+    const u = f.video_url.value.trim(), k = kind(u);
+    vinfo.innerHTML = k.t === 'youtube' ? `<span class="o-correct">Распознано: YouTube, ролик ${esc(k.id)}</span>` : k.t === 'file' ? '<span class="mut">Распознано: файл видео (нужна прямая ссылка на .mp4/.webm)</span>' : k.t === 'bad' ? `<span class="o-wrong">${esc(k.msg)}</span>` : '';
+    const key = k.t + ':' + (k.id || u);
+    if (key === lastPv) return k; lastPv = key;
+    if (k.t === 'youtube') pvBox.innerHTML = `<div style="position:relative;aspect-ratio:16/9;max-height:360px"><iframe src="https://www.youtube.com/embed/${esc(k.id)}?rel=0" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe></div>`;
+    else if (k.t === 'file') { pvBox.innerHTML = '<video controls preload="metadata" style="width:100%;max-height:360px;background:#000"></video>'; pvBox.querySelector('video').src = u; }
+    else pvBox.innerHTML = '<span class="mut small">Вставьте ссылку на видео.</span>';
+    return k;
+  };
+  const detect = async (auto) => {
+    const u = f.video_url.value.trim(), k = kind(u);
+    if (k.t === 'none') { if (!auto) setD('Сначала вставьте ссылку на видео', 'err'); return; }
+    if (k.t === 'bad') { setD(k.msg, 'err'); return; }
+    setD(k.t === 'youtube' ? 'Получаю длительность с YouTube…' : 'Загружаю метаданные видео…');
+    $('#detect').disabled = true;
     try {
-      const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/lectures' + (isNew ? '' : '/' + l.id), formObj(f));
-      toast('Лекция сохранена'); if (isNew) location.hash = '#/admin/lecture/' + r.lecture.id; else render();
-    } catch (e) { toast(e.message, true); }
+      const d = k.t === 'youtube' ? await window.VPMedia.youtubeDuration(k.id) : await window.VPMedia.fileDuration(new URL(u, location.href).toString());
+      f.duration_sec.value = fmtTime(Math.floor(d));
+      setD('Длительность видео: ' + fmtTime(Math.floor(d)) + (auto ? ' (определена автоматически)' : '') + ' — не забудьте сохранить.', 'ok');
+    } catch (e) { setD(e.message + ' Можно ввести длительность вручную.', 'err'); }
+    $('#detect').disabled = false;
+  };
+  refresh();
+  f.video_url.addEventListener('input', () => refresh());
+  f.addEventListener('input', () => { ferr.innerHTML = ''; });
+  f.video_url.addEventListener('change', () => { refresh(); const dv = f.duration_sec.value.trim(); if (!dv || dv === '0' || dv === '0:00') detect(true); });
+  $('#detect').onclick = () => detect(false);
+  if (l.video_url && !l.duration_sec) detect(true);
+  f.onsubmit = async (ev) => {
+    ev.preventDefault(); ferr.innerHTML = '';
+    const body = formObj(f);
+    body.duration_sec = String(body.duration_sec || '').trim();
+    if (!body.title.trim()) { ferr.innerHTML = '<div class="alert err">Укажите название лекции.</div>'; return; }
+    $('#saveBtn').disabled = true;
+    try {
+      const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/lectures' + (isNew ? '' : '/' + l.id), body);
+      const m = r.lecture.published ? 'Лекция сохранена и опубликована.' : 'Лекция сохранена как черновик (кандидаты её не видят). Отметьте «Опубликована», когда всё готово.';
+      toast('Лекция сохранена');
+      sessionStorage.setItem('vp_saved_msg', m);
+      if (isNew) location.hash = '#/admin/lecture/' + r.lecture.id; else render();
+    } catch (e) {
+      ferr.innerHTML = `<div class="alert err"><b>Не сохранено:</b> ${esc(e.message)}</div>`;
+      toast('Не сохранено: ' + e.message, true);
+      $('#saveBtn').disabled = false;
+    }
   };
   const del = $('#del');
   if (del) del.onclick = async () => { if (!confirm('Удалить лекцию и весь прогресс кандидатов по ней?')) return; try { await api('DELETE', '/api/admin/lectures/' + l.id); location.hash = '#/admin/lectures'; } catch (e) { toast(e.message, true); } };
