@@ -58,7 +58,14 @@ ID из `ADMIN_IDS` всегда `admin` и не могут быть пониж�
 - Длительность задаёт админ (кнопка «Определить по видео» читает её из файла). Если длительность указана больше реальной, лекцию нельзя будет досмотреть — проверяйте.
 
 **Экзамен:** вопросы 4 типов: один ответ, несколько ответов, краткий текст, развёрнутый текст. Параметры: лимит времени, лимит попыток,
-пауза между попытками, проходной %, перемешивание вопросов/вариантов, «только после всех обязательных лекций», публикация.
+пауза между попытками, проходной %, перемешивание вопросов/вариантов, **«Обязательные лекции»**, публикация.
+
+**Обязательные лекции экзамена** (блок в форме экзамена):
+- «Все опубликованные лекции» — по умолчанию и для всех старых экзаменов: нужны все опубликованные лекции с отметкой «Обязательная» (как раньше, включая будущие).
+- Галочки у отдельных лекций — экзамен откроется после просмотра только выбранных. Черновики и удалённые лекции не учитываются; в списке экзаменов про них показывается предупреждение.
+- Ничего не отмечено и «все» выключено — экзамен открыт сразу, без лекций.
+- Проверка выполняется на сервере при открытии карточки, старте и отправке попытки. Кандидат видит на карточке экзамена, какие лекции просмотрены и что «Осталось посмотреть» (со ссылками).
+- Настройка «Открывать лекции строго по порядку» влияет только на очерёдность просмотра лекций, а не на допуск к экзаменам. Если нужная экзамену лекция стоит третьей, кандидату всё равно придётся посмотреть первые две, чтобы её открыть (на карточке такие лекции отмечены 🔒).
 Правильные ответы и эталоны никогда не отправляются кандидату. Варианты проверяются автоматически (multi — только точное совпадение),
 текстовые идут на ручную проверку. Таймер проверяется на сервере: после дедлайна (+30 с запаса) попытка завершается автоматически
 с сохранёнными ответами (ответы автосохраняются каждые 15 с). Пока попытка на проверке или экзамен сдан — новая попытка не начинается.
@@ -111,7 +118,7 @@ ID из `ADMIN_IDS` всегда `admin` и не могут быть пониж�
 | GET | `/api/my/attempts` | вошедший | мои попытки |
 | GET | `/api/admin/stats` | examiner+ | сводка |
 | GET/POST | `/api/admin/lectures` ; PUT/DELETE `/api/admin/lectures/:id` ; POST `/api/admin/lectures/reorder {ids}` | admin | лекции |
-| GET/POST | `/api/admin/exams` ; GET/PUT/DELETE `/api/admin/exams/:id` | admin | экзамены |
+| GET/POST | `/api/admin/exams` ; GET/PUT/DELETE `/api/admin/exams/:id` (`required_lectures`: `"all"` \| `[id, …]` \| `[]`) | admin | экзамены |
 | POST | `/api/admin/exams/:id/questions` ; `/api/admin/exams/:id/questions/reorder` ; PUT/DELETE `/api/admin/questions/:id` | admin | вопросы |
 | GET | `/api/admin/users?q=` ; `/api/admin/users/:discordId` | examiner+ | кандидаты и прогресс |
 | PUT | `/api/admin/users/:discordId` `{role, blocked}` | admin | роль, блокировка |
@@ -142,6 +149,7 @@ ID из `ADMIN_IDS` всегда `admin` и не могут быть пониж�
 ## Деплой и миграции
 
 - Схема: `worker/migrations/0001_init.sql` (идемпотентна, `CREATE TABLE IF NOT EXISTS`). Новые изменения схемы — новыми файлами `0002_…sql`.
+  `0002_exam_lectures.sql` — столбец `exams.lecture_mode` (по умолчанию `'all'`) и таблица `exam_lectures(exam_id, lecture_id)`; применяется один раз (содержит `ALTER TABLE … ADD COLUMN`).
   Применить: `cd worker && npx wrangler d1 migrations apply vp-exam-db --remote` (или выполнить SQL в консоли D1).
 - Worker: `cd worker && npx wrangler deploy` (конфиг `worker/wrangler.toml`). Секреты при деплое сохраняются.
 - Сайт: push в `main` → GitHub Pages публикует из корня. Адрес API — в `config.js`.
@@ -154,10 +162,12 @@ ID из `ADMIN_IDS` всегда `admin` и не могут быть пониж�
 cd tests
 npm i wrangler@4 playwright@1 && npx playwright install chromium
 npx wrangler d1 execute vp-exam-db-local --local --file=../worker/migrations/0001_init.sql
+npx wrangler d1 execute vp-exam-db-local --local --file=../worker/migrations/0002_exam_lectures.sql
 ffmpeg -f lavfi -i testsrc=size=640x360:rate=25:duration=20 -f lavfi -i sine=frequency=440:duration=20 -c:v libvpx-vp9 -c:a libopus -shortest test20.webm
 node serve.js &            # сайт на http://localhost:8080 (с Range), видео — /__media/test20.webm
 npx wrangler dev --port 8787 --ip 127.0.0.1 &
 node e2e.js                # сквозной тест + скриншоты в tests/shots/
+node e2e-exam-lectures.js  # обязательные лекции по экзаменам (A↔лекция 1, B↔лекция 2, «все», «без лекций»)
 ```
 
 ## Ограничения

@@ -160,7 +160,7 @@ route('/lectures', async () => {
       <div>${st}</div></a>`;
   }).join('');
   setView(`<h1>Лекции</h1>
-    ${L.all_required_done && L.lectures.length ? '<div class="alert ok">Все обязательные лекции просмотрены — экзамен доступен в разделе «Экзамены».</div>' : '<p class="mut">Лекции открываются по порядку. Перематывать вперёд нельзя — лекция засчитывается после полного просмотра.</p>'}
+    ${L.all_required_done && L.lectures.length ? '<div class="alert ok">Все обязательные лекции просмотрены. Какие лекции нужны для каждого экзамена — смотрите в разделе «Экзамены».</div>' : `<p class="mut">${App.config && App.config.settings && App.config.settings.sequential_lectures ? 'Лекции открываются по порядку. ' : ''}Перематывать вперёд нельзя — лекция засчитывается после полного просмотра. Для каждого экзамена нужны свои лекции — список есть в разделе «Экзамены».</p>`}
     ${items || '<div class="alert info">Лекции пока не добавлены.</div>'}`);
 });
 
@@ -177,11 +177,25 @@ route('/lecture/:id', async (id) => {
 route('/exams', async () => {
   const E = await api('GET', '/api/exams');
   setView(`<h1>Экзамены</h1>
-    ${!E.all_required_done ? '<div class="alert warn">Экзамен откроется после просмотра всех обязательных лекций.</div>' : ''}
-    ${E.exams.map(e => `<div class="card flat"><div class="row between"><h2 style="margin:0">${esc(e.title)}</h2>${examBadge(e)}</div>
+    <p class="mut small">Каждый экзамен открывается после просмотра своих лекций — список под названием экзамена.</p>
+    ${E.exams.map(e => `<div class="card flat exam-card" data-exam="${e.id}"><div class="row between"><h2 style="margin:0">${esc(e.title)}</h2>${examBadge(e)}</div>
       <p class="mut small">${examMeta(e)}</p>
+      ${examLecturesHtml(e)}
       <a class="btn" href="#/exam/${e.id}">Подробнее</a></div>`).join('') || '<div class="alert info">Экзамены пока не опубликованы.</div>'}`);
 });
+// Блок «какие лекции нужны для этого экзамена»: просмотренные и оставшиеся (со ссылками).
+function examLecturesHtml(e) {
+  const ls = e.lectures || [];
+  if (e.lecture_mode === 'none' || !ls.length) return '<div class="exlec"><span class="small mut">Лекции для допуска не требуются.</span></div>';
+  const left = ls.filter(l => !l.watched), done = ls.filter(l => l.watched);
+  const chip = (l) => `<a class="lchip ${l.watched ? 'ok' : 'todo'}" href="#/lecture/${l.id}">${l.watched ? '✔' : l.locked ? '🔒' : '○'} ${esc(l.title)}</a>`;
+  return `<div class="exlec">
+    ${left.length ? `<div class="exlec-h warn">Осталось посмотреть: ${left.length} из ${ls.length}</div><div class="lchips">${left.map(chip).join('')}</div>
+      ${left.some(l => l.locked) ? '<div class="small mut">🔒 — лекция откроется после просмотра предыдущих лекций (лекции идут по порядку).</div>' : ''}`
+      : `<div class="exlec-h ok">✔ Все нужные лекции просмотрены (${ls.length})</div>`}
+    ${done.length && left.length ? `<div class="small mut" style="margin-top:6px">Просмотрено:</div><div class="lchips">${done.map(chip).join('')}</div>` : ''}
+  </div>`;
+}
 function examMeta(e) {
   return [`Вопросов: ${e.question_count}`, e.time_limit_min ? `Время: ${e.time_limit_min} мин` : 'Без ограничения времени',
     `Проходной балл: ${e.pass_pct}%`, e.max_attempts ? `Попыток: ${e.max_attempts}` : 'Попытки не ограничены',
@@ -195,6 +209,7 @@ route('/exam/:id', async (id) => {
     <div class="card"><h1>${esc(e.title)}</h1>
       ${e.description ? `<div class="welcome">${esc(e.description)}</div>` : ''}
       <p class="mut small">${examMeta(e)}</p>
+      ${examLecturesHtml(e)}
       ${e.active_attempt_id ? `<a class="btn primary" href="#/attempt/${e.active_attempt_id}">Продолжить попытку</a>`
         : e.can_start ? `<button class="btn primary" id="startBtn">Начать экзамен</button>`
         : `<div class="alert warn">${esc(e.reason || 'Экзамен недоступен')}${e.next_at ? ' — ' + fmtDate(e.next_at) : ''}</div>`}

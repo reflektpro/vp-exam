@@ -64,7 +64,7 @@ route('/admin', async () => {
     ${hasRole('admin') ? `<div class="card flat" style="margin-top:18px"><h3>Как наполнить сайт</h3><ol class="small">
       <li>«Лекции» → «Добавить лекцию»: название, ссылка на видео (mp4/webm), длительность (кнопка «Определить по видео»), порядок, «Опубликована».</li>
       <li>«Экзамены» → «Создать экзамен»: параметры, затем вопросы (один ответ / несколько / краткий / развёрнутый). Опубликуйте экзамен.</li>
-      <li>Кандидаты смотрят лекции по порядку; после всех обязательных лекций открывается экзамен.</li>
+      <li>В каждом экзамене блок «Обязательные лекции»: все опубликованные лекции (по умолчанию), только выбранные или без лекций. Экзамен открывается кандидату, когда просмотрены его лекции.</li>
       <li>Попытки с текстовыми ответами попадают в «Проверка».</li></ol></div>` : ''}`);
 });
 
@@ -165,19 +165,33 @@ route('/admin/exams', async () => {
   const { exams } = await api('GET', '/api/admin/exams');
   setView(`<h1>Экзамены</h1>${adminNav('/admin/exams')}
     <p><a class="btn gold" href="#/admin/exam/new">+ Создать экзамен</a></p><div id="lerr"></div>
-    ${exams.length ? `<table><tr><th>Название</th><th>Вопросов</th><th>Время</th><th>Проходной</th><th>Попыток</th><th>На проверке</th><th>Статус</th><th></th></tr>
-    ${exams.map(e => `<tr class="click" data-href="#/admin/exam/${e.id}"><td>${esc(e.title)}</td><td>${e.question_count}</td><td>${e.time_limit_min ? e.time_limit_min + ' мин' : '∞'}</td><td>${e.pass_pct}%</td><td>${e.attempt_count}</td><td>${e.pending_count}</td><td>${e.published ? '<span class="badge ok">опубликован</span>' : '<span class="badge warn">черновик</span>'}</td>
+    ${exams.length ? `<table><tr><th>Название</th><th>Обязательные лекции</th><th>Вопросов</th><th>Время</th><th>Проходной</th><th>Попыток</th><th>На проверке</th><th>Статус</th><th></th></tr>
+    ${exams.map(e => `<tr class="click" data-href="#/admin/exam/${e.id}"><td>${esc(e.title)}</td><td class="small" style="max-width:320px">${examLecSummary(e)}</td><td>${e.question_count}</td><td>${e.time_limit_min ? e.time_limit_min + ' мин' : '∞'}</td><td>${e.pass_pct}%</td><td>${e.attempt_count}</td><td>${e.pending_count}</td><td>${e.published ? '<span class="badge ok">опубликован</span>' : '<span class="badge warn">черновик</span>'}</td>
       <td style="white-space:nowrap">${e.published ? `<button class="btn sm" data-unpub="${e.id}">Снять с публикации</button>` : `<button class="btn sm primary" data-pubnow="${e.id}">Опубликовать</button>`}</td></tr>`).join('')}</table>` : '<div class="alert info">Экзаменов пока нет.</div>'}`);
   bindRows();
   $$('[data-pubnow]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); quickPublish('exams', b.dataset.pubnow, true, $('#lerr')); });
   $$('[data-unpub]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); quickPublish('exams', b.dataset.unpub, false, $('#lerr')); });
 }, { role: 'admin' });
 
+// Кратко: какие лекции нужны для экзамена (для строки списка) + предупреждения о черновиках/удалённых.
+function examLecSummary(e) {
+  let main;
+  if (e.lecture_mode === 'none') main = '<span class="mut">не нужны — открыт сразу</span>';
+  else if (e.lecture_mode === 'all') main = `все опубликованные <span class="mut">(${e.effective_lecture_count})</span>`;
+  else {
+    const ls = e.required_lectures || [];
+    const names = ls.slice(0, 3).map(l => l.deleted ? `<s class="mut">#${l.id}</s>` : esc(l.title) + (l.published ? '' : ' <span class="badge warn">черновик</span>'));
+    main = names.join(', ') + (ls.length > 3 ? ` <span class="mut">и ещё ${ls.length - 3}</span>` : '');
+  }
+  return main + (e.lecture_warnings || []).map(w => `<div class="lwarn">⚠ ${esc(w)}</div>`).join('');
+}
 const QTYPE_RU = { single: 'Один правильный ответ', multi: 'Несколько правильных ответов', text: 'Краткий текстовый ответ (ручная проверка)', long: 'Развёрнутый ответ (ручная проверка)' };
 route('/admin/exam/:id', async (id) => {
   const isNew = id === 'new';
-  let e = { title: '', description: '', time_limit_min: 30, max_attempts: 3, cooldown_min: 60, pass_pct: 70, shuffle_questions: 1, shuffle_options: 1, requires_lectures: 1, published: 0 }, qs = [];
-  if (!isNew) { const r = await api('GET', '/api/admin/exams/' + encodeURIComponent(id)); e = r.exam; qs = r.questions; }
+  let e = { title: '', description: '', time_limit_min: 30, max_attempts: 3, cooldown_min: 60, pass_pct: 70, shuffle_questions: 1, shuffle_options: 1, requires_lectures: 1, lecture_mode: 'all', required_lecture_ids: [], published: 0 }, qs = [];
+  const [er, lr] = await Promise.all([isNew ? null : api('GET', '/api/admin/exams/' + encodeURIComponent(id)), api('GET', '/api/admin/lectures')]);
+  if (er) { e = er.exam; qs = er.questions; }
+  const allLec = lr.lectures;
   setView(`<p><a href="#/admin/exams">← Экзамены</a></p><h1>${isNew ? 'Новый экзамен' : 'Экзамен: ' + esc(e.title)}</h1>
     <form class="card" id="ef">
       <label class="f"><span>Название *</span><input name="title" maxlength="200" required value="${esc(e.title)}"></label>
@@ -190,14 +204,16 @@ route('/admin/exam/:id', async (id) => {
       </div>
       <label class="chk"><input type="checkbox" name="shuffle_questions" ${e.shuffle_questions ? 'checked' : ''}> Перемешивать вопросы</label>
       <label class="chk"><input type="checkbox" name="shuffle_options" ${e.shuffle_options ? 'checked' : ''}> Перемешивать варианты ответов</label>
-      <label class="chk"><input type="checkbox" name="requires_lectures" ${e.requires_lectures ? 'checked' : ''}> Доступен только после просмотра всех обязательных лекций</label>
+      ${reqLecturesBlock(e, allLec)}
       ${pubBlock(e.published, false)}
       ${isNew ? '' : '<p style="margin-top:14px"><button type="button" class="btn danger sm" id="del">Удалить экзамен</button></p>'}
     </form>
     ${isNew ? '<div class="alert info">Сохраните экзамен, чтобы добавить вопросы.</div>' : `<h2>Вопросы (${qs.length}, всего баллов: ${qs.reduce((s, q) => s + q.points, 0)})</h2><div id="qlist"></div>
       <div class="row"><select id="newType">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select><button class="btn gold" id="addQ" type="button">+ Добавить вопрос</button></div>`}`);
+  const reqState = bindReqLectures($('#ef'), allLec);
   bindPub($('#ef'), async (pub) => {
     const body = formObj($('#ef')); delete body.pubstatus; body.published = pub;
+    body.required_lectures = reqState();
     if (!String(body.title || '').trim()) throw new Error('Укажите название экзамена.');
     const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/exams' + (isNew ? '' : '/' + e.id), body);
     toast(r.exam.published ? 'Экзамен опубликован' : 'Черновик экзамена сохранён');
@@ -214,6 +230,57 @@ route('/admin/exam/:id', async (id) => {
     const ed = qEditor(q, qs.length, e.id, ids); list.appendChild(ed); ed.querySelector('textarea').focus();
   };
 }, { role: 'admin' });
+
+// Блок «Обязательные лекции» в форме экзамена.
+function reqLecturesBlock(e, lectures) {
+  const all = e.lecture_mode !== 'selected' && e.lecture_mode !== 'none' && !!e.requires_lectures;
+  const sel = new Set(e.required_lecture_ids || []);
+  const missing = (e.required_lectures || []).filter(l => l.deleted);
+  return `<fieldset class="reqbox" id="reqbox"><legend>Обязательные лекции</legend>
+    <div class="small mut" style="margin-bottom:6px">Какие лекции кандидат должен досмотреть, чтобы открыть <b>этот</b> экзамен.</div>
+    <label class="chk" style="margin-bottom:4px"><input type="checkbox" id="reqAll" ${all ? 'checked' : ''}> <span><b>Все опубликованные лекции</b> <span class="small mut">— по умолчанию, как раньше: все опубликованные лекции с отметкой «Обязательная», включая будущие</span></span></label>
+    <div class="small mut" style="margin:8px 0 0">или отметьте только нужные:</div>
+    ${lectures.length ? `<div class="reqlist ${all ? 'off' : ''}" id="reqList">${lectures.map((l, i) => `<label class="chk"><input type="checkbox" class="reql" value="${l.id}" ${sel.has(l.id) ? 'checked' : ''} ${all ? 'disabled' : ''}>
+      <span>${i + 1}. ${esc(l.title)} ${l.published ? '' : '<span class="badge warn">черновик</span>'}${l.required ? '' : ' <span class="badge">необязательная</span>'}</span></label>`).join('')}</div>` : '<div class="small mut">Лекций пока нет.</div>'}
+    ${missing.length ? `<div class="lwarn">⚠ Ранее выбранные лекции удалены: ${missing.map(l => '#' + l.id).join(', ')} — они не учитываются и уберутся при сохранении.</div>` : ''}
+    <div id="reqHint" class="alert info small" style="margin:10px 0 0"></div></fieldset>`;
+}
+function bindReqLectures(form, lectures) {
+  const allBox = form.querySelector('#reqAll'), list = form.querySelector('#reqList'), hint = form.querySelector('#reqHint');
+  const boxes = () => $$('.reql', form);
+  const seq = !!(App.config && App.config.settings && App.config.settings.sequential_lectures);
+  const update = () => {
+    const all = allBox.checked;
+    boxes().forEach(b => b.disabled = all);
+    if (list) list.classList.toggle('off', all);
+    let html, cls = 'info';
+    if (all) {
+      const n = lectures.filter(l => l.published && l.required).length;
+      html = `Экзамен откроется после просмотра <b>всех опубликованных обязательных лекций</b> (сейчас: ${n}). Новые лекции будут добавляться к условию автоматически.`;
+    } else {
+      const ids = new Set(boxes().filter(b => b.checked).map(b => Number(b.value)));
+      const chosen = lectures.filter(l => ids.has(l.id));
+      if (!chosen.length) { cls = 'warn'; html = '<b>Лекции не выбраны — экзамен будет открыт сразу</b>, без просмотра лекций. Если нужны все лекции, отметьте «Все опубликованные лекции».'; }
+      else {
+        const drafts = chosen.filter(l => !l.published);
+        const live = chosen.length - drafts.length;
+        html = `Экзамен откроется после просмотра выбранных лекций: <b>${chosen.length}</b>.`;
+        if (drafts.length) { cls = 'warn'; html += `<br>⚠ Черновики не учитываются, пока не опубликованы: ${drafts.map(l => '«' + esc(l.title) + '»').join(', ')}.${live ? '' : ' Сейчас экзамен фактически открыт без лекций.'}`; }
+        if (seq) {
+          // при «строго по порядку» кандидату придётся пройти и предыдущие обязательные лекции, чтобы открыть выбранную
+          const pub = lectures.filter(l => l.published);
+          const lastIdx = Math.max(...chosen.filter(l => l.published).map(l => pub.indexOf(l)));
+          const before = lastIdx > 0 ? pub.slice(0, lastIdx).filter(l => l.required && !ids.has(l.id)) : [];
+          if (before.length) html += `<br>ℹ Включено «Открывать лекции строго по порядку»: чтобы открыть выбранные лекции, кандидату сначала придётся посмотреть предыдущие: ${before.map(l => '«' + esc(l.title) + '»').join(', ')}. На сам допуск к экзамену порядок не влияет — проверяются только выбранные лекции.`;
+        }
+      }
+    }
+    hint.className = 'alert small ' + cls; hint.innerHTML = html;
+  };
+  allBox.onchange = update; boxes().forEach(b => b.onchange = update);
+  update();
+  return () => allBox.checked ? 'all' : boxes().filter(b => b.checked).map(b => Number(b.value));
+}
 
 function qEditor(q, i, examId, ids) {
   const el = document.createElement('div'); el.className = 'qedit';
@@ -355,7 +422,8 @@ route('/admin/settings', async () => {
     <form class="card" id="sf">
       <label class="f"><span>Название сайта</span><input name="site_title" maxlength="120" value="${esc(s.site_title)}"></label>
       <label class="f"><span>Приветственный текст (главная и страница входа)</span><textarea name="welcome_text" maxlength="5000" rows="5">${esc(s.welcome_text)}</textarea></label>
-      <label class="chk"><input type="checkbox" name="sequential_lectures" ${s.sequential_lectures ? 'checked' : ''}> Открывать лекции строго по порядку</label>
+      <label class="chk" style="margin-bottom:2px"><input type="checkbox" name="sequential_lectures" ${s.sequential_lectures ? 'checked' : ''}> Открывать лекции строго по порядку</label>
+      <div class="small mut" style="margin:0 0 14px 26px">Влияет только на очерёдность просмотра: следующая лекция открывается после предыдущих обязательных. На допуск к экзаменам порядок не влияет — каждый экзамен проверяет только свои обязательные лекции (они выбираются в настройках экзамена). Если нужная экзамену лекция стоит, например, третьей, кандидат всё равно сначала посмотрит первые две, чтобы её открыть; чтобы этого не было — выключите настройку или поставьте эту лекцию выше в списке.</div>
       <button class="btn gold">Сохранить</button></form>
     <div class="card flat"><h3>Вход через Discord</h3><p class="small">OAuth: ${App.config && App.config.oauth_configured ? '<span class="badge ok">настроен</span>' : '<span class="badge err">не настроен</span>'}</p>
       <p class="small mut">Redirect URI для Discord-приложения:</p><pre class="code">${esc(App.config ? App.config.redirect_uri : '')}</pre>

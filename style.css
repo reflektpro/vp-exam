@@ -127,3 +127,17 @@ pre.code{background:#101413;border:1px solid var(--line);padding:10px;border-rad
 .pubbox{border:1px solid var(--gold);border-radius:6px;padding:14px;background:#171c1a;margin-top:16px}
 .pubbox .pubsel{max-width:420px;font-weight:600}
 .updbar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:120;background:#1d2326;border:1px solid var(--gold);border-radius:6px;padding:10px 14px;display:flex;gap:12px;align-items:center;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.exlec{margin:4px 0 14px;padding:10px 12px;border:1px solid var(--line);border-radius:5px;background:var(--panel2)}
+.exlec-h{font-family:Oswald,"Segoe UI",sans-serif;letter-spacing:1px;font-size:14px;margin-bottom:6px}
+.exlec-h.warn{color:var(--warn)}.exlec-h.ok{color:var(--ok);margin-bottom:0}
+.lchips{display:flex;flex-wrap:wrap;gap:6px}
+.lchip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:13px;text-decoration:none;border:1px solid #4a5550;background:#262d2b;color:var(--txt)}
+.lchip.todo{border-color:#7d6420;color:#f0d27a;background:#2b2616}
+.lchip.ok{border-color:#3c7a45;color:#9fe0a8;background:#1b2b1e}
+.lchip:hover{border-color:var(--gold2)}
+.reqbox{border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin:14px 0;background:var(--panel2)}
+.reqbox legend{padding:0 6px;font-family:Oswald,"Segoe UI",sans-serif;letter-spacing:1px;color:var(--gold2)}
+.reqlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:2px 16px;margin:8px 0 4px 26px}
+.reqlist.off{opacity:.45}
+.reqlist label.chk{margin:4px 0}
+.lwarn{color:var(--warn);font-size:12px;margin-top:3px}

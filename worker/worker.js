@@ -312,7 +312,33 @@ async function lectureStates(env, userId) {
     if (l.required && !(p && p.completed_at)) blocked = true;
   }
   const allRequiredDone = lectures.filter(l => l.required).every(l => { const p = pm.get(l.id); return p && p.completed_at; });
-  return { items: out, allRequiredDone };
+  return { items: out, allRequiredDone, sequential: settings.sequential_lectures };
+}
+// Какие лекции нужны для допуска к конкретному экзамену.
+//   mode: 'none' — лекции не нужны; 'all' — все опубликованные обязательные (как раньше); 'selected' — выбранные админом.
+// Неопубликованные и удалённые лекции из выбранных не учитываются.
+// Порядок «строго по порядку» на допуск к экзамену не влияет — он ограничивает только очерёдность просмотра лекций.
+function examMode(e) { return !e.requires_lectures ? 'none' : (e.lecture_mode === 'selected' ? 'selected' : 'all'); }
+async function examLinks(env, examId) {
+  const { results } = examId
+    ? await env.DB.prepare('SELECT exam_id, lecture_id FROM exam_lectures WHERE exam_id = ?1').bind(examId).all()
+    : await env.DB.prepare('SELECT exam_id, lecture_id FROM exam_lectures').all();
+  const m = new Map();
+  for (const r of results) { if (!m.has(r.exam_id)) m.set(r.exam_id, []); m.get(r.exam_id).push(r.lecture_id); }
+  return m;
+}
+function examRequirement(exam, st, links) {
+  const mode = examMode(exam);
+  let items = [];
+  if (mode === 'all') items = st.items.filter(i => i.lecture.required);
+  else if (mode === 'selected') { const ids = new Set(links.get(exam.id) || []); items = st.items.filter(i => ids.has(i.lecture.id)); }
+  const lectures = items.map(i => ({ id: i.lecture.id, title: i.lecture.title, watched: !!(i.progress && i.progress.completed_at), locked: !!i.locked }));
+  const left = lectures.filter(l => !l.watched);
+  return { mode, lectures, left, done: left.length === 0 };
+}
+function lecturesReason(req) {
+  const names = req.left.slice(0, 5).map(l => '«' + l.title + '»').join(', ') + (req.left.length > 5 ? ` и ещё ${req.left.length - 5}` : '');
+  return 'Сначала просмотрите лекции: ' + names;
 }
 function lectureOut(it, withVideo) {
   const l = it.lecture, p = it.progress;
@@ -372,12 +398,12 @@ async function heartbeat(request, env, user, id) {
 }
 
 // ---------- exams ----------
-async function examAvailability(env, user, exam, lecturesDone) {
+async function examAvailability(env, user, exam, req) {
   const { results: atts } = await env.DB.prepare('SELECT id, status, started_at, submitted_at, score_pct FROM attempts WHERE user_id = ?1 AND exam_id = ?2 ORDER BY id DESC').bind(user.id, exam.id).all();
   const now = Date.now();
   let can = true, reason = null, nextAt = null;
   const active = atts.find(a => a.status === 'in_progress');
-  if (exam.requires_lectures && !lecturesDone) { can = false; reason = 'Сначала просмотрите все обязательные лекции'; }
+  if (!req.done) { can = false; reason = lecturesReason(req); }
   else if (active) { can = true; reason = null; }
   else if (atts.some(a => a.status === 'passed')) { can = false; reason = 'Экзамен уже сдан'; }
   else if (atts.some(a => a.status === 'pending_review')) { can = false; reason = 'Предыдущая попытка ожидает проверки'; }
@@ -388,6 +414,7 @@ async function examAvailability(env, user, exam, lecturesDone) {
     if (t > now) { can = false; reason = 'Следующая попытка будет доступна позже'; nextAt = t; }
   }
   return { can_start: can, reason, next_at: nextAt, active_attempt_id: active ? active.id : null,
+    lecture_mode: req.mode, lectures: req.lectures, lectures_left: req.left.length, lectures_done: req.done,
     attempts: atts.map(a => ({ id: a.id, status: a.status, started_at: a.started_at, submitted_at: a.submitted_at, score_pct: a.status === 'pending_review' ? null : a.score_pct })) };
 }
 function examPublic(e) {
@@ -396,27 +423,34 @@ function examPublic(e) {
 }
 async function listExams(env, user) {
   const st = await lectureStates(env, user.id);
+  const links = await examLinks(env);
   const { results } = await env.DB.prepare('SELECT * FROM exams WHERE published = 1 ORDER BY position, id').all();
   const out = [];
   for (const e of results) {
     const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(e.id).first();
-    out.push({ ...examPublic(e), question_count: qc.c, ...(await examAvailability(env, user, e, st.allRequiredDone)) });
+    out.push({ ...examPublic(e), question_count: qc.c, ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
   }
-  return json({ exams: out, all_required_done: st.allRequiredDone });
+  return json({ exams: out, all_required_done: st.allRequiredDone, sequential_lectures: st.sequential });
+}
+// Проверка лекций для конкретного экзамена (используется при открытии, старте и отправке).
+async function examReqFor(env, user, exam) {
+  const st = await lectureStates(env, user.id);
+  return examRequirement(exam, st, await examLinks(env, exam.id));
 }
 async function getExam(env, user, id) {
   const e = await env.DB.prepare('SELECT * FROM exams WHERE id = ?1 AND published = 1').bind(id).first();
   if (!e) throw new HttpError(404, 'Экзамен не найден');
-  const st = await lectureStates(env, user.id);
+  const req = await examReqFor(env, user, e);
   const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(id).first();
-  return json({ exam: { ...examPublic(e), question_count: qc.c, ...(await examAvailability(env, user, e, st.allRequiredDone)) } });
+  return json({ exam: { ...examPublic(e), question_count: qc.c, ...(await examAvailability(env, user, e, req)) } });
 }
 async function startExam(env, user, id) {
   await rateLimit(env, 'start:' + user.id, 10, 60);
   const e = await env.DB.prepare('SELECT * FROM exams WHERE id = ?1 AND published = 1').bind(id).first();
   if (!e) throw new HttpError(404, 'Экзамен не найден');
-  const st = await lectureStates(env, user.id);
-  const av = await examAvailability(env, user, e, st.allRequiredDone);
+  const req = await examReqFor(env, user, e);
+  if (!req.done) throw new HttpError(403, lecturesReason(req));
+  const av = await examAvailability(env, user, e, req);
   if (av.active_attempt_id) {
     const a = await env.DB.prepare('SELECT * FROM attempts WHERE id = ?1').bind(av.active_attempt_id).first();
     if (!(await finalizeIfExpired(env, a))) return json({ attempt_id: a.id });
@@ -552,6 +586,8 @@ async function submitAttempt(request, env, user, id) {
   const a = await loadOwnAttempt(env, user, id);
   if (a.status !== 'in_progress') return json({ ok: true, status: a.status, note: a.expired ? 'Время вышло, попытка завершена автоматически' : 'Попытка уже завершена' });
   const b = await readJson(request);
+  const exam = await env.DB.prepare('SELECT * FROM exams WHERE id = ?1').bind(a.exam_id).first();
+  if (exam) { const req = await examReqFor(env, user, exam); if (!req.done) throw new HttpError(403, lecturesReason(req)); }
   if (b.answers) await saveAnswers(env, a, b.answers);
   const status = await finalizeAttempt(env, a, false);
   return json({ ok: true, status });
@@ -645,18 +681,58 @@ async function adminExams(env) {
   const { results } = await env.DB.prepare(`SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS question_count,
     (SELECT COUNT(*) FROM attempts a WHERE a.exam_id = e.id) AS attempt_count,
     (SELECT COUNT(*) FROM attempts a WHERE a.exam_id = e.id AND a.status = 'pending_review') AS pending_count FROM exams e ORDER BY position, id`).all();
-  return json({ exams: results });
+  const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, position FROM lectures ORDER BY position, id').all();
+  const links = await examLinks(env);
+  return json({ exams: results.map(e => ({ ...e, ...examLecturesAdmin(e, lec, links) })) });
+}
+// Обязательные лекции экзамена для админки: что учитывается и что игнорируется (черновики / удалённые).
+function examLecturesAdmin(e, lec, links) {
+  const mode = examMode(e);
+  const lm = new Map(lec.map(l => [l.id, l]));
+  const ids = mode === 'selected' ? (links.get(e.id) || []).slice().sort((a, b) => {
+    const la = lm.get(a), lb = lm.get(b); return (la ? la.position : 1e9) - (lb ? lb.position : 1e9) || a - b; }) : [];
+  const required_lectures = ids.map(id => { const l = lm.get(id); return l ? { id, title: l.title, published: !!l.published, deleted: false } : { id, title: null, published: false, deleted: true }; });
+  const effective = mode === 'all' ? lec.filter(l => l.published && l.required).length : required_lectures.filter(l => l.published).length;
+  const warnings = [];
+  for (const l of required_lectures) {
+    if (l.deleted) warnings.push(`Лекция #${l.id} удалена — не учитывается`);
+    else if (!l.published) warnings.push(`«${l.title}» — черновик, не учитывается, пока не опубликована`);
+  }
+  if (mode === 'selected' && required_lectures.length && !effective) warnings.push('Ни одна выбранная лекция не опубликована — экзамен сейчас открыт без лекций');
+  return { lecture_mode: mode, required_lecture_ids: ids, required_lectures, effective_lecture_count: effective, lecture_warnings: warnings };
 }
 async function adminExam(env, id) {
   const e = await env.DB.prepare('SELECT * FROM exams WHERE id = ?1').bind(id).first();
   if (!e) throw new HttpError(404, 'Экзамен не найден');
   const { results } = await env.DB.prepare('SELECT * FROM questions WHERE exam_id = ?1 ORDER BY position, id').bind(id).all();
-  return json({ exam: e, questions: results.map(qOut) });
+  const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, position FROM lectures ORDER BY position, id').all();
+  return json({ exam: { ...e, ...examLecturesAdmin(e, lec, await examLinks(env, id)) }, questions: results.map(qOut) });
+}
+// required_lectures: 'all' — все опубликованные обязательные (по умолчанию); массив id — только выбранные; [] — лекции не нужны.
+async function parseRequiredLectures(env, v) {
+  if (v === undefined || v === null) return null;
+  if (v === 'all') return { requires_lectures: 1, lecture_mode: 'all', ids: [] };
+  if (!Array.isArray(v) || v.length > 500) throw new HttpError(400, 'Обязательные лекции: укажите "all" или список id лекций');
+  const ids = [...new Set(v.map(x => { const n = Number(x); if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, 'Обязательные лекции: некорректный id лекции'); return n; }))];
+  if (ids.length) {
+    const { results } = await env.DB.prepare(`SELECT id FROM lectures WHERE id IN (${ids.map((_, i) => '?' + (i + 1)).join(', ')})`).bind(...ids).all();
+    const have = new Set(results.map(r => r.id));
+    const bad = ids.filter(id => !have.has(id));
+    if (bad.length) throw new HttpError(400, `Обязательные лекции: лекция ${bad.map(x => '#' + x).join(', ')} не найдена (возможно, удалена). Обновите страницу.`);
+  }
+  return { requires_lectures: ids.length ? 1 : 0, lecture_mode: 'selected', ids };
+}
+function lectureLinkStmts(env, examId, rl) {
+  return [env.DB.prepare('DELETE FROM exam_lectures WHERE exam_id = ?1').bind(examId),
+    ...rl.ids.map(lid => env.DB.prepare('INSERT OR IGNORE INTO exam_lectures (exam_id, lecture_id) VALUES (?1, ?2)').bind(examId, lid))];
 }
 function qOut(q) { return { ...q, options: parseJ(q.options, []), correct: parseJ(q.correct, []) }; }
 async function saveExam(request, env, user, id) {
   const b = await readJson(request);
   const o = examInput(b, !!id);
+  const rl = await parseRequiredLectures(env, b.required_lectures);
+  if (rl) { o.requires_lectures = rl.requires_lectures; o.lecture_mode = rl.lecture_mode; }
+  else if (!id) o.lecture_mode = 'all';
   const now = Date.now();
   if (id) {
     const cur = await env.DB.prepare('SELECT id FROM exams WHERE id = ?1').bind(id).first();
@@ -666,15 +742,19 @@ async function saveExam(request, env, user, id) {
       if (!qc.c) throw new HttpError(400, 'Чтобы опубликовать экзамен, добавьте хотя бы один вопрос. Черновик можно сохранить и без вопросов.');
     }
     const keys = Object.keys(o);
-    if (keys.length) await env.DB.prepare(`UPDATE exams SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`).bind(...keys.map(k => o[k]), now, id).run();
-    await audit(env, user, 'exam.update', id, o);
+    const stmts = [];
+    if (keys.length) stmts.push(env.DB.prepare(`UPDATE exams SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`).bind(...keys.map(k => o[k]), now, id));
+    if (rl) stmts.push(...lectureLinkStmts(env, id, rl));
+    if (stmts.length) await env.DB.batch(stmts);
+    await audit(env, user, 'exam.update', id, rl ? { ...o, required_lecture_ids: rl.ids } : o);
     return adminExam(env, id);
   }
   if (o.published) throw new HttpError(400, 'Сначала сохраните экзамен как черновик и добавьте вопросы — потом его можно опубликовать.');
   const keys = Object.keys(o);
   const r = await env.DB.prepare(`INSERT INTO exams (${keys.join(', ')}, created_at, updated_at) VALUES (${keys.map((_, i) => '?' + (i + 1)).join(', ')}, ?${keys.length + 1}, ?${keys.length + 1}) RETURNING id`)
     .bind(...keys.map(k => o[k]), now).first();
-  await audit(env, user, 'exam.create', r.id, { title: o.title });
+  if (rl && rl.ids.length) await env.DB.batch(lectureLinkStmts(env, r.id, rl));
+  await audit(env, user, 'exam.create', r.id, { title: o.title, lecture_mode: o.lecture_mode, required_lecture_ids: rl ? rl.ids : [] });
   return adminExam(env, r.id);
 }
 async function deleteExam(env, user, id) {
@@ -684,6 +764,7 @@ async function deleteExam(env, user, id) {
     env.DB.prepare('DELETE FROM answers WHERE attempt_id IN (SELECT id FROM attempts WHERE exam_id = ?1)').bind(id),
     env.DB.prepare('DELETE FROM attempts WHERE exam_id = ?1').bind(id),
     env.DB.prepare('DELETE FROM questions WHERE exam_id = ?1').bind(id),
+    env.DB.prepare('DELETE FROM exam_lectures WHERE exam_id = ?1').bind(id),
     env.DB.prepare('DELETE FROM exams WHERE id = ?1').bind(id),
   ]);
   await audit(env, user, 'exam.delete', id, { title: cur.title });
