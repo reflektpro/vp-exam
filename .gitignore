@@ -6,3 +6,4 @@ tests/*.mp4
 tests/*.log
 tests/e2e-results.json
 .dev.vars
+tests/e2e-qtypes-results.json

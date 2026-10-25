@@ -63,7 +63,7 @@ function renderHeader() {
   const path = (location.hash || '#/').slice(1);
   const link = (href, txt) => `<a href="#${href}" class="${(href === '/' ? path === '/' : path.startsWith(href)) ? 'on' : ''}">${txt}</a>`;
   if (!App.me) { $('#nav').innerHTML = ''; $('#userbox').innerHTML = ''; return; }
-  $('#nav').innerHTML = link('/', 'Главная') + link('/lectures', 'Лекции') + link('/exams', 'Экзамены') + link('/profile', 'Профиль') + (hasRole('examiner') ? link('/admin', 'Управление') : '');
+  $('#nav').innerHTML = link('/', 'Главная') + link('/lectures', 'Лекции') + link('/exams', 'Экзамены') + link('/reatt', 'Переаттестация') + link('/profile', 'Профиль') + (hasRole('examiner') ? link('/admin', 'Управление') : '');
   const u = App.me;
   $('#userbox').innerHTML = `${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : ''}<span>${esc(userName(u))}</span><button class="btn sm" id="logoutBtn">Выйти</button>`;
   $('#logoutBtn').onclick = async () => { try { await api('POST', '/api/logout'); } catch (_) {} localStorage.removeItem(TOKEN_KEY); App.me = null; location.hash = '#/'; render(); };
@@ -115,6 +115,7 @@ route('/', async () => {
         <p><a class="btn" href="#/lectures">К лекциям</a></p></div>
       <div class="card flat"><h3>Экзамен</h3>${E.exams.length ? E.exams.map(e => `<div class="row between" style="margin-bottom:8px"><span>${esc(e.title)}</span>${examBadge(e)}</div>`).join('') : '<p class="mut">Экзамен пока не опубликован.</p>'}
         <p><a class="btn" href="#/exams">К экзаменам</a></p></div>
+      <div class="card flat"><h3>Переаттестация</h3><p class="mut small">Полная (законы и уставы) и упрощённая (только уставы) версии. Вопросы выбираются случайно в каждой попытке.</p><p><a class="btn" href="#/reatt">К переаттестации</a></p></div>
       <div class="card flat"><h3>Профиль</h3><p class="mut small">${App.me.ic_name ? 'Игровое имя: ' + esc(App.me.ic_name) : 'Укажите игровое имя и статик, чтобы проверяющему было проще вас найти.'}</p><p><a class="btn" href="#/profile">Открыть</a></p></div>
     </div>`);
 });
@@ -229,30 +230,40 @@ route('/attempt/:id', async (id) => {
   const { attempt: a } = await api('GET', '/api/attempts/' + encodeURIComponent(id));
   if (a.status !== 'in_progress') return attemptResult(a);
   const lsKey = 'vpexam_ans_' + a.id;
-  const answers = Object.assign({}, a.saved_answers, JSON.parse(localStorage.getItem(lsKey) || '{}'));
+  let local = {}; try { local = JSON.parse(localStorage.getItem(lsKey) || '{}'); } catch (_) {}
+  const answers = Object.assign({}, a.saved_answers, local);
+  // загруженные файлы — всегда с сервера (там имя/размер)
+  for (const [k, v] of Object.entries(a.saved_answers || {})) if (v && v.upload_id) answers[k] = v;
   const skew = a.server_now - Date.now();
-  setView(`<p><a href="#/exam/${a.exam.id}">← ${esc(a.exam.title)}</a></p>
+  const back = attemptBack(a);
+  let num = 0;
+  setView(`<p><a href="${back.href}">← ${esc(back.title)}</a></p>
     <div class="timer" id="timer"><span>${esc(a.exam.title)}</span><span>${a.deadline_at ? 'Осталось: <b id="tleft">—</b>' : '<span class="mut">Без ограничения времени</span>'}</span></div>
-    <form id="examForm">${a.questions.map((q, i) => questionHtml(q, i, answers[q.id])).join('')}
+    <div class="small mut" style="margin:-8px 0 12px">Вопросов: ${a.questions.filter(q => q.type !== 'info').length}. Ответы сохраняются автоматически.</div>
+    <form id="examForm" novalidate>${a.questions.map(q => `<div class="q ${q.type === 'info' ? 'info-q' : ''} ${q.kind === 'case' ? 'case-q' : ''}" data-qid="${q.id}" data-type="${esc(q.type)}"><div class="row between"><span class="small mut">${q.type === 'info' ? 'Информация' : (q.kind === 'case' ? 'Кейс' : 'Вопрос') + ' ' + (++num)}${q.category ? ' · ' + esc(q.category) : ''}</span>${q.type === 'info' ? '' : `<span class="small mut">${q.points} балл(ов)</span>`}</div><div class="qt">${esc(q.text)}</div></div>`).join('')}
     <div class="row"><button class="btn primary" type="submit" id="submitBtn">Завершить и отправить</button><span class="small mut" id="saveState"></span></div></form>`);
   const form = $('#examForm');
-  const collect = () => {
+  let dirty = false, saving = false, finished = false;
+  const ctl = {};
+  const onChange = () => { dirty = true; try { localStorage.setItem(lsKey, JSON.stringify(collect(true))); } catch (_) {} };
+  const ctx = { upload: (qid, f) => api('POST', `/api/attempts/${a.id}/upload`, { question_id: qid, ...f }) };
+  for (const q of a.questions) ctl[q.id] = window.QT.mount(form.querySelector(`.q[data-qid="${q.id}"]`), q, answers[q.id], onChange, ctx);
+  function collect(forLocal) {
     const out = {};
     for (const q of a.questions) {
-      if (q.type === 'single') { const c = form.querySelector(`input[name="q${q.id}"]:checked`); out[q.id] = c ? c.value : null; }
-      else if (q.type === 'multi') out[q.id] = $$(`input[name="q${q.id}"]:checked`, form).map(x => x.value);
-      else out[q.id] = form.querySelector(`[name="q${q.id}"]`).value;
+      if (q.type === 'info') continue;
+      let v = ctl[q.id].get();
+      if (forLocal && (q.type === 'file' || q.type === 'voice')) continue;
+      out[q.id] = v === undefined ? null : v;
     }
     return out;
-  };
-  let dirty = false, saving = false, finished = false;
+  }
   const save = async () => {
     if (!dirty || saving || finished) return; saving = true; dirty = false;
     try { await api('PUT', `/api/attempts/${a.id}/answers`, { answers: collect() }); $('#saveState').textContent = 'Ответы сохранены ' + new Date().toLocaleTimeString('ru-RU'); }
     catch (e) { dirty = true; $('#saveState').textContent = 'Не удалось сохранить: ' + e.message; }
     saving = false;
   };
-  form.addEventListener('input', () => { dirty = true; localStorage.setItem(lsKey, JSON.stringify(collect())); });
   const si = setInterval(save, 15000); onCleanup(() => clearInterval(si));
   const submit = async (auto) => {
     if (finished) return; finished = true;
@@ -260,7 +271,11 @@ route('/attempt/:id', async (id) => {
     try { await api('POST', `/api/attempts/${a.id}/submit`, { answers: collect() }); localStorage.removeItem(lsKey); toast(auto ? 'Время вышло — ответы отправлены' : 'Ответы отправлены'); render(); }
     catch (e) { finished = false; $('#submitBtn').disabled = false; toast(e.message, true); }
   };
-  form.onsubmit = (ev) => { ev.preventDefault(); if (confirm('Отправить ответы? Изменить их после отправки будет нельзя.')) submit(false); };
+  form.onsubmit = (ev) => {
+    ev.preventDefault();
+    const vals = collect(); const empty = a.questions.filter(q => q.type !== 'info' && (vals[q.id] == null || vals[q.id] === '' || (Array.isArray(vals[q.id]) && !vals[q.id].length))).length;
+    if (confirm((empty ? `Без ответа: ${empty}. ` : '') + 'Отправить ответы? Изменить их после отправки будет нельзя.')) submit(false);
+  };
   if (a.deadline_at) {
     const tick = () => {
       const left = (a.deadline_at - (Date.now() + skew)) / 1000;
@@ -272,27 +287,44 @@ route('/attempt/:id', async (id) => {
     tick(); const ti = setInterval(tick, 1000); onCleanup(() => clearInterval(ti));
   }
 });
-function questionHtml(q, i, val) {
-  let body = '';
-  if (q.type === 'single') body = q.options.map(o => `<label class="opt"><input type="radio" name="q${q.id}" value="${esc(o.id)}" ${val === o.id ? 'checked' : ''}><span>${esc(o.text)}</span></label>`).join('');
-  else if (q.type === 'multi') body = '<div class="small mut">Можно выбрать несколько вариантов</div>' + q.options.map(o => `<label class="opt"><input type="checkbox" name="q${q.id}" value="${esc(o.id)}" ${Array.isArray(val) && val.includes(o.id) ? 'checked' : ''}><span>${esc(o.text)}</span></label>`).join('');
-  else if (q.type === 'text') body = `<input type="text" name="q${q.id}" maxlength="1000" value="${esc(val || '')}" placeholder="Краткий ответ">`;
-  else body = `<textarea name="q${q.id}" maxlength="8000" rows="6" placeholder="Развёрнутый ответ">${esc(val || '')}</textarea>`;
-  return `<div class="q"><div class="row between"><span class="small mut">Вопрос ${i + 1}</span><span class="small mut">${q.points} балл(ов)</span></div><div class="qt">${esc(q.text)}</div>${body}</div>`;
-}
+function attemptBack(a) { return a.reatt ? { href: '#/reatt', title: 'Переаттестация' } : { href: '#/exam/' + (a.exam ? a.exam.id : ''), title: a.exam ? a.exam.title : 'Экзамен' }; }
 function attemptResult(a) {
   let big, cls;
   if (a.status === 'passed') { big = 'СДАН'; cls = 'ok'; }
   else if (a.status === 'failed') { big = 'НЕ СДАН'; cls = 'err'; }
   else { big = 'НА ПРОВЕРКЕ'; cls = 'warn'; }
-  setView(`<p><a href="#/exam/${a.exam ? a.exam.id : ''}">← ${esc(a.exam ? a.exam.title : 'Экзамен')}</a></p>
-    <div class="card result"><div class="mut">Попытка #${a.id} · отправлена ${fmtDate(a.submitted_at)}${a.expired ? ' (автоматически, время вышло)' : ''}</div>
+  const back = attemptBack(a);
+  setView(`<p><a href="${back.href}">← ${esc(back.title)}</a></p>
+    <div class="card result"><h2>${esc(a.exam ? a.exam.title : '')}</h2><div class="mut">Попытка #${a.id} · отправлена ${fmtDate(a.submitted_at)}${a.expired ? ' (автоматически, время вышло)' : ''}</div>
       <div class="big ${cls}">${big}</div>
-      ${a.score_pct != null ? `<p>Результат: <b>${a.score_pct}%</b> (проходной — ${a.exam ? a.exam.pass_pct : '?'}%)</p>` : '<p class="mut">Ваши развёрнутые ответы проверит экзаменатор. Результат появится здесь.</p>'}
+      ${a.score_pct != null ? `<p>Результат: <b>${a.score_pct}%</b> (проходной — ${a.exam ? a.exam.pass_pct : '?'}%)</p>` : '<p class="mut">Ваши развёрнутые ответы (кейсы, файлы, голосовые) проверит экзаменатор. Результат появится здесь.</p>'}
       ${a.reviewer_comment ? `<div class="alert info" style="text-align:left"><b>Комментарий проверяющего:</b><br><span class="welcome">${esc(a.reviewer_comment)}</span></div>` : ''}
       ${a.reviewed_at ? `<p class="small mut">Проверено ${fmtDate(a.reviewed_at)}</p>` : ''}
     </div>`);
 }
+
+route('/reatt', async () => {
+  const { versions } = await api('GET', '/api/reatt');
+  setView(`<h1>Переаттестация</h1>
+    <p class="mut small">Две версии. В каждой попытке вопросы выбираются случайно из банка по квотам, порядок вопросов и вариантов перемешивается. Кейсы проверяет экзаменатор.</p>
+    <div class="reatt-grid">${versions.map(v => `<div class="card reatt-card" data-v="${v.key}">
+      <div class="row between"><h2 style="margin:0">${esc(v.title)}</h2>${v.attempts[0] ? badge(v.attempts[0].status) : v.enabled ? '<span class="badge ok">Доступна</span>' : '<span class="badge lock">Выключена</span>'}</div>
+      ${v.description ? `<p class="welcome small">${esc(v.description)}</p>` : ''}
+      <div class="comp">${v.composition.filter(g => g.questions || g.cases).map(g => `<span class="lchip">${esc(g.label)}: ${g.questions ? g.questions + ' вопр.' : ''}${g.questions && g.cases ? ' + ' : ''}${g.cases ? g.cases + ' ' + (g.cases === 1 ? 'кейс' : g.cases < 5 ? 'кейса' : 'кейсов') : ''}</span>`).join('')}</div>
+      <p class="small mut">Всего: ${v.total_questions} вопросов + ${v.total_cases} кейсов · ${v.time_limit_min ? 'время ' + v.time_limit_min + ' мин' : 'без ограничения времени'} · проходной ${v.pass_pct}%${v.max_attempts ? ' · попыток: ' + v.max_attempts : ''}${v.cooldown_min ? ' · пауза ' + v.cooldown_min + ' мин' : ''}</p>
+      ${v.active_attempt_id ? `<a class="btn primary" href="#/attempt/${v.active_attempt_id}">Продолжить попытку</a>`
+        : v.can_start ? `<button class="btn primary startR" data-v="${v.key}" data-t="${v.time_limit_min}">Начать</button>`
+        : `<div class="alert warn">${esc(v.reason || 'Недоступно')}${v.next_at ? ' — ' + fmtDate(v.next_at) : ''}</div>`}
+      ${v.attempts.length ? `<table style="margin-top:12px"><tr><th>№</th><th>Дата</th><th>Статус</th><th>Результат</th></tr>${v.attempts.map(x => `<tr class="click" data-href="#/attempt/${x.id}"><td>#${x.id}</td><td>${fmtDate(x.submitted_at || x.started_at)}</td><td>${badge(x.status)}</td><td>${x.score_pct != null ? x.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : ''}
+    </div>`).join('')}</div>`);
+  $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; });
+  $$('.startR').forEach(b => b.onclick = async () => {
+    if (!confirm(Number(b.dataset.t) ? `После начала пойдёт таймер (${b.dataset.t} мин). Начать?` : 'Начать переаттестацию?')) return;
+    b.disabled = true;
+    try { const r = await api('POST', `/api/reatt/${b.dataset.v}/start`); location.hash = '#/attempt/' + r.attempt_id; }
+    catch (err) { toast(err.message, true); b.disabled = false; }
+  });
+});
 
 route('/profile', async () => {
   const u = App.me;

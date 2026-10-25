@@ -2,7 +2,7 @@
 'use strict';
 function adminNav(active) {
   const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Кандидаты', 'examiner'],
-    ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
+    ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
   return `<div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
 }
 function formObj(form) {
@@ -60,12 +60,15 @@ route('/admin', async () => {
       <div class="stat"><b>${s.in_progress}</b>экзаменов идёт сейчас</div>
       <div class="stat"><b>${s.lectures_published} / ${s.lectures}</b>лекций опубликовано</div>
       <div class="stat"><b>${s.exams}</b>экзаменов</div>
+      <div class="stat"><b>${s.bank_questions} + ${s.bank_cases}</b>вопросов + кейсов в банке</div>
+      <div class="stat"><b>${s.reatt_pending} / ${s.reatt_total}</b>переаттестаций ждут проверки / всего</div>
     </div>
     ${hasRole('admin') ? `<div class="card flat" style="margin-top:18px"><h3>Как наполнить сайт</h3><ol class="small">
       <li>«Лекции» → «Добавить лекцию»: название, ссылка на видео (mp4/webm), длительность (кнопка «Определить по видео»), порядок, «Опубликована».</li>
       <li>«Экзамены» → «Создать экзамен»: параметры, затем вопросы (один ответ / несколько / краткий / развёрнутый). Опубликуйте экзамен.</li>
       <li>В каждом экзамене блок «Обязательные лекции»: все опубликованные лекции (по умолчанию), только выбранные или без лекций. Экзамен открывается кандидату, когда просмотрены его лекции.</li>
-      <li>Попытки с текстовыми ответами попадают в «Проверка».</li></ol></div>` : ''}`);
+      <li>Попытки с ответами на ручную проверку (свободная форма, кейсы, файлы, голосовые) попадают в «Проверка».</li>
+      <li>«Банк вопросов» — вопросы и кейсы переаттестации по категориям (ПК, УК, ВУ…), импорт JSON. «Переаттестация» — квоты обеих версий.</li></ol></div>` : ''}`);
 });
 
 // ---------- лекции ----------
@@ -185,7 +188,7 @@ function examLecSummary(e) {
   }
   return main + (e.lecture_warnings || []).map(w => `<div class="lwarn">⚠ ${esc(w)}</div>`).join('');
 }
-const QTYPE_RU = { single: 'Один правильный ответ', multi: 'Несколько правильных ответов', text: 'Краткий текстовый ответ (ручная проверка)', long: 'Развёрнутый ответ (ручная проверка)' };
+const QTYPE_RU = window.QT.LABELS;
 route('/admin/exam/:id', async (id) => {
   const isNew = id === 'new';
   let e = { title: '', description: '', time_limit_min: 30, max_attempts: 3, cooldown_min: 60, pass_pct: 70, shuffle_questions: 1, shuffle_options: 1, requires_lectures: 1, lecture_mode: 'all', required_lecture_ids: [], published: 0 }, qs = [];
@@ -209,7 +212,8 @@ route('/admin/exam/:id', async (id) => {
       ${isNew ? '' : '<p style="margin-top:14px"><button type="button" class="btn danger sm" id="del">Удалить экзамен</button></p>'}
     </form>
     ${isNew ? '<div class="alert info">Сохраните экзамен, чтобы добавить вопросы.</div>' : `<h2>Вопросы (${qs.length}, всего баллов: ${qs.reduce((s, q) => s + q.points, 0)})</h2><div id="qlist"></div>
-      <div class="row"><select id="newType">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select><button class="btn gold" id="addQ" type="button">+ Добавить вопрос</button></div>`}`);
+      <div class="row"><select id="newType" style="max-width:340px">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}">${window.QT.ICONS[k]} ${v}</option>`).join('')}</select><button class="btn gold" id="addQ" type="button">+ Добавить вопрос</button>
+        <button class="btn" id="impQ" type="button">Импорт JSON</button><button class="btn" id="expQ" type="button">Экспорт JSON</button></div><div id="impBox"></div>`}`);
   const reqState = bindReqLectures($('#ef'), allLec);
   bindPub($('#ef'), async (pub) => {
     const body = formObj($('#ef')); delete body.pubstatus; body.published = pub;
@@ -223,12 +227,11 @@ route('/admin/exam/:id', async (id) => {
   $('#del').onclick = async () => { if (!confirm('Удалить экзамен со всеми вопросами и попытками?')) return; try { await api('DELETE', '/api/admin/exams/' + e.id); location.hash = '#/admin/exams'; } catch (err) { toast(err.message, true); } };
   const list = $('#qlist');
   const ids = qs.map(q => q.id);
-  qs.forEach((q, i) => list.appendChild(qEditor(q, i, e.id, ids)));
-  $('#addQ').onclick = () => {
-    const t = $('#newType').value;
-    const q = { id: null, type: t, text: '', points: 1, reference: '', options: t === 'single' || t === 'multi' ? [{ text: '' }, { text: '' }] : [], correct: [] };
-    const ed = qEditor(q, qs.length, e.id, ids); list.appendChild(ed); ed.querySelector('textarea').focus();
-  };
+  const qopts = { createPath: `/api/admin/exams/${e.id}/questions`, reorderPath: `/api/admin/exams/${e.id}/questions/reorder`, ids, open: qs.length <= 8 };
+  qs.forEach((q, i) => list.appendChild(qCard(q.native, i, qopts)));
+  $('#addQ').onclick = () => { const ed = qCard({ id: null, type: $('#newType').value, points: $('#newType').value === 'case' ? 5 : 1 }, qs.length, { ...qopts, open: true }); list.appendChild(ed); ed.querySelector('textarea').focus(); };
+  $('#impQ').onclick = () => importBox($('#impBox'), `/api/admin/exams/${e.id}/import`, false);
+  $('#expQ').onclick = () => exportJson(`/api/admin/exams/${e.id}/export`, 'exam-' + e.id + '-questions.json');
 }, { role: 'admin' });
 
 // Блок «Обязательные лекции» в форме экзамена.
@@ -282,48 +285,180 @@ function bindReqLectures(form, lectures) {
   return () => allBox.checked ? 'all' : boxes().filter(b => b.checked).map(b => Number(b.value));
 }
 
-function qEditor(q, i, examId, ids) {
-  const el = document.createElement('div'); el.className = 'qedit';
-  const choice = q.type === 'single' || q.type === 'multi';
-  el.innerHTML = `<div class="row between"><b>Вопрос ${i + 1}${q.id ? '' : ' (новый)'}</b><span class="small mut">${QTYPE_RU[q.type]}</span></div>
-    <label class="f"><span>Текст вопроса</span><textarea class="qt" maxlength="5000" rows="2">${esc(q.text)}</textarea></label>
-    <div class="fgrid"><label class="f"><span>Тип</span><select class="qtype">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}" ${k === q.type ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-      <label class="f"><span>Баллы</span><input type="number" class="qp" min="0" max="1000" value="${q.points}"></label></div>
-    <div class="opts" ${choice ? '' : 'hidden'}><div class="small mut" style="margin-bottom:6px">Варианты ответа — отметьте правильные:</div><div class="olist"></div><button type="button" class="btn sm addO">+ вариант</button></div>
-    <label class="f ref" ${choice ? 'hidden' : ''} style="border:0;padding:0"><span>Эталонный ответ / критерии (видит только проверяющий)</span><textarea class="qr" maxlength="5000" rows="2">${esc(q.reference || '')}</textarea></label>
-    <div class="row" style="margin-top:10px"><button type="button" class="btn gold sm save">Сохранить вопрос</button>
-      ${q.id ? `<button type="button" class="btn sm up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="btn sm down" ${i < ids.length - 1 ? '' : 'disabled'}>↓</button><button type="button" class="btn danger sm del">Удалить</button>` : '<button type="button" class="btn sm cancel">Отмена</button>'}</div>`;
-  const olist = el.querySelector('.olist');
-  const addOpt = (o) => {
-    const r = document.createElement('div'); r.className = 'optrow';
-    const t = el.querySelector('.qtype').value === 'single' ? 'radio' : 'checkbox';
-    r.innerHTML = `<input type="${t}" name="c${q.id || 'n' + i}" class="oc" ${o.id && q.correct.includes(o.id) ? 'checked' : ''}><input type="text" class="ot" maxlength="1000" value="${esc(o.text)}" placeholder="Текст варианта"><button type="button" class="btn sm danger rm">✕</button>`;
-    r.dataset.oid = o.id || '';
-    r.querySelector('.rm').onclick = () => r.remove();
-    olist.appendChild(r);
-  };
-  (q.options || []).forEach(addOpt);
-  el.querySelector('.addO').onclick = () => addOpt({ text: '' });
-  el.querySelector('.qtype').onchange = (ev) => {
-    const t = ev.target.value, ch = t === 'single' || t === 'multi';
-    el.querySelector('.opts').hidden = !ch; el.querySelector('.ref').hidden = ch;
-    $$('.oc', el).forEach(x => { x.type = t === 'single' ? 'radio' : 'checkbox'; });
-    if (ch && !olist.children.length) { addOpt({ text: '' }); addOpt({ text: '' }); }
-  };
+// Карточка вопроса: краткий вид + редактор (общий для экзаменов и банка).
+function qSummary(q) {
+  const extra = [];
+  if (q.category) extra.push(esc(q.category));
+  if (q.kind === 'case') extra.push('<span class="badge warn">кейс</span>');
+  if (q.easy) extra.push('<span class="badge ok">не душный</span>');
+  if (q.active === false) extra.push('<span class="badge err">выключен</span>');
+  if (q.ext_id && /^example-/.test(q.ext_id)) extra.push('<span class="badge info">ПРИМЕР</span>');
+  return `${window.QT.ICONS[q.type] || ''} <span class="small mut">${esc(QTYPE_RU[q.type] || q.type)} · ${q.points} б.</span> ${extra.join(' ')}<div class="qsum-t">${esc(String(q.text || '').slice(0, 220))}${String(q.text || '').length > 220 ? '…' : ''}</div>`;
+}
+function qCard(q, i, o) {
+  const el = document.createElement('div'); el.className = 'qedit'; if (q.id) el.dataset.qid = q.id;
+  el.innerHTML = `<div class="row between"><b>${o.bank ? '#' + (q.id || 'новый') : 'Вопрос ' + (i + 1)}${q.id ? '' : ' (новый)'}</b>
+    <span class="row" style="gap:6px">${q.id ? `<button type="button" class="btn sm tgl">${o.open ? 'Свернуть' : 'Изменить'}</button>` : ''}
+    ${q.id && o.reorderPath ? `<button type="button" class="btn sm up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="btn sm down" ${i < o.ids.length - 1 ? '' : 'disabled'}>↓</button>` : ''}
+    ${q.id ? '<button type="button" class="btn sm try">Проверить как кандидат</button><button type="button" class="btn danger sm del">Удалить</button>' : ''}</span></div>
+    <div class="qsum" ${o.open || !q.id ? 'hidden' : ''}>${qSummary(q)}</div><div class="qed" ${o.open || !q.id ? '' : 'hidden'}></div><div class="qtry"></div>`;
+  const ed = window.QT.editor(q, { bank: !!o.bank, categories: o.categories });
+  el.querySelector('.qed').appendChild(ed.el);
+  el.querySelector('.qed').appendChild(h2(`<div class="row" style="margin-top:10px"><button type="button" class="btn gold sm save">Сохранить вопрос</button>${q.id ? '' : '<button type="button" class="btn sm cancel">Отмена</button>'}<span class="qerr small"></span></div>`));
+  const tg = el.querySelector('.tgl'); if (tg) tg.onclick = () => { const ed2 = el.querySelector('.qed'); ed2.hidden = !ed2.hidden; el.querySelector('.qsum').hidden = !ed2.hidden; tg.textContent = ed2.hidden ? 'Изменить' : 'Свернуть'; };
   el.querySelector('.save').onclick = async () => {
-    const type = el.querySelector('.qtype').value;
-    const body = { type, text: el.querySelector('.qt').value, points: Number(el.querySelector('.qp').value || 0), reference: el.querySelector('.qr').value };
-    if (type === 'single' || type === 'multi') body.options = $$('.optrow', olist).map(r => ({ id: r.dataset.oid || undefined, text: r.querySelector('.ot').value, correct: r.querySelector('.oc').checked }));
-    try { await api(q.id ? 'PUT' : 'POST', q.id ? '/api/admin/questions/' + q.id : `/api/admin/exams/${examId}/questions`, body); toast('Вопрос сохранён'); render(); }
-    catch (e) { toast(e.message, true); }
+    const err = el.querySelector('.qerr'); err.innerHTML = '';
+    try { const body = ed.get(); const r = await api(q.id ? 'PUT' : 'POST', q.id ? '/api/admin/questions/' + q.id : o.createPath, body); toast('Вопрос сохранён'); if (o.onSaved) o.onSaved(r.question); else render(); }
+    catch (e) { err.innerHTML = `<span class="o-wrong">Не сохранено: ${esc(e.message)}</span>`; toast(e.message, true); }
   };
   const c = el.querySelector('.cancel'); if (c) c.onclick = () => el.remove();
-  const d = el.querySelector('.del'); if (d) d.onclick = async () => { if (!confirm('Удалить вопрос?')) return; try { await api('DELETE', '/api/admin/questions/' + q.id); render(); } catch (e) { toast(e.message, true); } };
-  const mv = async (dir) => { const a = ids.slice(); [a[i], a[i + dir]] = [a[i + dir], a[i]]; try { await api('POST', `/api/admin/exams/${examId}/questions/reorder`, { ids: a }); render(); } catch (e) { toast(e.message, true); } };
+  const d = el.querySelector('.del'); if (d) d.onclick = async () => { if (!confirm('Удалить вопрос?')) return; try { await api('DELETE', '/api/admin/questions/' + q.id); if (o.onSaved) o.onSaved(null); else render(); } catch (e) { toast(e.message, true); } };
+  const mv = async (dir) => { const a = o.ids.slice(); [a[i], a[i + dir]] = [a[i + dir], a[i]]; try { await api('POST', o.reorderPath, { ids: a }); render(); } catch (e) { toast(e.message, true); } };
   const up = el.querySelector('.up'); if (up) up.onclick = () => mv(-1);
   const dn = el.querySelector('.down'); if (dn) dn.onclick = () => mv(1);
+  const tr = el.querySelector('.try'); if (tr) tr.onclick = () => tryQuestion(el.querySelector('.qtry'), q.id);
   return el;
 }
+function h2(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; }
+async function tryQuestion(box, qid) {
+  if (box.dataset.open) { box.innerHTML = ''; delete box.dataset.open; return; }
+  box.dataset.open = '1';
+  try {
+    const r = await api('POST', `/api/admin/questions/${qid}/try`, {});
+    box.innerHTML = `<div class="trybox"><div class="small mut">Так вопрос увидит кандидат (варианты перемешаны). Ответьте и нажмите «Проверить».</div><div class="q"><div class="qt">${esc(r.question.text)}</div></div><div class="row"><button type="button" class="btn sm gold chk2">Проверить ответ</button><span class="tres small"></span></div></div>`;
+    const ctl = window.QT.mount(box.querySelector('.q'), r.question, null, null, { upload: async () => { throw new Error('В режиме проверки файлы не загружаются'); } });
+    box.querySelector('.chk2').onclick = async () => {
+      try { const g = await api('POST', `/api/admin/questions/${qid}/try`, { state: r.state, answer: ctl.get() ?? null });
+        box.querySelector('.tres').innerHTML = g.grade.nr ? '<span class="badge warn">ручная проверка</span>' : `Баллы: <b>${g.grade.ap}</b>` + (g.expected_text ? ` <span class="mut">· правильно: ${esc(g.expected_text)}</span>` : ''); }
+      catch (e) { box.querySelector('.tres').innerHTML = `<span class="o-wrong">${esc(e.message)}</span>`; }
+    };
+  } catch (e) { box.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; }
+}
+async function exportJson(path, fname) {
+  try { const d = await api('GET', path); const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; document.body.appendChild(a); a.click(); a.remove(); }
+  catch (e) { toast(e.message, true); }
+}
+// Импорт JSON (вставка или файл): сначала проверка (dry run), затем импорт.
+function importBox(box, path, bank) {
+  box.innerHTML = `<div class="card flat impbox"><h3>Импорт вопросов (JSON)</h3>
+    <div class="small mut">Формат — см. IMPORT_FORMAT.md в репозитории: массив вопросов, {"questions":[…], "cases":[…]} или файл закона {law, code, questions, cases}. Повторный импорт с теми же id обновляет вопросы.</div>
+    ${bank ? '<label class="f"><span>Категория по умолчанию (если не указана в файле и нет известного code)</span><input class="impcat" maxlength="100" placeholder="например ВУ"></label>' : ''}
+    <label class="f"><span>Файл(ы) .json</span><input type="file" class="impfile" accept=".json,application/json" multiple></label>
+    <label class="f"><span>или вставьте JSON</span><textarea class="impjson" rows="6" placeholder='{"questions":[...]}'></textarea></label>
+    <label class="chk"><input type="checkbox" class="impskip"> Пропускать ошибочные вопросы (иначе при ошибках ничего не импортируется)</label>
+    <div class="row"><button type="button" class="btn impdry">Проверить</button><button type="button" class="btn gold impgo">Импортировать</button></div><div class="imprep"></div></div>`;
+  const rep = box.querySelector('.imprep');
+  const payloads = async () => {
+    const files = [...box.querySelector('.impfile').files]; const out = [];
+    for (const f of files) out.push({ name: f.name, text: await f.text() });
+    const t = box.querySelector('.impjson').value.trim(); if (t) out.push({ name: 'вставка', text: t });
+    if (!out.length) throw new Error('Выберите файл или вставьте JSON');
+    return out.map(x => { try { return { name: x.name, data: JSON.parse(x.text) }; } catch (e) { throw new Error(`${x.name}: некорректный JSON (${e.message})`); } });
+  };
+  const run = async (dry) => {
+    rep.innerHTML = '<span class="mut">…</span>';
+    try {
+      const ps = await payloads(); let html = '';
+      for (const p of ps) {
+        const cat = bank ? box.querySelector('.impcat').value.trim() : '';
+        let data = p.data; if (cat && data && !Array.isArray(data) && !data.category) data = { ...data, category: cat }; else if (cat && Array.isArray(data)) data = { questions: data, category: cat };
+        let r; try { r = (await api('POST', path, { data, dry_run: dry, skip_invalid: box.querySelector('.impskip').checked })).report; }
+        catch (e) { if (e.data && e.data.report) r = e.data.report; else throw e; }
+        html += `<div class="alert ${r.error_count ? 'warn' : 'ok'} small"><b>${esc(p.name)}</b>: всего ${r.total}, корректных ${r.valid}, ошибок ${r.error_count}${dry ? ' (проверка, ничего не записано)' : ` · создано ${r.created}, обновлено ${r.updated}`}${r.aborted ? '<br><b>' + esc(r.aborted) + '</b>' : ''}
+          <div>${Object.entries(r.by_category || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(' · ')}</div>
+          ${r.errors.length ? '<ul>' + r.errors.slice(0, 30).map(x => `<li>#${x.index + 1}${x.id ? ' (' + esc(x.id) + ')' : ''}: ${esc(x.error)}</li>`).join('') + '</ul>' : ''}</div>`;
+      }
+      rep.innerHTML = html;
+      if (!dry) toast('Импорт завершён');
+    } catch (e) { rep.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; }
+  };
+  box.querySelector('.impdry').onclick = () => run(true);
+  box.querySelector('.impgo').onclick = async () => { await run(false); };
+}
+
+// ---------- банк вопросов ----------
+route('/admin/bank', async () => {
+  const qp = new URLSearchParams((location.hash.split('?')[1]) || '');
+  const f = { category: qp.get('category') || '', kind: qp.get('kind') || '', type: qp.get('type') || '', easy: qp.get('easy') || '', q: qp.get('q') || '', offset: Number(qp.get('offset')) || 0 };
+  const r = await api('GET', '/api/admin/bank?' + new URLSearchParams({ ...f, limit: 50 }).toString());
+  const cats = {}; for (const c of r.categories) { cats[c.category] = cats[c.category] || { q: 0, c: 0, e: 0 }; if (c.kind === 'case') cats[c.category].c += c.c; else { cats[c.category].q += c.c; cats[c.category].e += c.easy || 0; } }
+  const catNames = Object.keys(cats);
+  const link = (o) => '#/admin/bank?' + new URLSearchParams(Object.fromEntries(Object.entries({ ...f, offset: 0, ...o }).filter(([, v]) => v !== '' && v !== 0))).toString();
+  setView(`<h1>Банк вопросов</h1>${adminNav('/admin/bank')}
+    <p class="small mut">Вопросы и кейсы для переаттестации. Категория — ПК, УК, ТК, ВУ, СУ, ДУ, КПС, «ФЗ об …», «ФКЗ …», КоАП и т.д. (в квотах «ФЗ*» означает все категории, начинающиеся с «ФЗ»).</p>
+    <div class="cattable"><table><tr><th>Категория</th><th>Вопросов</th><th>из них «не душных»</th><th>Кейсов</th></tr>
+      ${catNames.map(c => `<tr class="click" data-href="${link({ category: c })}"><td>${esc(c || '(без категории)')}</td><td>${cats[c].q}</td><td>${cats[c].e}</td><td>${cats[c].c}</td></tr>`).join('') || '<tr><td colspan="4" class="mut">Банк пуст</td></tr>'}</table></div>
+    <div class="row" style="margin:14px 0"><button class="btn gold" id="addB">+ Добавить вопрос</button><select id="newTypeB" style="max-width:300px">${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}">${window.QT.ICONS[k]} ${v}</option>`).join('')}</select>
+      <button class="btn" id="impB">Импорт JSON</button><button class="btn" id="expB">Экспорт JSON${f.category ? ' (' + esc(f.category) + ')' : ''}</button><button class="btn danger sm" id="delEx">Удалить ПРИМЕРЫ…</button></div>
+    <div id="impBox"></div><div id="newBox"></div>
+    <form class="row bankf" id="bf"><input name="q" value="${esc(f.q)}" placeholder="Поиск по тексту / ext_id" style="max-width:260px">
+      <select name="category" style="max-width:220px"><option value="">Все категории</option>${catNames.map(c => `<option ${c === f.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="ФЗ*" ${f.category === 'ФЗ*' ? 'selected' : ''}>ФЗ* (все ФЗ)</option></select>
+      <select name="kind" style="max-width:150px"><option value="">Вопросы и кейсы</option><option value="question" ${f.kind === 'question' ? 'selected' : ''}>Только вопросы</option><option value="case" ${f.kind === 'case' ? 'selected' : ''}>Только кейсы</option></select>
+      <select name="type" style="max-width:220px"><option value="">Все типы</option>${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}" ${k === f.type ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <label class="chk" style="margin:0"><input type="checkbox" name="easy" value="1" ${f.easy ? 'checked' : ''}> не душные</label><button class="btn">Фильтр</button></form>
+    <p class="small mut">Найдено: ${r.total}${r.total > 50 ? ` · показаны ${f.offset + 1}–${Math.min(f.offset + 50, r.total)}` : ''}</p>
+    <div id="blist"></div>
+    <div class="row">${f.offset ? `<a class="btn sm" href="${link({ offset: Math.max(0, f.offset - 50) })}">← Назад</a>` : ''}${f.offset + 50 < r.total ? `<a class="btn sm" href="${link({ offset: f.offset + 50 })}">Дальше →</a>` : ''}</div>`);
+  bindRows();
+  const o = { bank: true, categories: [...new Set(catNames.concat(['ПК', 'УК', 'ТК', 'ВУ', 'СУ', 'ДУ', 'КПС', 'КоАП', 'ФЗ об обороне', 'ФЗ о закрытых и охраняемых территориях', 'ФЗ о гос. службе', 'ФЗ о гос. тайне', 'ФЗ об оружии', 'ФЗ о воздушном пространстве', 'ФКЗ об особых правовых режимах']))], createPath: '/api/admin/bank', open: false, ids: [] };
+  r.questions.forEach((q, i) => $('#blist').appendChild(qCard(q, i, o)));
+  $('#bf').onsubmit = (ev) => { ev.preventDefault(); const fd = new FormData(ev.target); location.hash = link({ q: fd.get('q') || '', category: fd.get('category') || '', kind: fd.get('kind') || '', type: fd.get('type') || '', easy: fd.get('easy') ? '1' : '' }); };
+  $('#addB').onclick = () => { const t = $('#newTypeB').value; $('#newBox').innerHTML = ''; const c = qCard({ id: null, type: t, category: f.category && !f.category.endsWith('*') ? f.category : '', kind: t === 'case' ? 'case' : 'question', points: t === 'case' ? 5 : 1 }, 0, { ...o, open: true }); $('#newBox').appendChild(c); c.querySelector('textarea').focus(); };
+  $('#impB').onclick = () => importBox($('#impBox'), '/api/admin/bank/import', true);
+  $('#expB').onclick = () => exportJson('/api/admin/bank/export' + (f.category && !f.category.endsWith('*') ? '?category=' + encodeURIComponent(f.category) : ''), 'bank' + (f.category ? '-' + f.category : '') + '.json');
+  $('#delEx').onclick = async () => {
+    const which = prompt('Удалить вопросы-заглушки «ПРИМЕР». Укажите категории через запятую (например: ПК, УК, ФЗ*) или оставьте пустым — удалить ВСЕ примеры:', '');
+    if (which === null) return;
+    const categories = which.split(',').map(x => x.trim()).filter(Boolean);
+    try { const r2 = await api('POST', '/api/admin/bank/delete-examples', { categories }); toast('Удалено примеров: ' + r2.deleted); render(); } catch (e) { toast(e.message, true); }
+  };
+}, { role: 'admin' });
+route('/admin/bank\\?.*', () => App.routes.find(r => r.p === '/admin/bank').fn(), { role: 'admin' });
+
+// ---------- переаттестация: квоты ----------
+route('/admin/reatt', async () => {
+  const r = await api('GET', '/api/admin/reatt');
+  const ver = (k, title) => {
+    const v = r.config[k], av = r.availability[k];
+    return `<form class="card reattf" data-v="${k}"><h2>${title}</h2>
+      <div class="fgrid"><label class="f"><span>Название</span><input name="title" maxlength="200" value="${esc(v.title)}"></label>
+        <label class="f"><span>Лимит времени, мин (0 — без лимита)</span><input type="number" name="time_limit_min" min="0" max="1440" value="${v.time_limit_min}"></label>
+        <label class="f"><span>Проходной балл, %</span><input type="number" name="pass_pct" min="0" max="100" value="${v.pass_pct}"></label>
+        <label class="f"><span>Пауза между попытками, мин</span><input type="number" name="cooldown_min" min="0" value="${v.cooldown_min}"></label>
+        <label class="f"><span>Макс. попыток (0 — без лимита)</span><input type="number" name="max_attempts" min="0" value="${v.max_attempts}"></label></div>
+      <label class="f"><span>Описание для кандидата</span><textarea name="description" rows="2" maxlength="5000">${esc(v.description)}</textarea></label>
+      <label class="chk"><input type="checkbox" name="enabled" ${v.enabled ? 'checked' : ''}> Версия включена (видна и доступна кандидатам)</label>
+      <h3>Квоты (на каждую попытку)</h3>
+      <div class="tscroll"><table class="gt"><tr><th>Блок</th><th>Категории (через запятую, * — по началу)</th><th>Вопросов</th><th>Кейсов</th><th>Не душные в приоритете</th><th>В банке</th><th></th></tr>
+      ${v.groups.map((g, i) => { const a = av[i] || {}; return `<tr class="grow"><td><input class="g-label" value="${esc(g.label)}" maxlength="60"></td><td><input class="g-cats" value="${esc(g.categories.join(', '))}"></td>
+        <td><input type="number" class="g-q" min="0" max="200" value="${g.questions}" style="width:70px"></td><td><input type="number" class="g-c" min="0" max="50" value="${g.cases}" style="width:70px"></td>
+        <td><input type="checkbox" class="g-e" ${g.prefer_easy ? 'checked' : ''}></td>
+        <td class="small ${a.ok ? 'o-correct' : 'o-wrong'}">вопр. ${a.have_q ?? '?'} (не душн. ${a.have_easy_q ?? '?'}) · кейсов ${a.have_c ?? '?'}${a.ok ? '' : ' ⚠ мало'}</td><td><button type="button" class="btn sm danger g-rm">✕</button></td></tr>`; }).join('')}</table></div>
+      <div class="row" style="margin-top:8px"><button type="button" class="btn sm g-add">+ блок</button><span class="small mut">Итого: <b class="g-tot"></b></span></div>
+      <div class="row" style="margin-top:12px"><button class="btn gold">Сохранить</button><button type="button" class="btn g-prev">Пробная выборка</button><button type="button" class="btn sm g-def">Сбросить к стандартным квотам</button></div>
+      <div class="g-out"></div></form>`;
+  };
+  setView(`<h1>Переаттестация</h1>${adminNav('/admin/reatt')}
+    <p class="small mut">Результаты и проверка кейсов — в разделе <a href="#/admin/attempts?status=pending_review&kind=reatt">«Проверка» → Переаттестация</a>. Попыток: ${r.attempt_stats.map(x => `${x.reatt === 'full' ? 'полная' : 'упрощённая'} / ${esc((STATUS_RU[x.status] || [x.status])[0])}: ${x.c}`).join(' · ') || 'пока нет'}.</p>
+    ${ver('full', 'Полная (общая)')}${ver('simple', 'Упрощённая (уставы)')}`);
+  $$('.reattf').forEach(form => {
+    const k = form.dataset.v;
+    const tot = () => { let q = 0, c = 0; $$('.grow', form).forEach(rw => { q += Number(rw.querySelector('.g-q').value) || 0; c += Number(rw.querySelector('.g-c').value) || 0; }); form.querySelector('.g-tot').textContent = `${q} вопросов + ${c} кейсов`; };
+    const bindRow = (rw) => { rw.querySelector('.g-rm').onclick = () => { rw.remove(); tot(); }; };
+    $$('.grow', form).forEach(bindRow); tot(); form.addEventListener('input', tot);
+    form.querySelector('.g-add').onclick = () => { const rw = h2(`<table><tr class="grow"><td><input class="g-label" maxlength="60" value="Новый блок"></td><td><input class="g-cats" value=""></td><td><input type="number" class="g-q" min="0" value="1" style="width:70px"></td><td><input type="number" class="g-c" min="0" value="0" style="width:70px"></td><td><input type="checkbox" class="g-e"></td><td></td><td><button type="button" class="btn sm danger g-rm">✕</button></td></tr></table>`).querySelector('tr'); form.querySelector('.gt tbody').appendChild(rw); bindRow(rw); tot(); };
+    const collect = () => { const o = formObj(form); delete o['']; o.groups = $$('.grow', form).map(rw => ({ label: rw.querySelector('.g-label').value, categories: rw.querySelector('.g-cats').value.split(',').map(x => x.trim()).filter(Boolean), questions: Number(rw.querySelector('.g-q').value) || 0, cases: Number(rw.querySelector('.g-c').value) || 0, prefer_easy: rw.querySelector('.g-e').checked })); return o; };
+    form.onsubmit = async (ev) => { ev.preventDefault(); try { await api('PUT', '/api/admin/reatt', { [k]: collect() }); toast('Квоты сохранены'); render(); } catch (e) { toast(e.message, true); form.querySelector('.g-out').innerHTML = `<div class="alert err">${esc(e.message)}</div>`; } };
+    form.querySelector('.g-def').onclick = async () => { if (!confirm('Вернуть стандартные квоты и настройки этой версии?')) return; try { await api('PUT', '/api/admin/reatt', { [k]: r.defaults[k] }); toast('Сброшено'); render(); } catch (e) { toast(e.message, true); } };
+    form.querySelector('.g-prev').onclick = async () => {
+      const out = form.querySelector('.g-out');
+      try { const p = await api('POST', `/api/admin/reatt/${k}/preview`);
+        out.innerHTML = `<div class="card flat"><b>Пробная выборка (по сохранённым квотам)</b>: всего ${p.total}, баллов ${p.max_score}
+          ${p.groups.map(g => `<div style="margin-top:8px"><b>${esc(g.label)}</b> — вопросов ${g.q.length}/${g.need_q}, кейсов ${g.c.length}/${g.need_c} ${g.short_q || g.short_c ? '<span class="badge err">не хватает</span>' : ''}<ul class="small">${g.q.concat(g.c).map(x => `<li>${window.QT.ICONS[x.type] || ''} [${esc(x.category)}]${x.kind === 'case' ? ' <b>кейс</b>' : ''}${x.easy ? ' <span class="badge ok">не душный</span>' : ''} ${esc(x.text.slice(0, 120))}</li>`).join('')}</ul></div>`).join('')}</div>`;
+      } catch (e) { out.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; }
+    };
+  });
+}, { role: 'admin' });
 
 // ---------- кандидаты ----------
 route('/admin/users', async () => {
@@ -367,12 +502,15 @@ route('/admin/user/:id', async (id) => {
 
 // ---------- проверка попыток ----------
 route('/admin/attempts', async () => {
-  const st = new URLSearchParams((location.hash.split('?')[1]) || '').get('status') ?? 'pending_review';
-  const { attempts } = await api('GET', '/api/admin/attempts?status=' + encodeURIComponent(st));
+  const qp = new URLSearchParams((location.hash.split('?')[1]) || '');
+  const st = qp.get('status') ?? 'pending_review', kind = qp.get('kind') || '';
+  const { attempts } = await api('GET', '/api/admin/attempts?status=' + encodeURIComponent(st) + '&kind=' + encodeURIComponent(kind));
+  const kinds = [['', 'Всё'], ['exam', 'Экзамены'], ['reatt', 'Переаттестация'], ['full', '— полная'], ['simple', '— упрощённая']];
   const tabs = [['pending_review', 'Ждут проверки'], ['passed', 'Сдали'], ['failed', 'Не сдали'], ['in_progress', 'Идут сейчас'], ['', 'Все']];
   setView(`<h1>Проверка попыток</h1>${adminNav('/admin/attempts')}
-    <div class="row" style="margin-bottom:12px">${tabs.map(([k, v]) => `<a class="btn sm ${k === st ? 'gold' : ''}" href="#/admin/attempts?status=${k}">${v}</a>`).join('')}</div>
-    ${attempts.length ? `<table><tr><th>№</th><th>Кандидат</th><th>Экзамен</th><th>Отправлена</th><th>Статус</th><th>Баллы</th></tr>
+    <div class="row" style="margin-bottom:8px">${tabs.map(([k, v]) => `<a class="btn sm ${k === st ? 'gold' : ''}" href="#/admin/attempts?status=${k}&kind=${kind}">${v}</a>`).join('')}</div>
+    <div class="row" style="margin-bottom:12px">${kinds.map(([k, v]) => `<a class="btn sm ${k === kind ? 'gold' : ''}" href="#/admin/attempts?status=${st}&kind=${k}">${v}</a>`).join('')}</div>
+    ${attempts.length ? `<table><tr><th>№</th><th>Кандидат</th><th>Экзамен / переаттестация</th><th>Отправлена</th><th>Статус</th><th>Баллы</th></tr>
     ${attempts.map(a => `<tr class="click" data-href="#/admin/attempt/${a.id}"><td>#${a.id}</td><td>${esc(a.ic_name || a.global_name || a.username)}<div class="small mut">${esc(a.static_id || a.user_id)}</div></td><td>${esc(a.exam_title)}</td><td>${fmtDate(a.submitted_at)}${a.expired ? ' <span class="badge warn">по таймеру</span>' : ''}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : '<div class="alert info">Нет попыток в этом разделе.</div>'}`);
   bindRows();
 }, { role: 'examiner' });
@@ -381,30 +519,20 @@ route('/admin/attempts\\?.*', () => App.routes.find(r => r.p === '/admin/attempt
 route('/admin/attempt/:id', async (id) => {
   const r = await api('GET', '/api/admin/attempts/' + encodeURIComponent(id));
   const a = r.attempt, u = r.user;
-  const items = r.items.map((it, i) => {
-    const q = it.question; let body = '';
-    if (q.type === 'single' || q.type === 'multi') {
-      const chosen = Array.isArray(it.answer) ? it.answer : it.answer ? [it.answer] : [];
-      body = '<ul>' + q.options.map(o => { const c = chosen.includes(o.id), ok = q.correct.includes(o.id);
-        return `<li class="${c ? 'o-chosen' : ''} ${ok ? 'o-correct' : c ? 'o-wrong' : ''}">${c ? '☑' : '☐'} ${esc(o.text)}${ok ? ' — правильный' : ''}</li>`; }).join('') + '</ul>';
-      body += `<div class="small">Автопроверка: <b>${it.auto_points ?? 0} / ${q.points}</b></div>`;
-      body += `<div class="row small" style="margin-top:6px">Изменить баллы вручную: <input type="number" class="pts" data-q="${q.id}" min="0" max="${q.points}" step="0.5" value="${it.manual_points ?? ''}" placeholder="авто" style="width:90px"></div>`;
-    } else {
-      body = `<div class="ans">${it.answer ? esc(it.answer) : '<span class="mut">(нет ответа)</span>'}</div>${q.reference ? `<div class="ref"><b>Эталон:</b> ${esc(q.reference)}</div>` : ''}
-        <div class="row">Баллы: <input type="number" class="pts" data-q="${q.id}" min="0" max="${q.points}" step="0.5" value="${it.manual_points ?? ''}" style="width:90px"> / ${q.points} ${it.needs_review && it.manual_points == null ? '<span class="badge warn">требует оценки</span>' : ''}</div>`;
-    }
-    return `<div class="q"><div class="row between"><span class="small mut">Вопрос ${i + 1} · ${esc(QTYPE_RU[q.type] || q.type)}</span><span class="small mut">${q.points} балл(ов)</span></div><div class="qt">${esc(q.text)}</div>${body}</div>`;
-  }).join('');
+  const items = r.items.map((it, i) => window.QT.review(it, i)).join('');
+  const groups = r.groups ? `<div class="card flat"><h3>По блокам</h3><table><tr><th>Блок</th><th>Вопросов</th><th>Кейсов</th><th>Баллы</th><th></th></tr>${r.groups.map(g => `<tr><td>${esc(g.label)}</td><td>${g.questions}${g.short_q ? ` <span class="badge err">не хватило ${g.short_q}</span>` : ''}</td><td>${g.cases}${g.short_c ? ` <span class="badge err">не хватило ${g.short_c}</span>` : ''}</td><td>${g.points} / ${g.max}</td><td>${g.pending ? `<span class="badge warn">на проверке: ${g.pending}</span>` : ''}</td></tr>`).join('')}</table></div>` : '';
   setView(`<p><a href="#/admin/attempts">← Проверка</a></p>
     <div class="card"><div class="row between"><h2 style="margin:0">Попытка #${a.id} — ${esc(r.exam ? r.exam.title : '')}</h2>${badge(a.status)}</div>
       <p>Кандидат: <a href="#/admin/user/${esc(a.user_id)}">${esc(userName(u))}</a> <span class="mut small">(${esc(u ? u.username : '')}, ${esc(a.user_id)}${u && u.static_id ? ', статик ' + esc(u.static_id) : ''})</span></p>
       <p class="small mut">Начата ${fmtDate(a.started_at)} · отправлена ${fmtDate(a.submitted_at)}${a.expired ? ' (автоматически по таймеру)' : ''} · автобаллы ${a.auto_score} · ручные ${a.manual_score} · максимум ${a.max_score} · итог ${a.score_pct != null ? a.score_pct + '%' : '—'} (проходной ${r.exam ? r.exam.pass_pct : '?'}%)</p>
       ${a.reviewed_at ? `<p class="small mut">Проверил: ${esc(r.reviewer ? (r.reviewer.global_name || r.reviewer.username) : a.reviewer_id)} · ${fmtDate(a.reviewed_at)}</p>` : ''}</div>
-    ${items}
+    ${groups}
+    <div id="ritems">${items}</div>
     ${a.status === 'in_progress' ? '<div class="alert info">Кандидат ещё проходит экзамен.</div>' : `<form class="card" id="rf"><h3>Итог проверки</h3>
       <label class="f"><span>Решение</span><select name="verdict"><option value="auto">По баллам (≥ ${r.exam ? r.exam.pass_pct : '?'}% — сдан)</option><option value="passed" ${a.status === 'passed' ? '' : ''}>Сдан (вручную)</option><option value="failed">Не сдан (вручную)</option></select></label>
       <label class="f"><span>Комментарий для кандидата</span><textarea name="comment" maxlength="5000">${esc(a.reviewer_comment || '')}</textarea></label>
       <button class="btn gold">Сохранить проверку</button> ${hasRole('admin') ? '<button type="button" class="btn danger" id="delA">Удалить попытку</button>' : ''}</form>`}`);
+  window.QT.bindReview($('#ritems'), api);
   const rf = $('#rf');
   if (rf) rf.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -438,7 +566,7 @@ route('/admin/settings', async () => {
 const ACTION_RU = { 'lecture.create': 'Создана лекция', 'lecture.update': 'Изменена лекция', 'lecture.delete': 'Удалена лекция', 'lectures.reorder': 'Порядок лекций',
   'exam.create': 'Создан экзамен', 'exam.update': 'Изменён экзамен', 'exam.delete': 'Удалён экзамен', 'question.create': 'Добавлен вопрос', 'question.update': 'Изменён вопрос',
   'question.delete': 'Удалён вопрос', 'questions.reorder': 'Порядок вопросов', 'user.update': 'Изменён пользователь', 'user.reset_progress': 'Сброс прогресса лекций',
-  'user.reset_attempts': 'Сброс попыток', 'attempt.review': 'Проверка попытки', 'attempt.delete': 'Удалена попытка', 'settings.update': 'Настройки сайта' };
+  'user.reset_attempts': 'Сброс попыток', 'attempt.review': 'Проверка попытки', 'attempt.delete': 'Удалена попытка', 'settings.update': 'Настройки сайта', 'reatt.config': 'Квоты переаттестации', 'question.import': 'Импорт вопросов', 'question.delete_examples': 'Удалены ПРИМЕРЫ' };
 route('/admin/audit', async () => {
   const { log } = await api('GET', '/api/admin/audit');
   setView(`<h1>Журнал действий</h1>${adminNav('/admin/audit')}

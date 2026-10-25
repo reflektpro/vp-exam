@@ -1,0 +1,98 @@
+# Формат импорта вопросов (vp-exam)
+
+Импорт: **Управление → Банк вопросов → «Импорт JSON»** (или в редакторе экзамена → «Импорт»).
+Можно загрузить файл или вставить JSON. Сначала выполняется проверка (dry-run) с отчётом. Ошибочные элементы можно пропустить.
+
+API (только для админа):
+
+```
+POST /api/admin/bank/import          — в банк (переаттестация)
+POST /api/admin/exams/:id/import     — в конкретный экзамен
+{ "data": <JSON ниже>, "dry_run": true|false, "skip_invalid": true|false, "mode": "upsert"|"add" }
+```
+
+* `mode: "upsert"` (по умолчанию): вопрос с таким же `ext_id` обновляется, остальные создаются. `mode: "add"` всегда создаёт новые вопросы.
+* Если есть ошибки и не передан `skip_invalid: true`, ничего не импортируется (400 + отчёт).
+* Ответ: `{report:{total, valid, error_count, errors:[{index,id,error}], created, updated, by_category, by_type}}`.
+* Экспорт в том же формате: `GET /api/admin/bank/export` и `GET /api/admin/exams/:id/export`. Экспортированный файл можно импортировать обратно.
+* Лимиты: до 5000 элементов и до 8 МБ за один запрос.
+
+`data` может быть:
+1. массивом вопросов `[ {...}, {...} ]`;
+2. объектом `{ "questions": [...], "cases": [...] }`;
+3. файлом законов (`/workspace/vp_reatt_sources/laws/<code>.json`): `{ "code": "pk", "questions": [...], "cases": [...] }`. Категория берётся из `code` (таблица ниже), если у элемента нет своего `category`.
+
+## Общие поля любого вопроса
+
+| поле | смысл |
+|---|---|
+| `type` | тип (см. ниже). Синонимы: multiple→multi, sequence→order, matching→match, numeric→number, free/essay→long, fill→blanks_input, select→blanks_select, exclude→eliminate, range→slider, upload→file, audio→voice, anagram→letters, phrase→words, search→find, situation→case |
+| `text` (или `question`) | формулировка (обязательно) |
+| `category` | категория банка: `ПК`, `УК`, `ТК`, `ВУ`, `СУ`, `ДУ`, `КПС`, `КоАП`, `ФЗ об обороне`… **Обязательна для банка** |
+| `kind` | `question` или `case` (для type=case по умолчанию `case`) |
+| `easy` | `true`, если вопрос «не душный» (для упрощённой переаттестации). Также `difficulty: "easy"` → easy |
+| `active` | `false` скрывает вопрос из выборки (по умолчанию `true`) |
+| `ext_id` (или строковый `id`) | внешний ключ для повторного импорта (upsert) |
+| `points` | баллы (по умолчанию 1; для case — `max_score` или сумма баллов критериев) |
+| `reference` / `reference_answer` | эталон, его видит только проверяющий |
+| `article`, `explanation`, `quote`, `difficulty`, `source` | справочные поля. Хранятся в `data.meta` и видны только админу/проверяющему |
+| `partial` | частичный балл (для multi, order, match, blanks_*, dictation, find, words) |
+
+Правильные ответы **никогда** не отправляются кандидату. Проверка выполняется на сервере.
+
+## Поля по типам
+
+| type | название | поля |
+|---|---|---|
+| `single` | одиночный выбор | `options: ["A","B",…]` + `correct: 0` (индекс) **или** `options: [{text, correct:true}, …]` |
+| `multi` | множественный выбор | `options` + `correct: [0,2]` (индексы) или `correct:true` у вариантов |
+| `number` | ввод числа | `answer: 42`, `tolerance: 0.5` (±), `unit: "шт."`. Принимается десятичная запятая |
+| `text` | ввод текста | `accepted: ["ответ","вариант 2"]` (или `answer`). Регистр, ё/е и крайняя пунктуация не важны |
+| `param` | параметризованная задача | `text` с `{A}`, `vars: {"A":{"min":1,"max":9,"step":1}, "B":{"values":[10,20]}}`, `formula: "A*B+round(sqrt(A),2)"`, `tolerance`, `unit`. Функции: abs round floor ceil sqrt min max pow, константа pi |
+| `long` | свободная форма | `reference` (эталон для проверяющего). Проверяется вручную |
+| `order` | последовательность (drag) | `items: [...]` в правильном порядке **или** `options: [...]` + `correct: [2,0,1]` (индексы в правильном порядке) |
+| `match` | соответствия | `pairs: [{"left":"…","right":"…"}, …]`, `distractors: ["лишний"]` |
+| `blanks_input` | пропуски (ввод) | `content: "Столица — [[Москва|москва]]."` (`|` разделяет допустимые варианты) |
+| `blanks_select` | пропуски (из списка) | `content: "Цвет [[красный|*синий|зелёный]]"` (`*` отмечает правильный, иначе правильный первый) |
+| `dictation` | интерактивный диктант | `content` как в blanks_select, например `"к[[*о|а]]рова"` |
+| `eliminate` | последовательное исключение | `options` + ровно один `correct` (он должен остаться последним), минимум 3 варианта |
+| `slider` | слайдер | `min`, `max`, `step`, `answer`, `tolerance`, `unit` |
+| `file` | загрузка файла | `accept: "image/*,application/pdf"`, `max_kb` (≤1024), `allow_url: true`. Проверяется вручную |
+| `voice` | голосовой ответ | `max_sec` (5–300). Проверяется вручную |
+| `info` | информационный текст | только `text`, 0 баллов |
+| `letters` | слово из букв | `word: "приказ"`, `extra_letters: "ыъ"`, `accepted: ["другое слово"]` |
+| `words` | фраза из слов | `phrase: "служу России"`, `extra_words: ["лишнее"]` |
+| `find` | поиск в тексте | `content: "…текст… [[нужный фрагмент]] …"` (кандидат должен отметить слова в [[ ]]) |
+| `case` | кейс | `text` (или `situation` + `question`), `reference`/`reference_answer`, `criteria: [{"text":"…","points":3}, …]` (или строки `"Критерий (3 балла)"` / `"Критерий | 3"`), `max_score`, `articles`. Проверяется вручную: проверяющий отмечает критерии, баллы суммируются |
+
+## Формат файла законов (laws/<code>.json)
+
+```json
+{
+  "code": "pk",
+  "questions": [
+    {"id":"pk-q001","type":"single","text":"…","options":["…","…"],"correct":1,
+     "article":"ст. 91","explanation":"…","quote":"…","difficulty":"easy"},
+    {"id":"pk-q002","type":"multiple","text":"…","options":[…],"correct":[0,2]},
+    {"id":"pk-q003","type":"number","text":"…","answer":48,"unit":"ч"},
+    {"id":"pk-q004","type":"match","text":"…","pairs":[{"left":"…","right":"…"}]},
+    {"id":"pk-q005","type":"order","text":"…","options":["…","…","…"],"correct":[2,0,1]}
+  ],
+  "cases": [
+    {"id":"pk-c01","situation":"…","question":"…","reference_answer":"…","articles":["ст. 91"],
+     "criteria":[{"text":"…","points":4},{"text":"…","points":6}],"max_score":10}
+  ]
+}
+```
+
+Код → категория: `pk`→ПК, `uk`→УК, `tk`→ТК, `koap`→КоАП, `vu`→ВУ, `su`→СУ, `du`→ДУ, `kps`→КПС,
+`fz_oborona`→«ФЗ об обороне», `fz_gossluzhba`→«ФЗ о гос. службе», `fz_gostayna`→«ФЗ о гос. тайне»,
+`fz_territorii`→«ФЗ о закрытых и охраняемых территориях», `fz_oruzhie`→«ФЗ об оружии»,
+`fz_vozduh`→«ФЗ о воздушном пространстве», `fkz_rezhimy`→«ФКЗ об особых правовых режимах».
+
+Конкретный закон хранится как категория (подтег). В полной переаттестации блок «ФЗ / ФКЗ / КоАП» выбирает вопросы из категорий по шаблонам `ФЗ*`, `ФКЗ*`, `КоАП`. Шаблон со `*` на конце означает префикс. Квоты и шаблоны настраиваются в «Управление → Переаттестация».
+
+## Квоты по умолчанию
+
+* **Полная:** ПК 4+1, УК 4+1, ВУ 8+2, СУ 2+1, КПС 2+1, ДУ 2+1, ФЗ/ФКЗ/КоАП 6+2, ТК 4+1 (вопросы + кейсы). 120 мин, порог 70%.
+* **Упрощённая:** ВУ 9, СУ 2, ДУ 2, КПС 2 (в первую очередь easy) + 3 кейса из ВУ/СУ/ДУ/КПС. 60 мин, порог 70%.
