@@ -27,19 +27,29 @@ for (const it of ex) {
     const nat = W.toNative(row); const again = W.questionInput(nat, row); ok(row.type + ' roundtrip type', again.type === row.type && JSON.stringify(again.correct) === row.correct, { again: again.correct, row: row.correct });
   }
 }
-// квоты
-const bank = rows.map(r => ({ id: r.id, category: r.category, kind: r.kind, type: r.type }));
-// стандартные квоты — как в миграции 0005
-const mig = fs.readFileSync(path.join(__dirname, '../worker/migrations/0005_reattestations.sql'), 'utf8');
-const DEF = {}; for (const m of mig.matchAll(/\('(full|simple)'[\s\S]*?'(\[\{[\s\S]*?\}\])'/g)) DEF[m[1]] = JSON.parse(m[2]);
-ok('migration defaults parsed', DEF.full && DEF.simple && DEF.full.length === 8 && DEF.simple.length === 5, Object.keys(DEF));
-for (const v of ['full', 'simple']) {
-  const g = W.sampleReatt(bank, DEF[v]);
-  const all = g.flatMap(x => x.q.concat(x.c));
-  ok(v + ' no dups', new Set(all).size === all.length);
-  g.forEach(x => ok(`${v} ${x.label} quota`, x.short_q === 0 && x.short_c === 0, x));
-  console.log(v, g.map(x => `${x.label}:${x.q.length}+${x.c.length}`).join(' '), 'total', all.length);
+// квоты — стандартные записи из миграции 0006 на синтетическом банке
+const CATS = ['ПК', 'УК', 'ВУ', 'СУ', 'КПС', 'ДУ', 'ФЗ-1', 'ФКЗ-1', 'КоАП', 'ТК'], TYPES = ['single', 'single', 'single', 'multi', 'match', 'order', 'number'];
+const bank = []; let nid = 0;
+for (const c of CATS) { for (let i = 0; i < 30; i++) bank.push({ id: ++nid, category: c, kind: 'question', type: TYPES[i % TYPES.length] }); for (let i = 0; i < 5; i++) bank.push({ id: ++nid, category: c, kind: 'case', type: 'case' }); }
+const types = new Map(bank.map(q => [q.id, q.type]));
+const mig = fs.readFileSync(path.join(__dirname, '../worker/migrations/0006_reatt_auto_and_cases.sql'), 'utf8');
+const DEF = {}; for (const m of mig.matchAll(/groups = '(\[\{.*?\}\])'[\s\S]*?key = '(full|simple)'/g)) DEF[m[2]] = JSON.parse(m[1]);
+{ const m = mig.match(/\('cases'[\s\S]*?'(\[\{.*?\}\])'/); if (m) DEF.cases = JSON.parse(m[1]); }
+ok('migration 0006 defaults parsed', DEF.full && DEF.simple && DEF.cases && DEF.full.length === 8 && DEF.simple.length === 4 && DEF.cases.length === 8, Object.keys(DEF));
+const EXP = { full: [42, 0], simple: [15, 0], cases: [0, 10] };
+for (const v of ['full', 'simple', 'cases']) {
+  for (let rep = 0; rep < 20; rep++) {
+    const g = W.sampleReatt(bank, DEF[v]);
+    const all = g.flatMap(x => x.q.concat(x.c));
+    ok(v + ' no dups', new Set(all).size === all.length);
+    g.forEach((x, k) => { ok(`${v} ${x.label} quota`, x.short_q === 0 && x.short_c === 0, x); const pc = DEF[v][k].pref_count || 0; if (pc) ok(`${v} ${x.label} pref ≥ ${pc}`, x.q.filter(id => DEF[v][k].pref_types.includes(types.get(id))).length >= pc); });
+    ok(`${v} totals`, g.reduce((s, x) => s + x.q.length, 0) === EXP[v][0] && g.reduce((s, x) => s + x.c.length, 0) === EXP[v][1]);
+    if (!rep) console.log(v, g.map(x => `${x.label}:${x.q.length}+${x.c.length}`).join(' '), 'total', all.length);
+  }
 }
+// предпочтительные типы при нехватке — добираются любые
+{ const g = W.sampleReatt(bank.filter(q => q.category !== 'ПК' || q.type !== 'match'), [{ label: 'ПК', categories: ['ПК'], questions: 6, cases: 0, pref_types: ['match'], pref_count: 3 }]);
+  ok('pref shortage filled with others', g[0].q.length === 6 && g[0].short_q === 0); }
 // импорт формата «файл закона»
 const law = { law: 'Процессуальный кодекс', code: 'pk', questions: [
   { id: 'pk-q001', type: 'single', difficulty: 'easy', article: 'Статья 1', question: 'Q?', options: ['a', 'b', 'c'], correct: [1] },

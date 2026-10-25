@@ -1195,7 +1195,7 @@ function reattRow(r) {
   return { id: r.id, key: r.key, title: r.title, description: r.description || '', enabled: !!r.enabled, visible: !!r.visible,
     time_limit_min: r.time_limit_min, pass_pct: r.pass_pct, cooldown_min: r.cooldown_min, max_attempts: r.max_attempts,
     q_points: r.q_points ?? null, c_points: r.c_points ?? null, position: r.position, deleted: !!r.deleted_at,
-    groups: parseJ(r.groups, []).map(g => ({ label: g.label, categories: g.categories || [], questions: g.questions || 0, cases: g.cases || 0 })),
+    groups: parseJ(r.groups, []).map(g => ({ label: g.label, categories: g.categories || [], questions: g.questions || 0, cases: g.cases || 0, pref_types: g.pref_types || [], pref_count: g.pref_count || 0 })),
     created_at: r.created_at, updated_at: r.updated_at };
 }
 async function getReatt(env, key, withDeleted) {
@@ -1212,8 +1212,10 @@ function reattGroupsInput(groups) {
     const cats = (Array.isArray(g && g.categories) ? g.categories : String((g && g.categories) || '').split(',')).map(x => str(x, 100, { name: 'категория' })).filter(Boolean);
     if (!cats.length) throw new HttpError(400, `Блок ${i + 1}: укажите категории`);
     return { label: str(g.label, 60, { required: true, name: `название блока ${i + 1}` }), categories: cats.slice(0, 30),
-      questions: int(g.questions, 0, 200, `вопросов в блоке ${i + 1}`, 0), cases: int(g.cases, 0, 50, `кейсов в блоке ${i + 1}`, 0) };
-  });
+      questions: int(g.questions, 0, 200, `вопросов в блоке ${i + 1}`, 0), cases: int(g.cases, 0, 50, `кейсов в блоке ${i + 1}`, 0),
+      pref_types: [...new Set((Array.isArray(g.pref_types) ? g.pref_types : String(g.pref_types || '').split(',')).map(x => String(x).trim()).filter(Boolean))].map(t => { if (!QTYPE_LIST.includes(t) || t === 'case' || t === 'info') throw new HttpError(400, `Блок ${i + 1}: неизвестный тип «${t}»`); return t; }),
+      pref_count: int(g.pref_count, 0, 200, `«из них предпочтительных» в блоке ${i + 1}`, 0) };
+  }).map(g => (g.pref_count > g.questions ? { ...g, pref_count: g.questions } : g)).map(g => (g.pref_types.length ? g : { ...g, pref_count: 0 }));
   if (!out.some(g => g.questions + g.cases > 0)) throw new HttpError(400, 'Квоты: всего должно быть больше 0 вопросов');
   return out;
 }
@@ -1248,14 +1250,14 @@ async function bankIndex(env) {
 function sampleReatt(bank, groups) {
   const used = new Set();
   return groups.map(g => {
-    const pick = (kind, n) => {
-      if (!n) return [];
-      const pool = bank.filter(q => (q.kind || 'question') === kind && !used.has(q.id) && g.categories.some(p => catMatch(p, q.category)));
-      const chosen = shuffle(pool).slice(0, n);
-      chosen.forEach(q => used.add(q.id));
-      return chosen.map(q => q.id);
-    };
-    const q = pick('question', g.questions), c = pick('case', g.cases);
+    const pool = (kind) => bank.filter(q => (q.kind || 'question') === kind && !used.has(q.id) && g.categories.some(p => catMatch(p, q.category)));
+    const take = (list, n) => { const chosen = shuffle(list).slice(0, n); chosen.forEach(q => used.add(q.id)); return chosen.map(q => q.id); };
+    // «Предпочтительные типы»: сначала pref_count вопросов этих типов (если их не хватает — добираются любые), остальные — случайно из всего блока
+    const q = [];
+    const pt = new Set(g.pref_types || []), pc = Math.min(g.pref_count || 0, g.questions);
+    if (pc && pt.size) q.push(...take(pool('question').filter(x => pt.has(x.type)), pc));
+    if (g.questions - q.length > 0) q.push(...take(pool('question'), g.questions - q.length));
+    const c = g.cases ? take(pool('case'), g.cases) : [];
     return { label: g.label, q, c, need_q: g.questions, need_c: g.cases, short_q: g.questions - q.length, short_c: g.cases - c.length };
   });
 }
@@ -1263,7 +1265,9 @@ function availability(bank, groups) {
   return groups.map(g => {
     const m = bank.filter(q => g.categories.some(p => catMatch(p, q.category)));
     const qs = m.filter(q => (q.kind || 'question') === 'question'), cs = m.filter(q => q.kind === 'case');
-    return { label: g.label, need_q: g.questions, need_c: g.cases, have_q: qs.length, have_c: cs.length, ok: qs.length >= g.questions && cs.length >= g.cases };
+    const pt = new Set(g.pref_types || []);
+    return { label: g.label, need_q: g.questions, need_c: g.cases, have_q: qs.length, have_c: cs.length, have_pref: pt.size ? qs.filter(q => pt.has(q.type)).length : null, need_pref: pt.size ? g.pref_count || 0 : 0,
+      ok: qs.length >= g.questions && cs.length >= g.cases };
   });
 }
 // Веса из настроек переаттестации (снимок в attempts.meta.points) поверх баллов вопроса; критерии кейса масштабируются.

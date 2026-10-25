@@ -425,7 +425,7 @@ route('/admin/reatt', async () => {
     <div class="reatt-admin-list">${r.items.map(v => { const q = v.groups.reduce((s, g) => s + g.questions, 0), c = v.groups.reduce((s, g) => s + g.cases, 0);
       const bad = v.availability.filter(a => !a.ok); const at = Object.values(v.attempts).reduce((s, n) => s + n, 0);
       return `<div class="card ritem" data-id="${v.id}"><div class="row between"><h2 style="margin:0">${esc(v.title)}</h2>
-        <span>${v.enabled ? '<span class="badge ok">Включена</span>' : '<span class="badge lock">Выключена</span>'} ${v.visible ? '' : '<span class="badge info">Скрыта от кандидатов</span>'}</span></div>
+        <span>${c ? '<span class="badge warn">Кейсы — ручная проверка</span>' : '<span class="badge info">Автопроверка</span>'} ${v.enabled ? '<span class="badge ok">Включена</span>' : '<span class="badge lock">Выключена</span>'} ${v.visible ? '' : '<span class="badge info">Скрыта от кандидатов</span>'}</span></div>
         <p class="small mut">${q} ${plural(q, 'вопрос', 'вопроса', 'вопросов')} + ${c} ${plural(c, 'кейс', 'кейса', 'кейсов')} · ${v.groups.length} ${plural(v.groups.length, 'блок', 'блока', 'блоков')} · ${v.time_limit_min ? v.time_limit_min + ' мин' : 'без лимита времени'} · проходной ${v.pass_pct}%${v.q_points != null ? ' · вопрос = ' + v.q_points + ' б.' : ''}${v.c_points != null ? ' · кейс = ' + v.c_points + ' б.' : ''} · попыток: ${at}${v.attempts.pending_review ? ` (на проверке ${v.attempts.pending_review})` : ''}</p>
         ${bad.length ? `<div class="alert warn small">В банке не хватает вопросов: ${bad.map(a => esc(a.label)).join(', ')}</div>` : ''}
         <div class="row"><a class="btn sm" href="#/admin/reatt/${v.id}">Редактировать</a><button class="btn sm r-tog">${v.enabled ? 'Выключить' : 'Включить'}</button>
@@ -448,9 +448,14 @@ route('/admin/reatt/:id', async (id) => {
   const av = isNew ? [] : ((list.items.find(x => x.id === v.id) || {}).availability || []);
   const cats = list.categories;
   const catOpts = cats.map(c => `<option value="${esc(c.category)}">${esc(c.category)} — ${c.questions} вопр., ${c.cases} кейс.</option>`).join('');
-  const rowHtml = (g, a) => `<tr class="grow"><td><input class="g-label" value="${esc(g.label)}" maxlength="60"></td><td><input class="g-cats" list="catlist" value="${esc(g.categories.join(', '))}" placeholder="например: ВУ или ФЗ*, КоАП"></td>
-    <td><input type="number" class="g-q" min="0" max="200" value="${g.questions}" style="width:70px"></td><td><input type="number" class="g-c" min="0" max="50" value="${g.cases}" style="width:70px"></td>
-    <td class="small g-av">${a ? `<span class="${a.ok ? 'o-correct' : 'o-wrong'}">вопр. ${a.have_q} · кейсов ${a.have_c}${a.ok ? '' : ' ⚠ мало'}</span>` : ''}</td><td><button type="button" class="btn sm danger g-rm">✕</button></td></tr>`;
+  const PREF_TYPES = ['match', 'order', 'number', 'multi', 'single', 'text', 'blanks_input', 'blanks_select', 'dictation', 'eliminate', 'slider', 'letters', 'words', 'find', 'param'];
+  const prefLabel = (pt) => pt.length ? pt.map(t => QTYPE_RU[t] || t).join(', ') : 'любые';
+  const rowHtml = (g, a) => { const pt = g.pref_types || []; return `<tr class="grow"><td><input class="g-label" value="${esc(g.label)}" maxlength="60"></td><td><input class="g-cats" list="catlist" value="${esc(g.categories.join(', '))}" placeholder="например: ВУ или ФЗ*, КоАП"></td>
+    <td><input type="number" class="g-q" min="0" max="200" value="${g.questions}" style="width:70px"></td>
+    <td><details class="g-pt"><summary class="small">${esc(prefLabel(pt))}</summary>${PREF_TYPES.map(t => `<label class="chk small"><input type="checkbox" value="${t}" ${pt.includes(t) ? 'checked' : ''}> ${esc(QTYPE_RU[t] || t)}</label>`).join('')}</details>
+      <label class="small">из них <input type="number" class="g-pc" min="0" max="200" value="${g.pref_count || 0}" style="width:60px"></label></td>
+    <td><input type="number" class="g-c" min="0" max="50" value="${g.cases}" style="width:70px"></td>
+    <td class="small g-av">${a ? `<span class="${a.ok ? 'o-correct' : 'o-wrong'}">вопр. ${a.have_q}${a.have_pref != null ? ` (предпочт. ${a.have_pref})` : ''} · кейсов ${a.have_c}${a.ok ? '' : ' ⚠ мало'}</span>` : ''}</td><td><button type="button" class="btn sm danger g-rm">✕</button></td></tr>`; };
   setView(`<h1>${isNew ? 'Новая переаттестация' : 'Переаттестация: ' + esc(v.title)}</h1>${adminNav('/admin/reatt')}
     <p><a href="#/admin/reatt">← Все переаттестации</a></p>
     <form class="card reattf" id="rf">
@@ -466,9 +471,9 @@ route('/admin/reatt/:id', async (id) => {
       <div class="row"><label class="chk"><input type="checkbox" name="enabled" ${v.enabled ? 'checked' : ''}> Включена (можно начать)</label>
         <label class="chk"><input type="checkbox" name="visible" ${v.visible ? 'checked' : ''}> Показывать кандидатам</label></div>
       <h3>Квоты на одну попытку</h3>
-      <p class="small mut">В каждом блоке — категории банка через запятую (<b>ФЗ*</b> — все категории, начинающиеся с «ФЗ»). Вопросы и кейсы выбираются случайно, без повторов между блоками.</p>
+      <p class="small mut">В каждом блоке — категории банка через запятую (<b>ФЗ*</b> — все категории, начинающиеся с «ФЗ»). Вопросы и кейсы выбираются случайно, без повторов между блоками. «Предпочтительные типы, из них N» — сколько вопросов блока брать в первую очередь из отмеченных типов (если таких не хватает, добираются любые).</p>
       <datalist id="catlist">${catOpts}</datalist>
-      <div class="tscroll"><table class="gt"><tr><th>Блок</th><th>Категории</th><th>Вопросов</th><th>Кейсов</th><th>В банке</th><th></th></tr>
+      <div class="tscroll"><table class="gt"><tr><th>Блок</th><th>Категории</th><th>Вопросов</th><th>Предпочтительные типы</th><th>Кейсов</th><th>В банке</th><th></th></tr>
       ${v.groups.map((g, i) => rowHtml(g, av[i])).join('')}</table></div>
       <div class="row" style="margin-top:8px"><button type="button" class="btn sm g-add">+ блок</button><span class="small mut">Итого: <b class="g-tot"></b></span></div>
       <div class="row" style="margin-top:12px"><button class="btn gold">${isNew ? 'Создать' : 'Сохранить'}</button><button type="button" class="btn g-prev">Пробная выборка</button>${isNew ? '' : '<button type="button" class="btn danger sm g-del">Удалить</button>'}</div>
@@ -476,11 +481,11 @@ route('/admin/reatt/:id', async (id) => {
       <details class="card flat"><summary>Категории в банке</summary><table><tr><th>Категория</th><th>Вопросов</th><th>Кейсов</th></tr>${cats.map(c => `<tr><td>${esc(c.category)}</td><td>${c.questions}</td><td>${c.cases}</td></tr>`).join('')}</table></details>`);
   const form = $('#rf');
   const tot = () => { let q = 0, c = 0; $$('.grow', form).forEach(rw => { q += Number(rw.querySelector('.g-q').value) || 0; c += Number(rw.querySelector('.g-c').value) || 0; }); form.querySelector('.g-tot').textContent = `${q} вопросов + ${c} кейсов`; };
-  const bindRow = (rw) => { rw.querySelector('.g-rm').onclick = () => { rw.remove(); tot(); }; };
+  const bindRow = (rw) => { rw.querySelector('.g-rm').onclick = () => { rw.remove(); tot(); }; rw.querySelector('.g-pt').addEventListener('change', () => { rw.querySelector('.g-pt summary').textContent = prefLabel([...rw.querySelectorAll('.g-pt input:checked')].map(x => x.value)); }); };
   $$('.grow', form).forEach(bindRow); tot(); form.addEventListener('input', tot);
   form.querySelector('.g-add').onclick = () => { const rw = h2(`<table>${rowHtml({ label: 'Блок ' + ($$('.grow', form).length + 1), categories: [], questions: 1, cases: 0 })}</table>`).querySelector('tr'); form.querySelector('.gt tbody').appendChild(rw); bindRow(rw); tot(); };
   const collect = () => { const o = formObj(form); delete o['']; o.q_points = String(o.q_points).trim() === '' ? null : Number(String(o.q_points).replace(',', '.')); o.c_points = String(o.c_points).trim() === '' ? null : Number(String(o.c_points).replace(',', '.'));
-    o.groups = $$('.grow', form).map(rw => ({ label: rw.querySelector('.g-label').value, categories: rw.querySelector('.g-cats').value.split(',').map(x => x.trim()).filter(Boolean), questions: Number(rw.querySelector('.g-q').value) || 0, cases: Number(rw.querySelector('.g-c').value) || 0 })); return o; };
+    o.groups = $$('.grow', form).map(rw => ({ label: rw.querySelector('.g-label').value, categories: rw.querySelector('.g-cats').value.split(',').map(x => x.trim()).filter(Boolean), questions: Number(rw.querySelector('.g-q').value) || 0, cases: Number(rw.querySelector('.g-c').value) || 0, pref_types: [...rw.querySelectorAll('.g-pt input:checked')].map(x => x.value), pref_count: Number(rw.querySelector('.g-pc').value) || 0 })); return o; };
   const out = form.querySelector('.g-out');
   form.onsubmit = async (ev) => { ev.preventDefault();
     try { const r = isNew ? await api('POST', '/api/admin/reatt', collect()) : await api('PUT', '/api/admin/reatt/' + id, collect());

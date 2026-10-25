@@ -194,6 +194,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     r = await call('POST', '/api/admin/bank/import', A, { data }); check('повторный импорт pk → обновление, не дубли', r.d.report.updated === r.d.report.total && r.d.report.created === 0, r.d.report);
     r = await call('POST', '/api/admin/bank/delete-examples', A, { categories: ['ПК', 'УК', 'ТК', 'КоАП', 'ФЗ*', 'ФКЗ*'] }); check('удалены ПРИМЕРЫ по законам', r.d.deleted > 0, r.d);
   }
+  const USTAVY = process.env.USTAVY || '/workspace/vp_reatt_sources/ustavy';
+  const ustFiles = fs.existsSync(USTAVY) ? fs.readdirSync(USTAVY).filter(f => f.endsWith('.json')) : [];
+  for (const f of ustFiles) {
+    const data = JSON.parse(fs.readFileSync(USTAVY + '/' + f, 'utf8'));
+    r = await call('POST', '/api/admin/bank/import', A, { data }); check(`импорт устава ${f}: ${r.d.report.created} без ошибок`, r.status === 200 && r.d.report.error_count === 0 && r.d.report.created === data.questions.length, r.d.report);
+  }
+  if (ustFiles.length) { r = await call('POST', '/api/admin/bank/delete-examples', A, {}); check('удалены все ПРИМЕРЫ', r.status === 200, r.d); }
   r = await call('POST', '/api/admin/bank/import', A, { data: { questions: [{ type: 'single', text: 'x', options: ['a'], correct: [0], category: 'ВУ' }, { type: 'number', text: 'ok', answer: 1, category: 'ВУ' }] } });
   check('импорт с ошибкой → 400, ничего не записано', r.status === 400 && r.d.report.error_count === 1 && r.d.report.created === 0, r.d);
   r = await call('POST', '/api/admin/bank/import', A, { data: [{ type: 'number', text: 'без категории', answer: 1 }] }); check('импорт без категории → ошибка', r.status === 400);
@@ -202,21 +209,22 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   // ---------- 6. переаттестация ----------
   r = await call('GET', '/api/admin/reatt', A);
   const byKey = (d, k) => d.items.find(x => x.key === k);
-  check('стандартные записи: полная и упрощённая', !!byKey(r.d, 'full') && !!byKey(r.d, 'simple'), r.d.items.map(x => x.key));
-  check('квоты: полная — блоки по умолчанию', byKey(r.d, 'full').groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ПК:4+1 УК:4+1 ВУ:8+2 СУ:2+1 КПС:2+1 ДУ:2+1 ФЗ / ФКЗ / КоАП:6+2 ТК:4+1', byKey(r.d, 'full').groups);
-  check('квоты: упрощённая 15 + 3 кейса', byKey(r.d, 'simple').groups.reduce((s, g) => s + g.questions, 0) === 15 && byKey(r.d, 'simple').groups.reduce((s, g) => s + g.cases, 0) === 3);
+  check('стандартные записи: полная, упрощённая, кейсы', !!byKey(r.d, 'full') && !!byKey(r.d, 'simple') && !!byKey(r.d, 'cases'), r.d.items.map(x => x.key));
+  check('квоты: полная — 42 вопроса, без кейсов, доп. слоты — предпочтительные типы', byKey(r.d, 'full').groups.map(g => `${g.label}:${g.questions}+${g.cases}/${g.pref_count}`).join(' ') === 'ПК:5+0/1 УК:5+0/1 ВУ:10+0/2 СУ:3+0/1 КПС:3+0/1 ДУ:3+0/1 ФЗ / ФКЗ / КоАП:8+0/2 ТК:5+0/1' && byKey(r.d, 'full').groups.every(g => g.pref_types.join() === 'match,order,number,multi'), byKey(r.d, 'full').groups);
+  check('квоты: упрощённая 15 вопросов, без кейсов', byKey(r.d, 'simple').groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ВУ:9+0 СУ:2+0 ДУ:2+0 КПС:2+0');
+  check('квоты: кейсы — 10 кейсов', byKey(r.d, 'cases').groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ПК:0+1 УК:0+1 ВУ:0+2 СУ:0+1 КПС:0+1 ДУ:0+1 ФЗ / ФКЗ / КоАП:0+2 ТК:0+1' && byKey(r.d, 'cases').enabled && byKey(r.d, 'cases').visible);
   check('банк закрывает все квоты', r.d.items.every(v => v.availability.every(g => g.ok)), r.d.items.map(v => v.availability));
   check('нет признака «не душный» в ответах API', !/"easy"|prefer_easy|не душн/i.test(JSON.stringify(r.d)));
   const bankR = await call('GET', '/api/admin/bank?limit=500', A);
   check('банк: нет поля easy', !bankR.d.questions.some(q => 'easy' in q) && !bankR.d.categories.some(c => 'easy' in c));
   const allBank = []; for (let off = 0; off < bankR.d.total; off += 500) { const b = await call('GET', `/api/admin/bank?limit=500&offset=${off}`, A); allBank.push(...b.d.questions); }
   const bmap = new Map(allBank.map(q => [q.id, q]));
-  const cfgFull = byKey(r.d, 'full'), cfgSimple = byKey(r.d, 'simple');
+  const cfgFull = byKey(r.d, 'full'), cfgSimple = byKey(r.d, 'simple'), cfgCases = byKey(r.d, 'cases');
   const catOk = (g, q) => g.categories.some(p => p.endsWith('*') ? q.category.startsWith(p.slice(0, -1)) : q.category === p);
   const orders = {};
-  for (const [ver, cfg] of [['full', cfgFull], ['simple', cfgSimple]]) {
+  for (const [ver, cfg] of [['full', cfgFull], ['simple', cfgSimple], ['cases', cfgCases]]) {
     for (let k = 0; k < 3; k++) {
-      const tok = await login('3100000000000000' + (ver === 'full' ? 1 : 2) + k, 'reatt-' + ver + k);
+      const tok = await login('3100000000000000' + (ver === 'full' ? 1 : ver === 'simple' ? 2 : 3) + k, 'reatt-' + ver + k);
       r = await call('POST', `/api/reatt/${ver}/start`, tok); const id = r.d.attempt_id;
       r = await call('GET', '/api/attempts/' + id, tok);
       const qs = r.d.attempt.questions;
@@ -231,6 +239,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         const its = ad.d.items.filter(it => it.group === g.label);
         const nq = its.filter(it => it.question.kind !== 'case').length, nc = its.filter(it => it.question.kind === 'case').length;
         check(`${ver}#${k} ${g.label}: ${nq}/${g.questions} вопросов, ${nc}/${g.cases} кейсов, категории верные`, nq === g.questions && nc === g.cases && !gr.short_q && !gr.short_c && its.every(it => catOk(g, it.question)), { nq, nc, gr });
+        if (g.pref_count) { const heavy = its.filter(it => g.pref_types.includes(it.question.type)).length; check(`${ver}#${k} ${g.label}: предпочтительных типов ≥ ${g.pref_count} (${heavy})`, heavy >= g.pref_count); }
       }
       if (k === 0) {
         let diff = 0, tot = 0;
@@ -238,9 +247,26 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         check(`${ver}: варианты перемешаны (${diff}/${tot})`, tot === 0 || diff > 0);
       }
       r = await call('POST', `/api/reatt/${ver}/start`, tok); check(`${ver}#${k}: повторный старт → та же попытка`, r.d.attempt_id === id);
-      r = await call('POST', `/api/attempts/${id}/submit`, tok, { answers: {} }); check(`${ver}#${k}: пустая отправка → не сдан`, r.d.status === 'failed', r.d);
+      if (ver === 'cases') {
+        check(`cases#${k}: только кейсы`, qs.every(q => q.kind === 'case' && q.type === 'case'));
+        const ans = Object.fromEntries(qs.map(q => [q.id, 'Решение кейса']));
+        r = await call('POST', `/api/attempts/${id}/submit`, tok, { answers: ans }); check(`cases#${k}: отправка → на проверке`, r.d.status === 'pending_review', r.d);
+      } else {
+        check(`${ver}#${k}: только автопроверяемые типы`, qs.every(q => q.kind !== 'case' && ['single', 'multi', 'number', 'match', 'order'].includes(q.type)), [...new Set(qs.map(q => q.type))]);
+        r = await call('POST', `/api/attempts/${id}/submit`, tok, { answers: {} }); check(`${ver}#${k}: пустая отправка → сразу итог «не сдан»`, r.d.status === 'failed', r.d);
+      }
     }
     check(`${ver}: порядок вопросов разный в разных попытках`, new Set(orders[ver]).size > 1);
+  }
+  // полная: частичные ответы → сразу итог без проверки
+  {
+    const tok = await login('310000000000000199', 'reatt-full-auto');
+    r = await call('POST', '/api/reatt/full/start', tok); const id = r.d.attempt_id;
+    r = await call('GET', '/api/attempts/' + id, tok); const ans = {};
+    for (const q of r.d.attempt.questions) if (q.type === 'single') ans[q.id] = q.options[0].id;
+    r = await call('POST', `/api/attempts/${id}/submit`, tok, { answers: ans });
+    check('полная: ответы → сразу итог (сдан/не сдан), без «на проверке»', ['passed', 'failed'].includes(r.d.status), r.d);
+    r = await call('GET', '/api/attempts/' + id, tok); check('полная: кандидат сразу видит результат и процент', ['passed', 'failed'].includes(r.d.attempt.status) && typeof r.d.attempt.score_pct === 'number', r.d.attempt);
   }
   // CRUD: новая переаттестация с весами
   r = await call('POST', '/api/admin/reatt', A, { title: 'Тестовая: только ВУ', description: 'для теста', time_limit_min: 15, pass_pct: 50, q_points: 2, c_points: 4,
@@ -278,14 +304,19 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   check('UI кандидата: нет перечисления блоков/типов', (await page.$$('.reatt-card .lchip')).length === 0 && !/не душн/i.test(await page.textContent('main')));
   await page.screenshot({ path: SHOTS + '44_reatt_candidate.png', fullPage: true });
   await page.click('.reatt-card[data-v="simple"] .startR'); await page.waitForSelector('#examForm');
-  check('UI: упрощённая — 18 заданий', (await page.$$('#examForm .q')).length === 18);
+  check('UI: упрощённая — 15 заданий', (await page.$$('#examForm .q')).length === 15);
   await page.screenshot({ path: SHOTS + '45_reatt_attempt.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: SHOTS + '46_reatt_attempt_mobile.png', fullPage: false });
   await page.setViewportSize({ width: 1280, height: 900 });
-  for (const ta of await page.$$('#examForm .case-q textarea')) await ta.fill('Решение кейса');
   await page.click('#submitBtn'); await page.waitForSelector('.result');
-  check('UI: переаттестация с кейсами → на проверке', /НА ПРОВЕРКЕ/.test(await page.textContent('.result')));
+  check('UI: упрощённая → сразу итог (без «на проверке»)', /НЕ СДАН|СДАН/.test(await page.textContent('.result')) && !/НА ПРОВЕРКЕ/.test(await page.textContent('.result')), await page.textContent('.result'));
+  await as(tokR, '/reatt'); await page.waitForSelector('.reatt-card[data-v="cases"] .startR');
+  await page.click('.reatt-card[data-v="cases"] .startR'); await page.waitForSelector('#examForm');
+  check('UI: кейсы — 10 заданий', (await page.$$('#examForm .q')).length === 10);
+  for (const ta of await page.$$('#examForm textarea')) await ta.fill('Решение кейса');
+  await page.click('#submitBtn'); await page.waitForSelector('.result');
+  check('UI: кейсы → на проверке', /НА ПРОВЕРКЕ/.test(await page.textContent('.result')));
   // админ: список, создание через форму, пробная выборка
   await as(A, '/admin/reatt'); await page.waitForSelector('.ritem');
   check('UI админа: список переаттестаций', (await page.$$('.ritem')).length >= 2 && !/не душн/i.test(await page.textContent('main')));
@@ -302,13 +333,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   r = await call('GET', '/api/admin/reatt', A); const uiR = r.d.items.find(x => x.title === 'Переаттестация по ДУ (UI)');
   check('UI: создана через форму', uiR && uiR.groups.length === 2 && uiR.groups[0].questions === 3 && uiR.groups[0].cases === 1, uiR);
   await page.goto(SITE + '#/admin/reatt/' + cfgFull.id); await page.waitForFunction(() => /полная/.test((document.querySelector('h1') || {}).textContent || ''));
-  check('UI: редактор стандартной полной — 8 блоков', (await page.$$('#rf .grow')).length === 8);
+  check('UI: редактор стандартной полной — 8 блоков, предпочтительные типы отмечены', (await page.$$('#rf .grow')).length === 8 && (await page.$$('#rf .g-pt input:checked')).length === 32);
   await page.click('#rf .g-prev'); await page.waitForSelector('#rf .g-out .card');
   await page.screenshot({ path: SHOTS + '47_admin_reatt_quotas.png', fullPage: true });
   await page.goto(SITE + '#/admin/bank'); await page.waitForSelector('#bf');
   check('UI банка: нет «не душных»', !/не душн/i.test(await page.textContent('main')));
   await page.goto(SITE + '#/admin/attempts?status=pending_review&kind=reatt'); await page.waitForSelector('tr.click[data-href^="#/admin/attempt/"]');
-  check('проверка: фильтр «Переаттестация» показывает попытку', /упрощённая/.test(await page.textContent('table')));
+  check('проверка: фильтр «Переаттестация» показывает попытку по кейсам', /по кейсам/.test(await page.textContent('table')));
   check('проверка: вкладка по каждой переаттестации', /полная/.test(await page.textContent('main')) && /Тестовая: только ВУ \(удалена\)/.test(await page.textContent('main')));
   await page.click('tr.click'); await page.waitForSelector('#rf');
   check('проверка переаттестации: сводка по блокам', /По блокам/.test(await page.textContent('main')));

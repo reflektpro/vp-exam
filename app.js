@@ -306,11 +306,11 @@ function attemptResult(a) {
 route('/reatt', async () => {
   const { versions } = await api('GET', '/api/reatt');
   setView(`<h1>Переаттестация</h1>
-    <p class="mut small">В каждой попытке вопросы выбираются случайно, порядок вопросов и вариантов перемешивается. Кейсы проверяет экзаменатор.</p>
+    <p class="mut small">В каждой попытке вопросы выбираются случайно, порядок вопросов и вариантов перемешивается. Тесты проверяются автоматически — результат сразу после отправки; кейсы проверяет экзаменатор.</p>
     <div class="reatt-grid">${versions.map(v => `<div class="card reatt-card" data-v="${v.key}">
       <div class="row between"><h2 style="margin:0">${esc(v.title)}</h2>${v.attempts[0] ? badge(v.attempts[0].status) : v.enabled ? '<span class="badge ok">Доступна</span>' : '<span class="badge lock">Выключена</span>'}</div>
       ${v.description ? `<p class="welcome small">${esc(v.description)}</p>` : ''}
-      <p class="small mut">Всего: ${v.total_questions} вопросов + ${v.total_cases} кейсов · ${v.time_limit_min ? 'время ' + v.time_limit_min + ' мин' : 'без ограничения времени'} · проходной ${v.pass_pct}%${v.max_attempts ? ' · попыток: ' + v.max_attempts : ''}${v.cooldown_min ? ' · пауза ' + v.cooldown_min + ' мин' : ''}</p>
+      <p class="small mut">Всего: ${[v.total_questions ? v.total_questions + ' вопросов' : '', v.total_cases ? v.total_cases + ' кейсов' : ''].filter(Boolean).join(' + ') || '—'} · ${v.total_cases ? 'кейсы проверяет экзаменатор' : 'автопроверка'} · ${v.time_limit_min ? 'время ' + v.time_limit_min + ' мин' : 'без ограничения времени'} · проходной ${v.pass_pct}%${v.max_attempts ? ' · попыток: ' + v.max_attempts : ''}${v.cooldown_min ? ' · пауза ' + v.cooldown_min + ' мин' : ''}</p>
       ${v.active_attempt_id ? `<a class="btn primary" href="#/attempt/${v.active_attempt_id}">Продолжить попытку</a>`
         : v.can_start ? `<button class="btn primary startR" data-v="${v.key}" data-t="${v.time_limit_min}">Начать</button>`
         : `<div class="alert warn">${esc(v.reason || 'Недоступно')}${v.next_at ? ' — ' + fmtDate(v.next_at) : ''}</div>`}
