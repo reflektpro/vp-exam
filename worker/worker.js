@@ -739,7 +739,7 @@ function questionInput(b, prev) {
   const kind = b.kind ? str(b.kind, 20, { name: 'вид' }) : (type === 'case' ? 'case' : 'question');
   if (!['question', 'case'].includes(kind)) throw new HttpError(400, 'Вид: question или case');
   o.kind = kind;
-  o.easy = b.easy !== undefined && b.easy !== null ? bool(b.easy, false) : (meta.difficulty === 'easy' ? 1 : 0);
+  o.easy = 0;   // признак «простой» больше не используется (столбец оставлен для совместимости)
   o.active = bool(b.active, true);
   o.ext_id = b.ext_id !== undefined ? (str(b.ext_id, 100, { name: 'ext_id' }) || null) : (b.id !== undefined && typeof b.id === 'string' ? str(b.id, 100, { name: 'id' }) || null : undefined);
   if (b.position !== undefined) o.position = int(b.position, 0, 1000000, 'порядок', 0);
@@ -749,7 +749,7 @@ function questionInput(b, prev) {
 // Строка таблицы → «родной» JSON-формат (для редактора и экспорта).
 function toNative(q) {
   const d = parseJ(q.data, {}); const opts = parseJ(q.options, []); const corr = parseJ(q.correct, []);
-  const o = { id: q.id, ext_id: q.ext_id || undefined, type: q.type, category: q.category || '', kind: q.kind || 'question', easy: !!q.easy, active: q.active === undefined ? true : !!q.active,
+  const o = { id: q.id, ext_id: q.ext_id || undefined, type: q.type, category: q.category || '', kind: q.kind || 'question', active: q.active === undefined ? true : !!q.active,
     text: q.text, points: q.points, reference: q.reference || '' };
   switch (q.type) {
     case 'single': case 'multi': case 'eliminate': o.options = opts.map(x => ({ id: x.id, text: x.text, correct: corr.includes(x.id) })); break;
@@ -1037,8 +1037,8 @@ async function saveAnswers(env, attempt, answers) {
 // Название и проходной балл: экзамен или версия переаттестации.
 async function attemptCtx(env, a) {
   if (a.reatt) {
-    const cfg = await getReattConfig(env); const v = cfg[a.reatt] || {};
-    return { kind: 'reatt', id: null, reatt: a.reatt, title: v.title || ('Переаттестация (' + a.reatt + ')'), pass_pct: v.pass_pct ?? 70, description: v.description || '' };
+    const v = (await getReatt(env, a.reatt, true)) || {}; const m = parseJ(a.meta, {});
+    return { kind: 'reatt', id: null, reatt: a.reatt, title: v.title || m.title || ('Переаттестация (' + a.reatt + ')'), pass_pct: v.pass_pct ?? m.pass_pct ?? 70, description: v.description || '' };
   }
   const e = await env.DB.prepare('SELECT * FROM exams WHERE id = ?1').bind(a.exam_id).first();
   return e ? { kind: 'exam', ...e } : { kind: 'exam', id: a.exam_id, title: '(экзамен удалён)', pass_pct: 70 };
@@ -1046,7 +1046,7 @@ async function attemptCtx(env, a) {
 async function finalizeAttempt(env, attempt, expired) {
   const ctx = await attemptCtx(env, attempt);
   const order = parseJ(attempt.q_order, []); const states = parseJ(attempt.opt_order, {});
-  const qs = await loadQs(env, order);
+  const qs = await loadAttemptQs(env, attempt, order);
   const qm = new Map(qs.map(q => [q.id, q]));
   const { results: ans } = await env.DB.prepare('SELECT * FROM answers WHERE attempt_id = ?1').bind(attempt.id).all();
   const am = new Map(ans.map(a => [a.question_id, parseJ(a.answer, null)]));
@@ -1090,7 +1090,7 @@ async function getAttempt(env, user, id) {
     submitted_at: a.submitted_at, expired: !!a.expired, server_now: Date.now() };
   if (a.status === 'in_progress') {
     const order = parseJ(a.q_order, []), states = parseJ(a.opt_order, {});
-    const qs = await loadQs(env, order);
+    const qs = await loadAttemptQs(env, a, order);
     const qm = new Map(qs.map(q => [q.id, q]));
     const { results: ans } = await env.DB.prepare('SELECT question_id, answer FROM answers WHERE attempt_id = ?1').bind(a.id).all();
     const saved = {}; for (const r of ans) saved[r.question_id] = parseJ(r.answer, null);
@@ -1132,8 +1132,8 @@ async function submitAttempt(request, env, user, id) {
 }
 async function attemptTitles(env, rows) {
   if (!rows.some(r => r.reatt)) return rows;
-  const cfg = await getReattConfig(env);
-  return rows.map(r => r.reatt ? { ...r, title: (cfg[r.reatt] || {}).title || 'Переаттестация', exam_title: (cfg[r.reatt] || {}).title || 'Переаттестация' } : r);
+  const map = await reattMap(env);
+  return rows.map(r => { if (!r.reatt) return r; const t = (map.get(r.reatt) || {}).title || 'Переаттестация'; return { ...r, title: t, exam_title: t }; });
 }
 async function myAttempts(env, user) {
   const { results } = await env.DB.prepare('SELECT a.id, a.exam_id, a.reatt, e.title, a.status, a.started_at, a.submitted_at, a.score_pct, a.reviewer_comment FROM attempts a LEFT JOIN exams e ON e.id = a.exam_id WHERE a.user_id = ?1 ORDER BY a.id DESC').bind(user.id).all();
@@ -1182,70 +1182,66 @@ async function getUpload(env, user, id) {
 }
 
 // ---------- переаттестация ----------
-const REATT_VERSIONS = ['full', 'simple'];
-const STATUTE_CATS = ['ВУ', 'СУ', 'ДУ', 'КПС'];
-const REATT_DEFAULT = {
-  full: {
-    enabled: true, title: 'Переаттестация — полная (общая)', time_limit_min: 120, pass_pct: 70, cooldown_min: 0, max_attempts: 0,
-    description: 'Вопросы по законодательству (ПК, УК, ТК, ФЗ/ФКЗ) и внутренним уставам (ВУ, СУ, ДУ, КПС). Вопросы и варианты перемешиваются в каждой попытке. Кейсы проверяет экзаменатор.',
-    groups: [
-      { label: 'ПК', categories: ['ПК'], questions: 4, cases: 1, prefer_easy: false },
-      { label: 'УК', categories: ['УК'], questions: 4, cases: 1, prefer_easy: false },
-      { label: 'ВУ', categories: ['ВУ'], questions: 8, cases: 2, prefer_easy: false },
-      { label: 'СУ', categories: ['СУ'], questions: 2, cases: 1, prefer_easy: false },
-      { label: 'КПС', categories: ['КПС'], questions: 2, cases: 1, prefer_easy: false },
-      { label: 'ДУ', categories: ['ДУ'], questions: 2, cases: 1, prefer_easy: false },
-      { label: 'ФЗ / ФКЗ / КоАП', categories: ['ФЗ*', 'ФКЗ*', 'КоАП'], questions: 6, cases: 2, prefer_easy: false },
-      { label: 'ТК', categories: ['ТК'], questions: 4, cases: 1, prefer_easy: false },
-    ],
-  },
-  simple: {
-    enabled: true, title: 'Переаттестация — упрощённая (уставы)', time_limit_min: 60, pass_pct: 70, cooldown_min: 0, max_attempts: 0,
-    description: 'Только внутренние уставы: ВУ, СУ, ДУ, КПС. 15 вопросов (большая часть — ВУ) и 3 кейса. Вопросы и варианты перемешиваются в каждой попытке.',
-    groups: [
-      { label: 'ВУ', categories: ['ВУ'], questions: 9, cases: 0, prefer_easy: true },
-      { label: 'СУ', categories: ['СУ'], questions: 2, cases: 0, prefer_easy: true },
-      { label: 'ДУ', categories: ['ДУ'], questions: 2, cases: 0, prefer_easy: true },
-      { label: 'КПС', categories: ['КПС'], questions: 2, cases: 0, prefer_easy: true },
-      { label: 'Кейсы по уставам', categories: STATUTE_CATS, questions: 0, cases: 3, prefer_easy: true },
-    ],
-  },
-};
+// Каждая переаттестация — запись в таблице reattestations (создаются/редактируются админом). attempts.reatt = reattestations.key.
+// Стандартные «Полная» (key 'full') и «Упрощённая» (key 'simple') заводятся миграцией 0005 и редактируются как обычные записи.
+const REATT_KEY_RE = /^[a-z0-9_-]{1,40}$/;
 function catMatch(pattern, cat) {
   const p = String(pattern).trim().toLowerCase(), c = String(cat || '').trim().toLowerCase();
   if (!p) return false;
   return p.endsWith('*') ? c.startsWith(p.slice(0, -1)) : c === p;
 }
-async function getReattConfig(env) {
-  const row = await env.DB.prepare("SELECT v FROM settings WHERE k = 'reatt_config'").first();
-  const saved = row ? parseJ(row.v, {}) : {};
-  const out = {};
-  for (const v of REATT_VERSIONS) out[v] = { ...REATT_DEFAULT[v], ...(saved[v] || {}) };
-  return out;
+function reattRow(r) {
+  if (!r) return null;
+  return { id: r.id, key: r.key, title: r.title, description: r.description || '', enabled: !!r.enabled, visible: !!r.visible,
+    time_limit_min: r.time_limit_min, pass_pct: r.pass_pct, cooldown_min: r.cooldown_min, max_attempts: r.max_attempts,
+    q_points: r.q_points ?? null, c_points: r.c_points ?? null, position: r.position, deleted: !!r.deleted_at,
+    groups: parseJ(r.groups, []).map(g => ({ label: g.label, categories: g.categories || [], questions: g.questions || 0, cases: g.cases || 0 })),
+    created_at: r.created_at, updated_at: r.updated_at };
 }
-function reattVersionInput(b, name) {
-  if (!b || typeof b !== 'object') throw new HttpError(400, 'Некорректная конфигурация: ' + name);
-  const o = {
-    enabled: !!bool(b.enabled, true),
-    title: str(b.title, 200, { required: true, name: 'название' }),
-    description: str(b.description, 5000, { name: 'описание' }),
-    time_limit_min: int(b.time_limit_min, 0, 1440, 'лимит времени', 0),
-    pass_pct: int(b.pass_pct, 0, 100, 'проходной балл', 70),
-    cooldown_min: int(b.cooldown_min, 0, 60 * 24 * 60, 'пауза между попытками', 0),
-    max_attempts: int(b.max_attempts, 0, 1000, 'лимит попыток', 0),
-  };
-  if (!Array.isArray(b.groups) || !b.groups.length || b.groups.length > 30) throw new HttpError(400, 'Нужно от 1 до 30 блоков квот');
-  o.groups = b.groups.map((g, i) => {
-    const cats = (Array.isArray(g.categories) ? g.categories : String(g.categories || '').split(',')).map(x => str(x, 100, { name: 'категория' })).filter(Boolean);
+async function getReatt(env, key, withDeleted) {
+  const r = await env.DB.prepare(`SELECT * FROM reattestations WHERE key = ?1${withDeleted ? '' : ' AND deleted_at IS NULL'}`).bind(key).first();
+  return reattRow(r);
+}
+async function reattMap(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM reattestations').all();
+  return new Map(results.map(r => [r.key, reattRow(r)]));
+}
+function reattGroupsInput(groups) {
+  if (!Array.isArray(groups) || !groups.length || groups.length > 30) throw new HttpError(400, 'Нужно от 1 до 30 блоков квот');
+  const out = groups.map((g, i) => {
+    const cats = (Array.isArray(g && g.categories) ? g.categories : String((g && g.categories) || '').split(',')).map(x => str(x, 100, { name: 'категория' })).filter(Boolean);
     if (!cats.length) throw new HttpError(400, `Блок ${i + 1}: укажите категории`);
     return { label: str(g.label, 60, { required: true, name: `название блока ${i + 1}` }), categories: cats.slice(0, 30),
-      questions: int(g.questions, 0, 200, `вопросов в блоке ${i + 1}`, 0), cases: int(g.cases, 0, 50, `кейсов в блоке ${i + 1}`, 0), prefer_easy: !!bool(g.prefer_easy, false) };
+      questions: int(g.questions, 0, 200, `вопросов в блоке ${i + 1}`, 0), cases: int(g.cases, 0, 50, `кейсов в блоке ${i + 1}`, 0) };
   });
-  if (!o.groups.some(g => g.questions + g.cases > 0)) throw new HttpError(400, 'Квоты: всего должно быть больше 0 вопросов');
-  return o;
+  if (!out.some(g => g.questions + g.cases > 0)) throw new HttpError(400, 'Квоты: всего должно быть больше 0 вопросов');
+  return out;
+}
+function optPoints(v, name) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v); if (!Number.isFinite(n) || n < 0 || n > 1000) throw new HttpError(400, `${name}: число от 0 до 1000 или пусто`);
+  return Math.round(n * 100) / 100;
+}
+function reattInput(b, cur) {
+  if (!b || typeof b !== 'object') throw new HttpError(400, 'Некорректные данные');
+  const g = (k, d) => b[k] !== undefined ? b[k] : (cur ? cur[k] : d);
+  return {
+    title: str(g('title', ''), 200, { required: true, name: 'название' }),
+    description: str(g('description', ''), 5000, { name: 'описание' }),
+    enabled: bool(g('enabled', true), true) ? 1 : 0,
+    visible: bool(g('visible', true), true) ? 1 : 0,
+    time_limit_min: int(g('time_limit_min', 0), 0, 1440, 'лимит времени', 0),
+    pass_pct: int(g('pass_pct', 70), 0, 100, 'проходной балл', 70),
+    cooldown_min: int(g('cooldown_min', 0), 0, 60 * 24 * 60, 'пауза между попытками', 0),
+    max_attempts: int(g('max_attempts', 0), 0, 1000, 'лимит попыток', 0),
+    q_points: optPoints(g('q_points', null), 'Баллы за вопрос'),
+    c_points: optPoints(g('c_points', null), 'Баллы за кейс'),
+    position: int(g('position', 0), 0, 1000000, 'порядок', 0),
+    groups: reattGroupsInput(g('groups', null)),
+  };
 }
 async function bankIndex(env) {
-  const { results } = await env.DB.prepare("SELECT id, category, kind, easy, type FROM questions WHERE exam_id = 0 AND active = 1 AND type != 'info'").all();
+  const { results } = await env.DB.prepare("SELECT id, category, kind, type FROM questions WHERE exam_id = 0 AND active = 1 AND type != 'info'").all();
   return results;
 }
 // Случайная выборка по квотам. Вопросы не повторяются между блоками.
@@ -1255,7 +1251,7 @@ function sampleReatt(bank, groups) {
     const pick = (kind, n) => {
       if (!n) return [];
       const pool = bank.filter(q => (q.kind || 'question') === kind && !used.has(q.id) && g.categories.some(p => catMatch(p, q.category)));
-      const chosen = g.prefer_easy ? shuffle(pool.filter(q => q.easy)).concat(shuffle(pool.filter(q => !q.easy))).slice(0, n) : shuffle(pool).slice(0, n);
+      const chosen = shuffle(pool).slice(0, n);
       chosen.forEach(q => used.add(q.id));
       return chosen.map(q => q.id);
     };
@@ -1267,16 +1263,30 @@ function availability(bank, groups) {
   return groups.map(g => {
     const m = bank.filter(q => g.categories.some(p => catMatch(p, q.category)));
     const qs = m.filter(q => (q.kind || 'question') === 'question'), cs = m.filter(q => q.kind === 'case');
-    return { label: g.label, need_q: g.questions, need_c: g.cases, have_q: qs.length, have_easy_q: qs.filter(q => q.easy).length, have_c: cs.length, have_easy_c: cs.filter(q => q.easy).length,
-      ok: qs.length >= g.questions && cs.length >= g.cases };
+    return { label: g.label, need_q: g.questions, need_c: g.cases, have_q: qs.length, have_c: cs.length, ok: qs.length >= g.questions && cs.length >= g.cases };
   });
 }
-async function reattState(env, user, key, v) {
-  const { results: atts } = await env.DB.prepare('SELECT id, status, started_at, submitted_at, score_pct, deadline_at FROM attempts WHERE user_id = ?1 AND reatt = ?2 ORDER BY id DESC').bind(user.id, key).all();
+// Веса из настроек переаттестации (снимок в attempts.meta.points) поверх баллов вопроса; критерии кейса масштабируются.
+function applyWeights(qs, attempt) {
+  const pts = attempt && attempt.reatt ? (parseJ(attempt.meta, {}).points || null) : null;
+  if (!pts) return qs;
+  return qs.map(q => {
+    const w = pts[q.id]; if (w === undefined || w === null || w === q.points) return q;
+    const nq = { ...q, points: w };
+    if (q.type === 'case') {
+      const d = parseJ(q.data, {}); const sum = (d.criteria || []).reduce((s, c) => s + (c.points || 0), 0);
+      if (sum > 0 && d.criteria.length) { const k = w / (q.points || sum); d.criteria = d.criteria.map(c => ({ ...c, points: Math.round(c.points * k * 2) / 2 })); nq.data = JSON.stringify(d); }
+    }
+    return nq;
+  });
+}
+async function loadAttemptQs(env, attempt, ids) { return applyWeights(await loadQs(env, ids), attempt); }
+async function reattState(env, user, v) {
+  const { results: atts } = await env.DB.prepare('SELECT id, status, started_at, submitted_at, score_pct, deadline_at FROM attempts WHERE user_id = ?1 AND reatt = ?2 ORDER BY id DESC').bind(user.id, v.key).all();
   const now = Date.now();
   let can = true, reason = null, nextAt = null;
   const active = atts.find(a => a.status === 'in_progress');
-  if (!v.enabled) { can = false; reason = 'Эта версия переаттестации сейчас выключена'; }
+  if (!v.enabled || v.deleted) { can = false; reason = 'Эта переаттестация сейчас выключена'; }
   else if (active) { can = true; }
   else if (atts.some(a => a.status === 'pending_review')) { can = false; reason = 'Предыдущая попытка ожидает проверки'; }
   else if (v.max_attempts && atts.length >= v.max_attempts) { can = false; reason = 'Попытки закончились'; }
@@ -1288,23 +1298,22 @@ async function reattState(env, user, key, v) {
     attempts: atts.map(a => ({ id: a.id, status: a.status, started_at: a.started_at, submitted_at: a.submitted_at, score_pct: a.status === 'pending_review' ? null : a.score_pct })) };
 }
 async function listReatt(env, user) {
-  const cfg = await getReattConfig(env);
+  const { results } = await env.DB.prepare('SELECT * FROM reattestations WHERE deleted_at IS NULL AND enabled = 1 AND visible = 1 ORDER BY position, id').all();
   const out = [];
-  for (const key of REATT_VERSIONS) {
-    const v = cfg[key];
-    out.push({ key, title: v.title, description: v.description, enabled: v.enabled, time_limit_min: v.time_limit_min, pass_pct: v.pass_pct,
+  for (const r of results) {
+    const v = reattRow(r);
+    out.push({ key: v.key, title: v.title, description: v.description, enabled: v.enabled, time_limit_min: v.time_limit_min, pass_pct: v.pass_pct,
       cooldown_min: v.cooldown_min, max_attempts: v.max_attempts,
-      composition: v.groups.map(g => ({ label: g.label, questions: g.questions, cases: g.cases })),
       total_questions: v.groups.reduce((s, g) => s + g.questions, 0), total_cases: v.groups.reduce((s, g) => s + g.cases, 0),
-      ...(await reattState(env, user, key, v)) });
+      ...(await reattState(env, user, v)) });
   }
   return json({ versions: out });
 }
 async function startReatt(env, user, key) {
-  if (!REATT_VERSIONS.includes(key)) throw new HttpError(404, 'Нет такой версии переаттестации');
+  const v = await getReatt(env, key);
+  if (!v) throw new HttpError(404, 'Нет такой переаттестации');
   await rateLimit(env, 'start:' + user.id, 10, 60);
-  const cfg = await getReattConfig(env); const v = cfg[key];
-  const st = await reattState(env, user, key, v);
+  const st = await reattState(env, user, v);
   if (st.active_attempt_id) {
     const a = await env.DB.prepare('SELECT * FROM attempts WHERE id = ?1').bind(st.active_attempt_id).first();
     if (!(await finalizeIfExpired(env, a))) return json({ attempt_id: a.id });
@@ -1314,44 +1323,78 @@ async function startReatt(env, user, key) {
   const groups = sampleReatt(await bankIndex(env), v.groups);
   const ids = groups.flatMap(g => g.q.concat(g.c));
   if (!ids.length) throw new HttpError(409, 'Банк вопросов пока пуст — обратитесь к учебному отделу');
-  const qs = await loadQs(env, ids);
+  const raw = await loadQs(env, ids);
+  const points = {};
+  for (const q of raw) { const w = q.kind === 'case' ? v.c_points : v.q_points; if (w !== null && w !== undefined) points[q.id] = w; }
+  const meta = { version: key, title: v.title, pass_pct: v.pass_pct, points: Object.keys(points).length ? points : undefined,
+    groups: groups.map(g => ({ label: g.label, q: g.q, c: g.c, short_q: g.short_q, short_c: g.short_c })) };
+  const qs = applyWeights(raw, { reatt: key, meta: JSON.stringify(meta) });
   const order = shuffle(ids);
   const states = buildStates(qs, true);
   const max = qs.reduce((s, q) => s + q.points, 0);
   const now = Date.now();
   const deadline = v.time_limit_min ? now + v.time_limit_min * 60000 : null;
-  const meta = { version: key, groups: groups.map(g => ({ label: g.label, q: g.q, c: g.c, short_q: g.short_q, short_c: g.short_c })) };
   const r = await env.DB.prepare(`INSERT INTO attempts (exam_id, user_id, status, started_at, deadline_at, q_order, opt_order, max_score, reatt, meta) VALUES (0, ?1, 'in_progress', ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id`)
     .bind(user.id, now, deadline, JSON.stringify(order), JSON.stringify(states), max, key, JSON.stringify(meta)).first();
   return json({ attempt_id: r.id });
 }
 async function adminReatt(env) {
-  const cfg = await getReattConfig(env);
+  const { results } = await env.DB.prepare('SELECT * FROM reattestations WHERE deleted_at IS NULL ORDER BY position, id').all();
   const bank = await bankIndex(env);
   const cats = {};
-  for (const q of bank) { const c = q.category || '(без категории)'; cats[c] = cats[c] || { category: c, questions: 0, easy: 0, cases: 0 }; if (q.kind === 'case') cats[c].cases++; else { cats[c].questions++; if (q.easy) cats[c].easy++; } }
+  for (const q of bank) { const c = q.category || '(без категории)'; cats[c] = cats[c] || { category: c, questions: 0, cases: 0 }; if (q.kind === 'case') cats[c].cases++; else cats[c].questions++; }
   const { results: stats } = await env.DB.prepare("SELECT reatt, status, COUNT(*) AS c FROM attempts WHERE reatt IS NOT NULL GROUP BY reatt, status").all();
-  return json({ config: cfg, defaults: REATT_DEFAULT, availability: Object.fromEntries(REATT_VERSIONS.map(k => [k, availability(bank, cfg[k].groups)])),
-    categories: Object.values(cats).sort((a, b) => a.category.localeCompare(b.category, 'ru')), attempt_stats: stats });
+  const items = results.map(reattRow).map(v => ({ ...v, availability: availability(bank, v.groups),
+    attempts: stats.filter(s => s.reatt === v.key).reduce((o, s) => (o[s.status] = s.c, o), {}) }));
+  return json({ items, categories: Object.values(cats).sort((a, b) => a.category.localeCompare(b.category, 'ru')) });
 }
-async function putReattConfig(request, env, actor) {
-  const b = await readJson(request);
-  const cur = await getReattConfig(env);
-  const next = { ...cur };
-  for (const k of REATT_VERSIONS) if (b[k] !== undefined) next[k] = reattVersionInput(b[k], k);
-  await env.DB.prepare("INSERT INTO settings (k, v) VALUES ('reatt_config', ?1) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(JSON.stringify(next)).run();
-  await audit(env, actor, 'reatt.config', null, Object.fromEntries(REATT_VERSIONS.map(k => [k, next[k].groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(', ')])));
-  return adminReatt(env);
+async function adminReattOne(env, id) {
+  const r = reattRow(await env.DB.prepare('SELECT * FROM reattestations WHERE id = ?1 AND deleted_at IS NULL').bind(id).first());
+  if (!r) throw new HttpError(404, 'Переаттестация не найдена');
+  return r;
 }
-async function previewReatt(env, key) {
-  if (!REATT_VERSIONS.includes(key)) throw new HttpError(404, 'Нет такой версии');
-  const cfg = await getReattConfig(env);
-  const groups = sampleReatt(await bankIndex(env), cfg[key].groups);
-  const qs = await loadQs(env, groups.flatMap(g => g.q.concat(g.c)));
+async function createReatt(request, env, actor) {
+  const o = reattInput(await readJson(request), null);
+  const now = Date.now();
+  let key; for (let t = 0; t < 5; t++) { key = 'r' + [...crypto.getRandomValues(new Uint8Array(4))].map(x => x.toString(16).padStart(2, '0')).join(''); if (key.length > 3 && !(await env.DB.prepare('SELECT 1 FROM reattestations WHERE key = ?1').bind(key).first())) break; }
+  const pos = o.position || ((await env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM reattestations').first()).m + 10);
+  const r = await env.DB.prepare(`INSERT INTO reattestations (key, title, description, enabled, visible, time_limit_min, pass_pct, cooldown_min, max_attempts, q_points, c_points, groups, position, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14) RETURNING id`)
+    .bind(key, o.title, o.description, o.enabled, o.visible, o.time_limit_min, o.pass_pct, o.cooldown_min, o.max_attempts, o.q_points, o.c_points, JSON.stringify(o.groups), pos, now).first();
+  await audit(env, actor, 'reatt.create', String(r.id), { title: o.title, key });
+  return json({ item: await adminReattOne(env, r.id) }, 201);
+}
+async function updateReatt(request, env, actor, id) {
+  const cur = await adminReattOne(env, id);
+  const o = reattInput(await readJson(request), cur);
+  await env.DB.prepare(`UPDATE reattestations SET title = ?1, description = ?2, enabled = ?3, visible = ?4, time_limit_min = ?5, pass_pct = ?6, cooldown_min = ?7, max_attempts = ?8, q_points = ?9, c_points = ?10, groups = ?11, position = ?12, updated_at = ?13 WHERE id = ?14`)
+    .bind(o.title, o.description, o.enabled, o.visible, o.time_limit_min, o.pass_pct, o.cooldown_min, o.max_attempts, o.q_points, o.c_points, JSON.stringify(o.groups), o.position, Date.now(), id).run();
+  await audit(env, actor, 'reatt.update', String(id), { title: o.title, enabled: !!o.enabled, visible: !!o.visible, groups: o.groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(', ') });
+  return json({ item: await adminReattOne(env, id) });
+}
+async function deleteReatt(env, actor, id) {
+  const cur = await adminReattOne(env, id);
+  const n = (await env.DB.prepare('SELECT COUNT(*) AS c FROM attempts WHERE reatt = ?1').bind(cur.key).first()).c;
+  // Если есть попытки — запись скрывается (мягкое удаление), чтобы попытки остались привязаны и видны в «Проверке».
+  if (n) await env.DB.prepare('UPDATE reattestations SET deleted_at = ?1, enabled = 0, visible = 0 WHERE id = ?2').bind(Date.now(), id).run();
+  else await env.DB.prepare('DELETE FROM reattestations WHERE id = ?1').bind(id).run();
+  await audit(env, actor, 'reatt.delete', String(id), { title: cur.title, attempts: n });
+  return json({ ok: true, soft: !!n });
+}
+// Пробная выборка: по сохранённой записи (id) или по присланным в теле квотам (до сохранения).
+async function previewReatt(request, env, id) {
+  const b = await readJson(request).catch(() => ({}));
+  let groups, v = null;
+  if (b && Array.isArray(b.groups)) groups = reattGroupsInput(b.groups);
+  else { v = await adminReattOne(env, id); groups = v.groups; }
+  const qp = optPoints(b && b.q_points !== undefined ? b.q_points : v && v.q_points, 'Баллы за вопрос'), cp = optPoints(b && b.c_points !== undefined ? b.c_points : v && v.c_points, 'Баллы за кейс');
+  const sg = sampleReatt(await bankIndex(env), groups);
+  const qs = await loadQs(env, sg.flatMap(g => g.q.concat(g.c)));
   const qm = new Map(qs.map(q => [q.id, q]));
-  const brief = (id) => { const q = qm.get(id); return { id, type: q.type, kind: q.kind, category: q.category, easy: !!q.easy, points: q.points, text: q.text.slice(0, 200) }; };
-  return json({ version: key, groups: groups.map(g => ({ ...g, q: g.q.map(brief), c: g.c.map(brief) })),
-    total: groups.reduce((s, g) => s + g.q.length + g.c.length, 0), max_score: qs.reduce((s, q) => s + q.points, 0) });
+  const pts = (q) => (q.kind === 'case' ? cp : qp) ?? q.points;
+  const brief = (id) => { const q = qm.get(id); return { id, type: q.type, kind: q.kind, category: q.category, points: pts(q), text: q.text.slice(0, 200) }; };
+  return json({ groups: sg.map(g => ({ ...g, q: g.q.map(brief), c: g.c.map(brief) })),
+    total: sg.reduce((s, g) => s + g.q.length + g.c.length, 0), max_score: qs.reduce((s, q) => s + pts(q), 0) });
 }
 
 // ---------- банк вопросов и импорт ----------
@@ -1429,14 +1472,13 @@ async function adminBank(env, url) {
   if (f('category')) { const c = f('category'); if (c.endsWith('*')) add("category LIKE ? ESCAPE '\\'", c.slice(0, -1).replace(/[%_\\]/g, m => '\\' + m) + '%'); else add('category = ?', c); }
   if (f('kind')) add('kind = ?', f('kind'));
   if (f('type')) add('type = ?', f('type'));
-  if (f('easy') === '1') where.push('easy = 1');
   if (f('active') === '0') where.push('active = 0');
   if (f('q')) { binds.push('%' + f('q').replace(/[%_\\]/g, m => '\\' + m) + '%'); const n = binds.length; where.push(`(text LIKE ?${n} ESCAPE '\\' OR ext_id LIKE ?${n} ESCAPE '\\')`); }
   const limit = Math.min(500, Math.max(1, Number(f('limit')) || 100)), offset = Math.max(0, Number(f('offset')) || 0);
   const w = where.join(' AND ');
   const total = await env.DB.prepare(`SELECT COUNT(*) AS c FROM questions WHERE ${w}`).bind(...binds).first();
   const { results } = await env.DB.prepare(`SELECT * FROM questions WHERE ${w} ORDER BY category, kind, id LIMIT ${limit} OFFSET ${offset}`).bind(...binds).all();
-  const { results: cats } = await env.DB.prepare("SELECT category, kind, SUM(easy) AS easy, COUNT(*) AS c FROM questions WHERE exam_id = 0 GROUP BY category, kind ORDER BY category").all();
+  const { results: cats } = await env.DB.prepare("SELECT category, kind, COUNT(*) AS c FROM questions WHERE exam_id = 0 GROUP BY category, kind ORDER BY category").all();
   return json({ total: total.c, questions: results.map(q => toNative(q)), categories: cats });
 }
 async function exportQuestions(env, examId, url) {
@@ -1750,10 +1792,12 @@ async function adminAttempts(env, url) {
   const status = url.searchParams.get('status') || '';
   const kind = url.searchParams.get('kind') || '';
   if (status && !['in_progress', 'pending_review', 'passed', 'failed'].includes(status)) throw new HttpError(400, 'Некорректный статус');
-  const kw = kind === 'reatt' ? ' AND a.reatt IS NOT NULL' : kind === 'exam' ? ' AND a.reatt IS NULL' : (REATT_VERSIONS.includes(kind) ? ` AND a.reatt = '${kind}'` : '');
+  if (kind && !REATT_KEY_RE.test(kind)) throw new HttpError(400, 'Некорректный фильтр');
+  const kw = kind === 'reatt' ? ' AND a.reatt IS NOT NULL' : kind === 'exam' ? ' AND a.reatt IS NULL' : (kind ? ' AND a.reatt = ?2' : '');
   const { results } = await env.DB.prepare(`SELECT a.id, a.exam_id, a.reatt, e.title AS exam_title, a.user_id, u.username, u.global_name, u.ic_name, u.static_id, a.status, a.started_at, a.submitted_at, a.score_pct, a.expired, a.reviewer_id, a.reviewed_at
-    FROM attempts a LEFT JOIN exams e ON e.id = a.exam_id LEFT JOIN users u ON u.id = a.user_id WHERE (?1 = '' OR a.status = ?1)${kw} ORDER BY a.id DESC LIMIT 500`).bind(status).all();
-  return json({ attempts: await attemptTitles(env, results) });
+    FROM attempts a LEFT JOIN exams e ON e.id = a.exam_id LEFT JOIN users u ON u.id = a.user_id WHERE (?1 = '' OR a.status = ?1)${kw} ORDER BY a.id DESC LIMIT 500`).bind(...(kw.includes('?2') ? [status, kind] : [status])).all();
+  const { results: rl } = await env.DB.prepare('SELECT key, title, deleted_at FROM reattestations ORDER BY position, id').all();
+  return json({ attempts: await attemptTitles(env, results), reatt_list: rl.map(r => ({ key: r.key, title: r.title, deleted: !!r.deleted_at })) });
 }
 async function adminAttempt(env, id) {
   let a = await env.DB.prepare('SELECT * FROM attempts WHERE id = ?1').bind(id).first();
@@ -1763,7 +1807,7 @@ async function adminAttempt(env, id) {
   const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(a.user_id).first();
   const rv = a.reviewer_id ? await env.DB.prepare('SELECT id, username, global_name FROM users WHERE id = ?1').bind(a.reviewer_id).first() : null;
   const order = parseJ(a.q_order, []), states = parseJ(a.opt_order, {});
-  const qs = await loadQs(env, order);
+  const qs = await loadAttemptQs(env, a, order);
   const qm = new Map(qs.map(q => [q.id, q]));
   const { results: ans } = await env.DB.prepare('SELECT * FROM answers WHERE attempt_id = ?1').bind(id).all();
   const am = new Map(ans.map(x => [x.question_id, x]));
@@ -1794,7 +1838,7 @@ async function reviewAttempt(request, env, actor, id) {
   if (!a) throw new HttpError(404, 'Попытка не найдена');
   if (a.status === 'in_progress') throw new HttpError(409, 'Попытка ещё не завершена кандидатом');
   const ctx = await attemptCtx(env, a);
-  const qs = await loadQs(env, parseJ(a.q_order, []));
+  const qs = await loadAttemptQs(env, a, parseJ(a.q_order, []));
   const qm = new Map(qs.map(q => [q.id, q]));
   const { results: ans } = await env.DB.prepare('SELECT * FROM answers WHERE attempt_id = ?1').bind(id).all();
   const points = b.points && typeof b.points === 'object' ? b.points : {};
@@ -1907,7 +1951,7 @@ async function route(request, env, ctx) {
   if ((m = /^\/api\/attempts\/(\d+)\/upload$/.exec(p)) && M === 'POST') return uploadAnswerFile(request, env, user, idParam(m[1]));
   if ((m = /^\/api\/uploads\/(\d+)$/.exec(p)) && M === 'GET') return getUpload(env, user, idParam(m[1]));
   if (p === '/api/reatt' && M === 'GET') return listReatt(env, user);
-  if ((m = /^\/api\/reatt\/(full|simple)\/start$/.exec(p)) && M === 'POST') return startReatt(env, user, m[1]);
+  if ((m = /^\/api\/reatt\/([a-z0-9_-]{1,40})\/start$/.exec(p)) && M === 'POST') return startReatt(env, user, m[1]);
 
   if (p.startsWith('/api/admin/')) {
     requireRole(user, 'examiner'); // минимум — проверяющий; ниже уточняется
@@ -1944,8 +1988,11 @@ async function route(request, env, ctx) {
     if (p === '/api/admin/bank/delete-examples' && M === 'POST') { A(); return deleteExamples(request, env, user); }
     // переаттестация
     if (p === '/api/admin/reatt' && M === 'GET') { A(); return adminReatt(env); }
-    if (p === '/api/admin/reatt' && M === 'PUT') { A(); return putReattConfig(request, env, user); }
-    if ((m = /^\/api\/admin\/reatt\/(full|simple)\/preview$/.exec(p)) && M === 'POST') { A(); return previewReatt(env, m[1]); }
+    if (p === '/api/admin/reatt' && M === 'POST') { A(); return createReatt(request, env, user); }
+    if (p === '/api/admin/reatt/preview' && M === 'POST') { A(); return previewReatt(request, env, null); }
+    if ((m = /^\/api\/admin\/reatt\/(\d+)$/.exec(p))) { A(); const rid = idParam(m[1]);
+      if (M === 'GET') return json({ item: await adminReattOne(env, rid) }); if (M === 'PUT') return updateReatt(request, env, user, rid); if (M === 'DELETE') return deleteReatt(env, user, rid); }
+    if ((m = /^\/api\/admin\/reatt\/(\d+)\/preview$/.exec(p)) && M === 'POST') { A(); return previewReatt(request, env, idParam(m[1])); }
     if ((m = /^\/api\/admin\/questions\/(\d+)$/.exec(p))) {
       A(); const id = idParam(m[1]);
       if (M === 'PUT') return saveQuestion(request, env, user, null, id);

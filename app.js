@@ -115,7 +115,7 @@ route('/', async () => {
         <p><a class="btn" href="#/lectures">К лекциям</a></p></div>
       <div class="card flat"><h3>Экзамен</h3>${E.exams.length ? E.exams.map(e => `<div class="row between" style="margin-bottom:8px"><span>${esc(e.title)}</span>${examBadge(e)}</div>`).join('') : '<p class="mut">Экзамен пока не опубликован.</p>'}
         <p><a class="btn" href="#/exams">К экзаменам</a></p></div>
-      <div class="card flat"><h3>Переаттестация</h3><p class="mut small">Полная (законы и уставы) и упрощённая (только уставы) версии. Вопросы выбираются случайно в каждой попытке.</p><p><a class="btn" href="#/reatt">К переаттестации</a></p></div>
+      <div class="card flat"><h3>Переаттестация</h3><p class="mut small">Вопросы выбираются случайно в каждой попытке.</p><p><a class="btn" href="#/reatt">К переаттестации</a></p></div>
       <div class="card flat"><h3>Профиль</h3><p class="mut small">${App.me.ic_name ? 'Игровое имя: ' + esc(App.me.ic_name) : 'Укажите игровое имя и статик, чтобы проверяющему было проще вас найти.'}</p><p><a class="btn" href="#/profile">Открыть</a></p></div>
     </div>`);
 });
@@ -306,17 +306,16 @@ function attemptResult(a) {
 route('/reatt', async () => {
   const { versions } = await api('GET', '/api/reatt');
   setView(`<h1>Переаттестация</h1>
-    <p class="mut small">Две версии. В каждой попытке вопросы выбираются случайно из банка по квотам, порядок вопросов и вариантов перемешивается. Кейсы проверяет экзаменатор.</p>
+    <p class="mut small">В каждой попытке вопросы выбираются случайно, порядок вопросов и вариантов перемешивается. Кейсы проверяет экзаменатор.</p>
     <div class="reatt-grid">${versions.map(v => `<div class="card reatt-card" data-v="${v.key}">
       <div class="row between"><h2 style="margin:0">${esc(v.title)}</h2>${v.attempts[0] ? badge(v.attempts[0].status) : v.enabled ? '<span class="badge ok">Доступна</span>' : '<span class="badge lock">Выключена</span>'}</div>
       ${v.description ? `<p class="welcome small">${esc(v.description)}</p>` : ''}
-      <div class="comp">${v.composition.filter(g => g.questions || g.cases).map(g => `<span class="lchip">${esc(g.label)}: ${g.questions ? g.questions + ' вопр.' : ''}${g.questions && g.cases ? ' + ' : ''}${g.cases ? g.cases + ' ' + (g.cases === 1 ? 'кейс' : g.cases < 5 ? 'кейса' : 'кейсов') : ''}</span>`).join('')}</div>
       <p class="small mut">Всего: ${v.total_questions} вопросов + ${v.total_cases} кейсов · ${v.time_limit_min ? 'время ' + v.time_limit_min + ' мин' : 'без ограничения времени'} · проходной ${v.pass_pct}%${v.max_attempts ? ' · попыток: ' + v.max_attempts : ''}${v.cooldown_min ? ' · пауза ' + v.cooldown_min + ' мин' : ''}</p>
       ${v.active_attempt_id ? `<a class="btn primary" href="#/attempt/${v.active_attempt_id}">Продолжить попытку</a>`
         : v.can_start ? `<button class="btn primary startR" data-v="${v.key}" data-t="${v.time_limit_min}">Начать</button>`
         : `<div class="alert warn">${esc(v.reason || 'Недоступно')}${v.next_at ? ' — ' + fmtDate(v.next_at) : ''}</div>`}
       ${v.attempts.length ? `<table style="margin-top:12px"><tr><th>№</th><th>Дата</th><th>Статус</th><th>Результат</th></tr>${v.attempts.map(x => `<tr class="click" data-href="#/attempt/${x.id}"><td>#${x.id}</td><td>${fmtDate(x.submitted_at || x.started_at)}</td><td>${badge(x.status)}</td><td>${x.score_pct != null ? x.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : ''}
-    </div>`).join('')}</div>`);
+    </div>`).join('') || '<p class="mut">Сейчас нет доступных переаттестаций.</p>'}</div>`);
   $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; });
   $$('.startR').forEach(b => b.onclick = async () => {
     if (!confirm(Number(b.dataset.t) ? `После начала пойдёт таймер (${b.dataset.t} мин). Начать?` : 'Начать переаттестацию?')) return;

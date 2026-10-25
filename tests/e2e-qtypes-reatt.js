@@ -1,6 +1,6 @@
 // E2E: все типы вопросов (создание, прохождение в браузере, автопроверка/ручная проверка), миграция старых попыток,
 // банк вопросов + импорт, переаттестация (квоты обеих версий, перемешивание).
-// Запуск: wrangler dev (tests/wrangler.toml) на :8787, node serve.js на :8080; БД с миграциями 0001–0004 (+ /tmp/legacy.sql для проверки старых данных).
+// Запуск: wrangler dev (tests/wrangler.toml) на :8787, node serve.js на :8080; БД с миграциями 0001–0005 (+ /tmp/legacy.sql для проверки старых данных).
 const { chromium } = require('playwright');
 const fs = require('fs');
 const API = 'http://localhost:8787', SITE = 'http://localhost:8080/';
@@ -17,7 +17,7 @@ async function call(method, path, token, body) {
 }
 const login = async (id, name) => (await (await fetch(`${API}/__test/login?id=${id}&name=${encodeURIComponent(name)}`)).json()).token;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const SECRET_KEYS = /"(correct|accepted|formula|reference|criteria|answer|tolerance|pairs|distractors|content|word|phrase|explanation|quote|article|easy)"\s*:/;
+const SECRET_KEYS = /"(correct|accepted|formula|reference|criteria|answer|tolerance|pairs|distractors|content|word|phrase|explanation|quote|article|easy|criteria)"\s*:/;
 
 const QS = [
   { type: 'info', text: 'Информационный блок: прочитайте и продолжайте.' },
@@ -201,13 +201,17 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
   // ---------- 6. переаттестация ----------
   r = await call('GET', '/api/admin/reatt', A);
-  check('квоты: полная — блоки по умолчанию', r.d.config.full.groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ПК:4+1 УК:4+1 ВУ:8+2 СУ:2+1 КПС:2+1 ДУ:2+1 ФЗ / ФКЗ / КоАП:6+2 ТК:4+1', r.d.config.full.groups);
-  check('квоты: упрощённая 15 + 3 кейса', r.d.config.simple.groups.reduce((s, g) => s + g.questions, 0) === 15 && r.d.config.simple.groups.reduce((s, g) => s + g.cases, 0) === 3);
-  check('банк закрывает все квоты', Object.values(r.d.availability).every(v => v.every(g => g.ok)), r.d.availability);
+  const byKey = (d, k) => d.items.find(x => x.key === k);
+  check('стандартные записи: полная и упрощённая', !!byKey(r.d, 'full') && !!byKey(r.d, 'simple'), r.d.items.map(x => x.key));
+  check('квоты: полная — блоки по умолчанию', byKey(r.d, 'full').groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ПК:4+1 УК:4+1 ВУ:8+2 СУ:2+1 КПС:2+1 ДУ:2+1 ФЗ / ФКЗ / КоАП:6+2 ТК:4+1', byKey(r.d, 'full').groups);
+  check('квоты: упрощённая 15 + 3 кейса', byKey(r.d, 'simple').groups.reduce((s, g) => s + g.questions, 0) === 15 && byKey(r.d, 'simple').groups.reduce((s, g) => s + g.cases, 0) === 3);
+  check('банк закрывает все квоты', r.d.items.every(v => v.availability.every(g => g.ok)), r.d.items.map(v => v.availability));
+  check('нет признака «не душный» в ответах API', !/"easy"|prefer_easy|не душн/i.test(JSON.stringify(r.d)));
   const bankR = await call('GET', '/api/admin/bank?limit=500', A);
+  check('банк: нет поля easy', !bankR.d.questions.some(q => 'easy' in q) && !bankR.d.categories.some(c => 'easy' in c));
   const allBank = []; for (let off = 0; off < bankR.d.total; off += 500) { const b = await call('GET', `/api/admin/bank?limit=500&offset=${off}`, A); allBank.push(...b.d.questions); }
   const bmap = new Map(allBank.map(q => [q.id, q]));
-  const cfgFull = r.d.config.full, cfgSimple = r.d.config.simple;
+  const cfgFull = byKey(r.d, 'full'), cfgSimple = byKey(r.d, 'simple');
   const catOk = (g, q) => g.categories.some(p => p.endsWith('*') ? q.category.startsWith(p.slice(0, -1)) : q.category === p);
   const orders = {};
   for (const [ver, cfg] of [['full', cfgFull], ['simple', cfgSimple]]) {
@@ -227,13 +231,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         const its = ad.d.items.filter(it => it.group === g.label);
         const nq = its.filter(it => it.question.kind !== 'case').length, nc = its.filter(it => it.question.kind === 'case').length;
         check(`${ver}#${k} ${g.label}: ${nq}/${g.questions} вопросов, ${nc}/${g.cases} кейсов, категории верные`, nq === g.questions && nc === g.cases && !gr.short_q && !gr.short_c && its.every(it => catOk(g, it.question)), { nq, nc, gr });
-        if (ver === 'simple' && g.prefer_easy && g.questions) {
-          const easyAvail = allBank.filter(q => q.kind === 'question' && q.active && q.type !== 'info' && catOk(g, q) && q.easy).length;
-          const easyGot = its.filter(it => it.question.kind !== 'case' && bmap.get(it.question.id).easy).length;
-          check(`${ver}#${k} ${g.label}: «не душные» в приоритете (${easyGot} из min(${easyAvail}, ${g.questions}))`, easyGot === Math.min(easyAvail, g.questions));
-        }
       }
-      // варианты перемешиваются: порядок опций отличается от исходного хотя бы у части вопросов
       if (k === 0) {
         let diff = 0, tot = 0;
         for (const q of qs.filter(q => q.options && q.options.length > 2)) { tot++; if (q.options.map(o => o.id).join() !== bmap.get(q.id).options.map(o => o.id).join()) diff++; }
@@ -244,17 +242,40 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     }
     check(`${ver}: порядок вопросов разный в разных попытках`, new Set(orders[ver]).size > 1);
   }
-  // изменение квот
-  r = await call('PUT', '/api/admin/reatt', A, { simple: { ...cfgSimple, groups: [{ label: 'ВУ', categories: ['ВУ'], questions: 3, cases: 1, prefer_easy: true }] } });
-  check('квоты сохраняются', r.status === 200 && r.d.config.simple.groups.length === 1);
-  r = await call('POST', '/api/admin/reatt/simple/preview', A); check('пробная выборка по новым квотам: 3+1', r.d.total === 4, r.d);
-  r = await call('PUT', '/api/admin/reatt', A, { simple: { ...cfgSimple, groups: [] } }); check('пустые квоты → 400', r.status === 400);
-  r = await call('PUT', '/api/admin/reatt', A, { simple: r.d ? (await call('GET', '/api/admin/reatt', A)).d.defaults.simple : cfgSimple }); check('сброс квот к стандартным', r.d.config.simple.groups.length === 5);
-  r = await call('PUT', '/api/admin/reatt', C, { simple: cfgSimple }); check('кандидат не меняет квоты (403)', r.status === 403);
+  // CRUD: новая переаттестация с весами
+  r = await call('POST', '/api/admin/reatt', A, { title: 'Тестовая: только ВУ', description: 'для теста', time_limit_min: 15, pass_pct: 50, q_points: 2, c_points: 4,
+    groups: [{ label: 'ВУ', categories: ['ВУ'], questions: 3, cases: 1 }] });
+  check('создание переаттестации', r.status === 201 && /^r[0-9a-f]{8}$/.test(r.d.item.key), r.d);
+  const NR = r.d.item;
+  r = await call('POST', '/api/admin/reatt', A, { title: 'Пустая', groups: [] }); check('пустые квоты → 400', r.status === 400);
+  r = await call('POST', '/api/admin/reatt', C, { title: 'x', groups: [{ label: 'a', categories: ['ВУ'], questions: 1 }] }); check('кандидат не создаёт (403)', r.status === 403);
+  r = await call('POST', `/api/admin/reatt/${NR.id}/preview`, A); check('пробная выборка сохранённой: 3+1, баллы 3×2+4=10', r.d.total === 4 && r.d.max_score === 10, r.d);
+  r = await call('POST', '/api/admin/reatt/preview', A, { groups: [{ label: 'СУ', categories: ['СУ'], questions: 2, cases: 0 }] }); check('пробная выборка по форме (без сохранения): 2', r.d.total === 2, r.d);
+  const tokN = await login('330000000000000001', 'Новая');
+  r = await call('GET', '/api/reatt', tokN); check('кандидат видит новую', r.d.versions.some(v => v.key === NR.key) && r.d.versions.every(v => !('composition' in v)), r.d.versions.map(v => v.key));
+  r = await call('POST', `/api/reatt/${NR.key}/start`, tokN); const NA = r.d.attempt_id; check('старт новой', !!NA, r.d);
+  r = await call('GET', '/api/attempts/' + NA, tokN); check('новая: 4 задания, веса 2/4', r.d.attempt.questions.length === 4 && r.d.attempt.questions.every(q => q.points === (q.kind === 'case' ? 4 : 2)), r.d.attempt.questions.map(q => q.points));
+  const caseQ = r.d.attempt.questions.find(q => q.kind === 'case'); r = await call('POST', `/api/attempts/${NA}/submit`, tokN, { answers: { [caseQ.id]: 'Решение кейса' } }); check('новая: отправка → на проверке (кейс)', r.d.status === 'pending_review', r.d);
+  r = await call('GET', '/api/admin/attempts/' + NA, A); const caseIt = r.d.items.find(it => it.question.kind === 'case');
+  check('новая: у проверяющего max 10, критерии кейса пересчитаны под 4 балла', r.d.attempt.max_score === 10 && caseIt.question.points === 4 && (caseIt.question.native.criteria || []).reduce((s, c) => s + c.points, 0) <= 4.5 && (caseIt.question.native.criteria || []).length > 0, { max: r.d.attempt.max_score, crit: caseIt.question.native.criteria });
+  r = await call('POST', `/api/admin/attempts/${NA}/review`, A, { points: { [caseIt.question.id]: 4 }, verdict: 'auto' }); check('новая: проверка → 40% < 50% → не сдан', r.d.attempt ? r.d.attempt.status === 'failed' : r.status === 200, r.d);
+  r = await call('PUT', `/api/admin/reatt/${NR.id}`, A, { visible: false }); check('скрыть от кандидатов', r.d.item.visible === false && r.d.item.enabled === true);
+  r = await call('GET', '/api/reatt', tokN); check('скрытая не видна кандидату', !r.d.versions.some(v => v.key === NR.key));
+  r = await call('PUT', `/api/admin/reatt/${NR.id}`, A, { visible: true, enabled: false }); r = await call('GET', '/api/reatt', tokN); check('выключенная не видна кандидату', !r.d.versions.some(v => v.key === NR.key));
+  r = await call('POST', `/api/reatt/${NR.key}/start`, tokN); check('выключенную нельзя начать', r.status === 403, r.d);
+  r = await call('PUT', `/api/admin/reatt/${cfgSimple.id}`, A, { title: 'Переаттестация — упрощённая (уставы)', groups: cfgSimple.groups }); check('стандартная редактируется как обычная запись', r.status === 200);
+  r = await call('DELETE', `/api/admin/reatt/${NR.id}`, A); check('удаление с попытками → мягкое', r.d.soft === true);
+  r = await call('GET', '/api/admin/reatt', A); check('удалённая не в списке админа', !r.d.items.some(x => x.id === NR.id));
+  r = await call('GET', '/api/admin/attempts/' + NA, A); check('попытка удалённой переаттестации видна с названием', r.status === 200 && /Тестовая/.test(r.d.exam ? r.d.exam.title : JSON.stringify(r.d)), r.d.exam);
+  r = await call('GET', '/api/admin/attempts?kind=' + NR.key, A); check('фильтр попыток по удалённой переаттестации', r.d.attempts.length === 1 && r.d.reatt_list.some(x => x.key === NR.key && x.deleted));
+  r = await call('POST', '/api/admin/reatt', A, { title: 'Временная', groups: [{ label: 'ДУ', categories: ['ДУ'], questions: 1 }] }); const TR = r.d.item.id;
+  r = await call('DELETE', `/api/admin/reatt/${TR}`, A); check('удаление без попыток → полное', r.d.soft === false);
+  r = await call('GET', '/api/admin/attempts?kind=x%27%20OR%201', A); check('фильтр: инъекция отклонена', r.status === 400);
 
   // UI переаттестации
   const tokR = await login('320000000000000001', 'Курсант Иванов');
   await as(tokR, '/reatt'); await page.waitForSelector('.reatt-card');
+  check('UI кандидата: нет перечисления блоков/типов', (await page.$$('.reatt-card .lchip')).length === 0 && !/не душн/i.test(await page.textContent('main')));
   await page.screenshot({ path: SHOTS + '44_reatt_candidate.png', fullPage: true });
   await page.click('.reatt-card[data-v="simple"] .startR'); await page.waitForSelector('#examForm');
   check('UI: упрощённая — 18 заданий', (await page.$$('#examForm .q')).length === 18);
@@ -265,11 +286,30 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   for (const ta of await page.$$('#examForm .case-q textarea')) await ta.fill('Решение кейса');
   await page.click('#submitBtn'); await page.waitForSelector('.result');
   check('UI: переаттестация с кейсами → на проверке', /НА ПРОВЕРКЕ/.test(await page.textContent('.result')));
-  await as(A, '/admin/reatt'); await page.waitForSelector('.reattf');
-  await page.click('.reattf[data-v="full"] .g-prev'); await page.waitForSelector('.reattf[data-v="full"] .g-out .card');
+  // админ: список, создание через форму, пробная выборка
+  await as(A, '/admin/reatt'); await page.waitForSelector('.ritem');
+  check('UI админа: список переаттестаций', (await page.$$('.ritem')).length >= 2 && !/не душн/i.test(await page.textContent('main')));
+  await page.screenshot({ path: SHOTS + '47_admin_reatt_list.png', fullPage: true });
+  await page.click('#newR'); await page.waitForSelector('#rf .grow');
+  await page.fill('#rf [name=title]', 'Переаттестация по ДУ (UI)');
+  await page.fill('#rf .grow .g-label', 'ДУ'); await page.fill('#rf .grow .g-cats', 'ДУ'); await page.fill('#rf .grow .g-q', '3'); await page.fill('#rf .grow .g-c', '1');
+  await page.click('#rf .g-add'); const rows = await page.$$('#rf .grow'); await (await rows[1].$('.g-label')).fill('СУ'); await (await rows[1].$('.g-cats')).fill('СУ'); await (await rows[1].$('.g-q')).fill('2');
+  check('UI: итог считается', /5 вопросов \+ 1 кейсов/.test(await page.textContent('#rf .g-tot')));
+  await page.click('#rf .g-prev'); await page.waitForSelector('#rf .g-out .card');
+  const pvTxt = await page.textContent('#rf .g-out'); check('UI: пробная выборка по форме', /всего 6,/.test(pvTxt) && !/не хватает/.test(pvTxt), pvTxt.slice(0, 300));
+  await page.screenshot({ path: SHOTS + '49_admin_reatt_new.png', fullPage: true });
+  await page.click('#rf button.gold'); await page.waitForFunction(() => /#\/admin\/reatt\/\d+$/.test(location.hash));
+  r = await call('GET', '/api/admin/reatt', A); const uiR = r.d.items.find(x => x.title === 'Переаттестация по ДУ (UI)');
+  check('UI: создана через форму', uiR && uiR.groups.length === 2 && uiR.groups[0].questions === 3 && uiR.groups[0].cases === 1, uiR);
+  await page.goto(SITE + '#/admin/reatt/' + cfgFull.id); await page.waitForFunction(() => /полная/.test((document.querySelector('h1') || {}).textContent || ''));
+  check('UI: редактор стандартной полной — 8 блоков', (await page.$$('#rf .grow')).length === 8);
+  await page.click('#rf .g-prev'); await page.waitForSelector('#rf .g-out .card');
   await page.screenshot({ path: SHOTS + '47_admin_reatt_quotas.png', fullPage: true });
+  await page.goto(SITE + '#/admin/bank'); await page.waitForSelector('#bf');
+  check('UI банка: нет «не душных»', !/не душн/i.test(await page.textContent('main')));
   await page.goto(SITE + '#/admin/attempts?status=pending_review&kind=reatt'); await page.waitForSelector('tr.click[data-href^="#/admin/attempt/"]');
   check('проверка: фильтр «Переаттестация» показывает попытку', /упрощённая/.test(await page.textContent('table')));
+  check('проверка: вкладка по каждой переаттестации', /полная/.test(await page.textContent('main')) && /Тестовая: только ВУ \(удалена\)/.test(await page.textContent('main')));
   await page.click('tr.click'); await page.waitForSelector('#rf');
   check('проверка переаттестации: сводка по блокам', /По блокам/.test(await page.textContent('main')));
   await page.screenshot({ path: SHOTS + '48_admin_reatt_review.png', fullPage: true });

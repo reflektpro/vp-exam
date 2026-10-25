@@ -9,7 +9,7 @@
 // Соответствие форматов: один ответ → single (буква → индекс), несколько ответов → multi («A, C»), ввод числа → number,
 // порядок действий → order («C → A → B» → индексы), соответствие → match (левые «1)…», правые «а)…»; «1 — в; 2 — б»;
 // неиспользованные правые → лишние варианты; если правых вариантов нет в списке, берутся из текста вопроса: «смягчающим (С)»).
-// Тег «не душный» → easy. Пункт → article; цитаты → quote; «Устав, п. …: «цитата»» → explanation; Сложность → difficulty.
+// Теги не переносятся. Пункт → article; цитаты → quote; «Устав, п. …: «цитата»» → explanation; Сложность → difficulty.
 // Кейс: критерии «полный» разбиваются по « + » (или по запятым, если частей ≥ 3) на пункты с баллами (сумма = 10);
 // если разбить нельзя — два уровня: «Полный ответ: …» (10) и «Частично: …» (5). Полная шкала дописывается к эталону.
 const fs = require('fs'), path = require('path');
@@ -63,11 +63,10 @@ function caseCriteria(raw) {
 }
 function convertQuestion(id, f, cat) {
   const fmt = one(f, 'Формат').toLowerCase(), ans = one(f, 'Правильный ответ');
-  const tags = (f['Теги'] || []).join(' ');
   const quotes = (f['Цитата'] || []).map(x => x.trim());
   const ustav = one(f, 'Устав') || cat, punkt = one(f, 'Пункт');
   const q = { ext_id: id.toLowerCase().replace(/к/gi, 'k'), category: cat, kind: 'question', points: 1,
-    easy: /не душный/i.test(tags), text: (f['Вопрос'] || []).join('\n').trim(),
+    text: (f['Вопрос'] || []).join('\n').trim(),
     article: `${ustav}, п. ${punkt}`, quote: quotes.join('\n'), difficulty: one(f, 'Сложность'),
     explanation: `${ustav}, п. ${punkt}: ${quotes.join(' ')}` };
   const opts = optionLines((f['Варианты'] || []).join('\n'));
@@ -108,7 +107,7 @@ function convertCase(id, f, cat) {
   if (!sit || !qq || !ref) throw new Error('кейс: нет ситуации/вопроса/эталона');
   const criteria = caseCriteria(crit); if (!criteria) throw new Error('кейс: не разобраны критерии «' + crit.slice(0, 80) + '»');
   const refs = one(f, 'Ссылки');
-  return { ext_id: id.toLowerCase().replace(/к/gi, 'k'), category: cat, kind: 'case', type: 'case', easy: false,
+  return { ext_id: id.toLowerCase().replace(/к/gi, 'k'), category: cat, kind: 'case', type: 'case',
     text: `Ситуация: ${sit}\n\nВопрос: ${qq}`, reference: ref + (crit ? `\n\nШкала оценки: ${crit}` : ''), criteria, max_score: MAX_CASE, points: MAX_CASE,
     article: refs ? `${cat}, п. ${refs}` : '', explanation: crit };
 }
@@ -133,7 +132,7 @@ if (require.main === module) {
     const r = convertFile(f); const out = path.join(outDir || path.dirname(f), r.code + '.json');
     fs.writeFileSync(out, JSON.stringify(r, null, 1));
     const nq = r.questions.filter(x => x.kind === 'question'), nc = r.questions.filter(x => x.kind === 'case');
-    console.log(`${r.category}: вопросов ${nq.length} (easy ${nq.filter(x => x.easy).length}), кейсов ${nc.length}, пропущено ${r.skipped.length} → ${out}`);
+    console.log(`${r.category}: вопросов ${nq.length}, кейсов ${nc.length}, пропущено ${r.skipped.length} → ${out}`);
     for (const s of r.skipped) console.log('   пропущен', s.id, '—', s.reason);
   }
 }

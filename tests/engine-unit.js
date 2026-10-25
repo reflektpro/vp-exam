@@ -1,7 +1,7 @@
 // Юнит-тест движка вопросов без сервера: node tests/engine-unit.js
 const fs = require('fs'), path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
-const W = new Function(src + '\nreturn { questionInput, makeState, publicQuestion, validateAnswer, gradeAnswer, describeQA, toNative, sampleReatt, REATT_DEFAULT, importItems, evalFormula };')();
+const W = new Function(src + '\nreturn { questionInput, makeState, publicQuestion, validateAnswer, gradeAnswer, describeQA, toNative, sampleReatt, importItems, evalFormula };')();
 const { correctAnswer, wrongAnswer } = require('./answers-helper');
 const ex = JSON.parse(fs.readFileSync(path.join(__dirname, '../tools/examples.json'), 'utf8')).questions;
 let fail = 0; const ok = (n, c, x) => { if (!c) { fail++; console.log('FAIL', n, x !== undefined ? JSON.stringify(x).slice(0, 300) : ''); } };
@@ -28,18 +28,18 @@ for (const it of ex) {
   }
 }
 // квоты
-const bank = rows.map(r => ({ id: r.id, category: r.category, kind: r.kind, easy: r.easy, type: r.type }));
+const bank = rows.map(r => ({ id: r.id, category: r.category, kind: r.kind, type: r.type }));
+// стандартные квоты — как в миграции 0005
+const mig = fs.readFileSync(path.join(__dirname, '../worker/migrations/0005_reattestations.sql'), 'utf8');
+const DEF = {}; for (const m of mig.matchAll(/\('(full|simple)'[\s\S]*?'(\[\{[\s\S]*?\}\])'/g)) DEF[m[1]] = JSON.parse(m[2]);
+ok('migration defaults parsed', DEF.full && DEF.simple && DEF.full.length === 8 && DEF.simple.length === 5, Object.keys(DEF));
 for (const v of ['full', 'simple']) {
-  const g = W.sampleReatt(bank, W.REATT_DEFAULT[v].groups);
+  const g = W.sampleReatt(bank, DEF[v]);
   const all = g.flatMap(x => x.q.concat(x.c));
   ok(v + ' no dups', new Set(all).size === all.length);
   g.forEach(x => ok(`${v} ${x.label} quota`, x.short_q === 0 && x.short_c === 0, x));
   console.log(v, g.map(x => `${x.label}:${x.q.length}+${x.c.length}`).join(' '), 'total', all.length);
 }
-// упрощённая: «не душные» ВУ в приоритете
-const vuEasy = bank.filter(b => b.category === 'ВУ' && b.kind === 'question' && b.easy).length;
-const g = W.sampleReatt(bank, W.REATT_DEFAULT.simple.groups); const vu = g.find(x => x.label === 'ВУ');
-ok('simple ВУ prefers easy', vu.q.filter(id => bank.find(b => b.id === id).easy).length === Math.min(vuEasy, 9));
 // импорт формата «файл закона»
 const law = { law: 'Процессуальный кодекс', code: 'pk', questions: [
   { id: 'pk-q001', type: 'single', difficulty: 'easy', article: 'Статья 1', question: 'Q?', options: ['a', 'b', 'c'], correct: [1] },
@@ -50,7 +50,7 @@ const law = { law: 'Процессуальный кодекс', code: 'pk', ques
   cases: [{ id: 'pk-c01', difficulty: 'medium', situation: 'Ситуация', question: 'Что делать?', reference_answer: 'Эталон', articles: ['ст. 1'], criteria: ['Квалификация (4 балла)', 'Порядок (6 баллов)'], max_score: 10 }] };
 const li = W.importItems(law).map(x => W.questionInput(x, null));
 ok('law import count', li.length === 6);
-ok('law single correct', li[0].correct.length === 1 && li[0].options[1].id === li[0].correct[0] && li[0].easy === 1 && li[0].category === 'ПК' && li[0].ext_id === 'pk-q001', li[0]);
+ok('law single correct', li[0].correct.length === 1 && li[0].options[1].id === li[0].correct[0] && li[0].easy === 0 && li[0].category === 'ПК' && li[0].ext_id === 'pk-q001', li[0]);
 ok('law multi', li[1].type === 'multi' && li[1].correct.length === 2);
 ok('law order', li[4].data.items.map(x => x.text).join() === 'первый,второй,третий', li[4].data);
 ok('law case', li[5].kind === 'case' && li[5].points === 10 && li[5].data.criteria[1].points === 6 && /Ситуация/.test(li[5].text), li[5]);

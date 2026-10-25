@@ -233,7 +233,7 @@
         ${opts.bank ? `<label class="f"><span>Категория *</span><input class="e-cat" list="catlist" maxlength="100" value="${e(q.category || '')}" placeholder="ПК, УК, ВУ, ФЗ об обороне…"><datalist id="catlist">${(opts.categories || []).map(c => `<option value="${e(c)}">`).join('')}</datalist></label>
         <label class="f"><span>Вид</span><select class="e-kind"><option value="question" ${q.kind !== 'case' ? 'selected' : ''}>Вопрос</option><option value="case" ${q.kind === 'case' ? 'selected' : ''}>Кейс</option></select></label>` : ''}
       </div>
-      ${opts.bank ? `<div class="row"><label class="chk"><input type="checkbox" class="e-easy" ${q.easy ? 'checked' : ''}> «Не душный» (простой) — в приоритете в упрощённой версии</label><label class="chk"><input type="checkbox" class="e-active" ${q.active === false ? '' : 'checked'}> Активен (попадает в выборку)</label>${q.ext_id ? `<span class="small mut">ext_id: ${e(q.ext_id)}</span>` : ''}</div>` : ''}
+      ${opts.bank ? `<div class="row"><label class="chk"><input type="checkbox" class="e-active" ${q.active === false ? '' : 'checked'}> Активен (попадает в выборку)</label>${q.ext_id ? `<span class="small mut">ext_id: ${e(q.ext_id)}</span>` : ''}</div>` : ''}
       <label class="f"><span class="e-tlabel">Текст вопроса</span><textarea class="e-text" maxlength="10000" rows="3">${e(q.text)}</textarea></label>
       <div class="e-spec"></div>
       <label class="chk e-part-w"><input type="checkbox" class="e-partial" ${q.partial ? 'checked' : ''}> Частичные баллы (пропорционально числу верных элементов)</label>
@@ -311,7 +311,7 @@
       const body = Object.assign({ type: curType, text: el.querySelector('.e-text').value, points: Number(el.querySelector('.e-pts').value || 0) }, getSpec());
       if (PARTIAL.has(curType)) body.partial = el.querySelector('.e-partial').checked;
       body.article = el.querySelector('.e-article').value; body.explanation = el.querySelector('.e-expl').value;
-      if (opts.bank) { body.category = el.querySelector('.e-cat').value; body.kind = el.querySelector('.e-kind').value; body.easy = el.querySelector('.e-easy').checked; body.active = el.querySelector('.e-active').checked; }
+      if (opts.bank) { body.category = el.querySelector('.e-cat').value; body.kind = el.querySelector('.e-kind').value; body.active = el.querySelector('.e-active').checked; }
       return body;
     };
     return { el, get };
