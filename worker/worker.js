@@ -659,13 +659,15 @@ function questionInput(b, prev) {
     case 'match': {
       const pairs = Array.isArray(b.pairs) ? b.pairs : null;
       if (!pairs || pairs.length < 2 || pairs.length > 30) throw new HttpError(400, 'Соответствия: нужно от 2 до 30 пар');
-      const seenL = new Set(), seenR = new Set();
+      const seenL = new Set(), seenR = new Set(); const rByText = new Map();
       const prevL = (pd.pairs || []).map(p => p.l), prevR = (pd.pairs || []).map(p => p.r).concat(pd.distractors || []);
       data.pairs = pairs.map((p, i) => {
         const lt = str(p && p.left, 1000, { required: true, name: `левая часть пары ${i + 1}` }), rt = str(p && p.right, 1000, { required: true, name: `правая часть пары ${i + 1}` });
-        return { l: { id: reuseId(lt, prevL, seenL), text: lt }, r: { id: reuseId(rt, prevR, seenR), text: rt } };
+        // одинаковый текст справа у нескольких пар = один и тот же вариант (например, «смягчающее» / «отягчающее»)
+        const rk = normText(rt); const rid = rByText.get(rk) || reuseId(rt, prevR, seenR); rByText.set(rk, rid);
+        return { l: { id: reuseId(lt, prevL, seenL), text: lt }, r: { id: rid, text: rt } };
       });
-      data.distractors = lines(b.distractors, 1000, 'лишние варианты', 20).map(t => ({ id: reuseId(String(t.text || t), prevR, seenR), text: String(t.text || t) }));
+      data.distractors = lines(b.distractors, 1000, 'лишние варианты', 20).map(t => String(t.text || t)).filter(t => !rByText.has(normText(t)) && (rByText.set(normText(t), 1), true)).map(t => ({ id: reuseId(t, prevR, seenR), text: t }));
       break;
     }
     case 'blanks_input': case 'blanks_select': case 'dictation': case 'find': {
@@ -768,6 +770,7 @@ function toNative(q) {
   if (d.meta) Object.assign(o, d.meta);
   return o;
 }
+function matchRights(d) { const seen = new Set(); return (d.pairs || []).map(p => p.r).concat(d.distractors || []).filter(x => x && !seen.has(x.id) && (seen.add(x.id), true)); }
 function isManual(q, d) { return q.type === 'long' || q.type === 'case' || q.type === 'file' || q.type === 'voice' || (q.type === 'text' && !(d.accepted && d.accepted.length)); }
 function pubOrder(pool, st) { return st && Array.isArray(st.o) && st.o.length === pool.length ? st.o.map(i => pool[i]) : pool; }   // как видит кандидат
 function letterPool(d) { return (d.word.replace(/\s/g, '') + (d.extra_letters || '')).split(''); }
@@ -786,7 +789,7 @@ function makeState(q, shuffleOpts) {
     case 'single': case 'multi': case 'eliminate': { const o = parseJ(q.options, []).map(x => x.id); return shuffleOpts ? shuffle(o) : o; }
     case 'param': return { p: genParams(d.vars) };
     case 'order': { const o = ids(d.items || []); return { o: shuffleDiff(o, r => r.join() === o.join()) }; }
-    case 'match': { const l = ids((d.pairs || []).map(p => p.l)); return { l: shuffleOpts ? shuffle(l) : l, r: shuffle(ids((d.pairs || []).map(p => p.r).concat(d.distractors || []))) }; }
+    case 'match': { const l = ids((d.pairs || []).map(p => p.l)); return { l: shuffleOpts ? shuffle(l) : l, r: shuffle(ids(matchRights(d))) }; }
     case 'blanks_select': case 'dictation': return { b: (d.blanks || []).map(bl => shuffle(ids(bl.opts))) };
     case 'letters': { const pool = letterPool(d); const idx = pool.map((_, i) => i); return { o: shuffleDiff(idx, r => r.map(i => pool[i]).join('') === pool.join('')) }; }
     case 'words': { const pool = wordPool(d); const idx = pool.map((_, i) => i); return { o: shuffleDiff(idx, r => r.join() === idx.join()) }; }
@@ -814,7 +817,7 @@ function publicQuestion(q, st) {
     case 'slider': Object.assign(o, { min: d.min, max: d.max, step: d.step, unit: d.unit || '' }); break;
     case 'param': { const p = (st && st.p) || genParams(d.vars); o.text = renderTemplate(q.text, p); o.unit = d.unit || ''; break; }
     case 'order': o.items = orderBy(d.items || [], st && st.o).map(x => ({ id: x.id, text: x.text })); break;
-    case 'match': o.left = orderBy((d.pairs || []).map(p => p.l), st && st.l); o.right = orderBy((d.pairs || []).map(p => p.r).concat(d.distractors || []), st && st.r); break;
+    case 'match': o.left = orderBy((d.pairs || []).map(p => p.l), st && st.l); o.right = orderBy(matchRights(d), st && st.r); break;
     case 'blanks_input': o.parts = d.parts || []; o.blank_count = (d.blanks || []).length; break;
     case 'blanks_select': case 'dictation': o.parts = d.parts || []; o.blanks = (d.blanks || []).map((bl, k) => orderBy(bl.opts, st && st.b && st.b[k]).map(x => ({ id: x.id, text: x.text }))); break;
     case 'find': o.tokens = (d.tokens || []).map(t => t.br ? '\n' : t.t); break;
