@@ -133,7 +133,7 @@ function loginPage() {
       <p class="welcome mut">${esc(s ? s.welcome_text : '')}</p>
       ${msg}
       <p><button class="btn discord" id="loginBtn" ${oauthOk ? '' : 'disabled'}>Войти через Discord</button></p>
-      <p class="small mut">Мы получаем только ваш Discord ID, имя и аватар.</p>
+      <p class="login-note small mut"><svg class="login-note-ic" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 11V8a6 6 0 0 1 12 0v3M5 11h14v10H5z"/></svg><span>Вход идёт через официальную авторизацию Discord. Сайт получает только ваш ник, аватар и Discord ID — пароль, почта, серверы и сообщения нам недоступны.</span></p>
     </div>`);
   $('#loginBtn').onclick = () => {
     const ret = location.origin + location.pathname;

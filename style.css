@@ -184,3 +184,5 @@ pre.code{background:#101413;border:1px solid var(--line);padding:10px;border-rad
 .g-pt summary { cursor: pointer; max-width: 220px; }
 .g-pt label.chk { display: flex; margin: 2px 0; }
 .g-pt[open] { background: rgba(0,0,0,.25); padding: 4px 6px; border-radius: 6px; }
+.login-note{display:flex;gap:8px;align-items:flex-start;justify-content:center;max-width:380px;margin:4px auto 0;line-height:1.45;text-align:left;opacity:.9}
+.login-note-ic{flex:none;margin-top:2px;opacity:.75}
