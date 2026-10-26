@@ -65,7 +65,8 @@ ok('премия СС только старшему составу', c.rows[1].s
 ok('премия СС — тоже только при отчёте в срок', W.computePremiums(cfg, 20000000, [P({ id: 's', senior: true, ss: 500000, late: true, counts: NORMAL })]).rows[0].ss === 0);
 c = W.computePremiums(cfg, 20000000, [P({ id: 'a', position: 'kom_gar', counts: { ...BIG, patrol_city: 30 }, award: 700000, senior: true, ss: 500000, award_budget: 300000 })]);
 ok('лимит 2 000 000 на оклад+премию+доп.+наградную', c.rows[0].base + c.rows[0].add + c.rows[0].award <= 2000000 && c.rows[0].base === 850000 && c.rows[0].add === 400000 && c.rows[0].award === 700000, c.rows[0]);
-ok('премия СС и наградная из бюджета ГУ ВП — сверх лимита', c.rows[0].ss === 500000 && c.rows[0].award_budget === 300000 && c.rows[0].total === 2750000, c.rows[0]);
+ok('премия СС и наградная из бюджета ГУ ВП — сверх лимита', c.rows[0].ss === 500000 && c.rows[0].award_budget === 300000, c.rows[0]);
+ok('итог из фонда отдельно от наградной из бюджета ГУ ВП: 2 450 000 + 300 000 (бюджет)', c.rows[0].total === 2450000 && c.rows[0].total_fund === 2450000 && c.award_budget_total === 300000 && c.paid_from_fund === 2450000, c.rows[0]);
 c = W.computePremiums(cfg, 20000000, [P({ id: 'a', position: 'kom_gar', counts: { ...BIG, patrol_city: 30 }, award: 700000 }), P({ id: 'b', position: 'kom_gar', counts: { ...BIG, patrol_city: 30, soch: 40 }, award: 700000 })]);
 ok('лимит: наградная урезается до 2 000 000 при большой базе', c.rows.every(x => x.base + x.add + x.award <= 2000000));
 const t3 = [P({ id: 'a', counts: NORMAL, award: 400000 }), P({ id: 'b', counts: NORMAL, award: 200000 }), P({ id: 's', counts: NORMAL, senior: true, ss: 300000 })];

@@ -13,12 +13,13 @@
 <link rel="stylesheet" href="style.css?v=2b95db3">
 </head>
 <body>
-<div class="eco-bar"><b>ГУ ВП</b><a href="#" id="ecoReports">Отчёты</a><a href="#/" class="on">Учебный отдел</a><a href="#/admin" id="ecoAdmin" hidden>Админка</a><a href="#/reports" id="ecoLead" hidden>Отчёты и премии</a></div>
 <header class="topbar">
-  <a href="#/" class="brand"><img src="assets/emblem.png" alt="ГУ ВП"><div><div class="t1" id="siteTitle">ГУ ВП — Учебный центр</div><div class="t2">Главное управление Военной полиции</div></div></a>
-  <nav id="nav"></nav>
+  <button type="button" class="burger" id="burger" aria-label="Открыть меню" aria-controls="drawer" aria-expanded="false" hidden><span></span><span></span><span></span></button>
+  <a href="#/" class="brand"><img src="assets/emblem.png" alt="ГУ ВП"><div><div class="t1" id="siteTitle">ГУ ВП — Учебный центр</div><div class="t2" id="secTitle">Главное управление Военной полиции</div></div></a>
   <div id="userbox"></div>
 </header>
+<div class="drawer-ov" id="drawerOv" hidden></div>
+<aside class="drawer" id="drawer" aria-label="Разделы сайта" aria-hidden="true"></aside>
 <main id="app"><div class="loading">Загрузка…</div></main>
 <footer class="foot">ГУ ВП · учебный портал · RMRP «Патрики»</footer>
 <div id="toast" class="toast" hidden></div>
@@ -29,5 +30,6 @@
 <script src="player.js?v=2b95db3"></script>
 <script src="admin.js?v=2b95db3"></script>
 <script src="reports.js?v=2b95db3"></script>
+<script src="portal.js?v=2b95db3"></script>
 </body>
 </html>

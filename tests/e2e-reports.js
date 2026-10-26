@@ -1,6 +1,6 @@
 // E2E «Отчёты и премии»: сайт отчётов (vp-raport-offline, :8081) → вход через Discord (имитация /__test/oauth) → отправка отчёта →
-// руководство (vp-exam, :8080, #/reports): сводная таблица, проверка пунктов, фонд, надбавки, экспорт, нарушения, бюджет, таблицы выплат.
-// Запуск: bash /tmp/reset.sh (wrangler dev :8787, миграции 0001–0007), node serve.js (:8080), SITE_DIR=../vp_raport_offline PORT=8081 node serve.js.
+// руководство (vp-exam, :8080, #/lead): сводная таблица, проверка пунктов, фонд, надбавки, экспорт, нарушения, бюджет, таблицы выплат.
+// Запуск: bash /tmp/reset.sh (wrangler dev :8787, миграции 0001–0008), node serve.js (:8080), SITE_DIR=../vp_raport_offline PORT=8081 node serve.js.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const API = 'http://localhost:8787', SITE = 'http://localhost:8080/', OFF = 'http://localhost:8081/';
@@ -30,7 +30,10 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   // ---------- 1. сайт отчётов: без входа ----------
   await page.goto(OFF + 'otchet.html'); await page.evaluate(() => localStorage.clear()); await page.reload();
   await page.waitForSelector('#ecoBar .eco-in');
-  check('отчёты: общая полоса «ГУ ВП» с разделами', /Отчёты/.test(await page.textContent('#ecoBar')) && /Учебный отдел/.test(await page.textContent('#ecoBar')));
+  check('отчёты: старой полосы нет, есть кнопка-шторка', !(await page.$('.eco-bar')) && !!(await page.$('header.topbar #ecoBurger')));
+  await page.click('#ecoBurger'); await page.waitForFunction(() => document.body.classList.contains('eco-open'));
+  check('шторка сайта бланков: бланки + «Сайт ГУ ВП», без входа — только вход', /Еженедельный отчёт/.test(await page.textContent('#ecoDrawer')) && /Вход на сайт ГУ ВП/.test(await page.textContent('#ecoDrawer')) && !/Учебный отдел/.test(await page.textContent('#ecoDrawer')));
+  await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.body.classList.contains('eco-open'));
   await page.waitForFunction(() => /войдите через Discord/.test(document.getElementById('sendInfo').textContent));
   check('без входа: кнопка «Войти через Discord»', (await page.textContent('#sendBtn')).includes('Войти'));
   // форма
@@ -63,7 +66,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   // имитация успешного входа через Discord: /__test/oauth выдаёт login_code, как /auth/callback
   await page.goto(`${API}/__test/oauth?id=${E1}&name=${encodeURIComponent('ivan_d')}&return=${encodeURIComponent(OFF + 'otchet.html')}`);
   await page.waitForSelector('#ecoBar .eco-out');
-  check('после входа: имя в полосе, кнопка «Отправить отчёт»', /ivan_d/.test(await page.textContent('#ecoBar')) && (await page.textContent('#sendBtn')).includes('Отправить'));
+  check('после входа: имя в шапке, кнопка «Отправить отчёт»', /ivan_d/.test(await page.textContent('#ecoBar')) && (await page.textContent('#sendBtn')).includes('Отправить'));
   check('черновик формы сохранился после входа', (await page.inputValue('.act[data-key=postavka] [data-n]')) === '10' && (await page.inputValue('#fromPos')) === 'Инспектор ВП');
   await page.click('#sendBtn'); await page.waitForFunction(() => /отправлен руководству|Не отправлено/.test(document.getElementById('sendStatus').textContent));
   check('отчёт отправлен', /отправлен руководству/.test(await page.textContent('#sendStatus')), await page.textContent('#sendStatus'));
@@ -96,9 +99,9 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
 
   // ---------- 3. руководство: сводная таблица ----------
   const as = async (tok, hash) => { await page.goto(SITE + '#/'); await page.evaluate(t => localStorage.setItem('vpexam_token', t), tok); await page.reload(); await page.waitForSelector('#logoutBtn'); await page.goto(SITE + '#' + hash); };
-  await as(L, '/reports'); await page.waitForSelector('table.prem');
-  check('руководство: в меню «Отчёты и премии», без «Управления»', /Отчёты и премии/.test(await page.textContent('#nav')) && !/Управление/.test(await page.textContent('#nav')));
-  check('общая полоса на учебном сайте: Отчёты / Учебный отдел', (await page.getAttribute('#ecoReports', 'href')) === OFF + 'otchet.html' && /Учебный отдел/.test(await page.textContent('.eco-bar')));
+  await as(L, '/lead'); await page.waitForSelector('table.prem');
+  check('руководство: в шторке «Руководство», без «Админки»', /Руководство/.test(await page.textContent('#drawer')) && !/Админка/.test(await page.textContent('#drawer')), await page.textContent('#drawer'));
+  check('учебный сайт: верхней полосы ссылок нет, есть бургер', !(await page.$('.eco-bar')) && !(await page.$('#nav')) && await page.isVisible('#burger'));
   const rowTxt = async (uid) => page.textContent(`tr[data-uid="${uid}"]`);
   check('таблица: сотрудник с отчётом — нормальный план, база 499 000 (220 000 + 279 000)', /Нормальный/.test(await rowTxt(E1)) && /499\s000/.test(await rowTxt(E1)), await rowTxt(E1));
   check('таблица: сотрудник состава без отчёта — подсвечен «Нет отчёта»', (await page.getAttribute(`tr[data-uid="${E2}"]`, 'class')).includes('r-missing') && /Нет отчёта/.test(await rowTxt(E2)));
@@ -127,7 +130,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   check('экспорт XLSX: корректный zip, лист с данными', /^None\nTrue/.test(xl), xl.slice(0, 200));
 
   // ---------- 4. проверка отчёта по пунктам ----------
-  await page.click(`tr[data-uid="${E1}"] a[href^="#/reports/report/"]`); await page.waitForSelector('.ritem');
+  await page.click(`tr[data-uid="${E1}"] a[href^="#/lead/report/"]`); await page.waitForSelector('.ritem');
   check('отчёт: ссылки-доказательства кликабельны', (await page.$$eval('.ritem[data-key=postavka] .links a', a => a.map(x => x.href))).join() === 'https://disk.yandex.ru/d/post1,https://disk.yandex.ru/d/post2');
   await page.fill('.ritem[data-key=pmp] .icom', 'нет бодикамеры'); await page.click('.ritem[data-key=pmp] .i-rej');
   await page.waitForSelector('.ritem.rej[data-key=pmp]');
@@ -151,7 +154,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   check('сотрудник видит «принят» и комментарий', /принят/.test(await page.textContent('#sendInfo')) && /Принято, молодец/.test(await page.textContent('#sendInfo')));
 
   // ---------- 6. нарушения ----------
-  await as(L, '/reports/violations'); await page.waitForSelector('table');
+  await as(L, '/lead/violations'); await page.waitForSelector('table');
   const vrow = async () => page.textContent(`tr:has(button[data-u="${E2}"])`);
   check('нарушения: 3 недели без отчёта → увольнение', /увольнение/.test(await vrow()), await vrow());
   await page.click(`button[data-u="${E2}"][data-e="1"]`); await page.waitForTimeout(600);
@@ -159,7 +162,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   r = await call('GET', '/api/lead/violations', L); check('сотрудник со сданным отчётом без нарушений', r.d.users.find(u => u.user_id === E1).strikes === 0, r.d.users);
 
   // ---------- 7. бюджет ГУ ВП ----------
-  await as(L, '/reports/budget'); await page.waitForSelector('#bf');
+  await as(L, '/lead/budget'); await page.waitForSelector('#bf');
   check('СС без взноса за неделю помечен', /не внесено/.test(await page.textContent('.card.flat:nth-child(2)')));
   await page.selectOption('#bf [name=kind]', 'contribution'); await page.fill('#bf [name=amount]', '150000'); await page.selectOption('#bf [name=user_id]', E2); await page.click('#bf button');
   await page.waitForFunction(() => /внесено/.test(document.body.textContent) && !/не внесено/.test(document.querySelector('.card.flat:nth-child(2)').textContent));
@@ -174,7 +177,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   r = await call('GET', '/api/admin/audit?limit=50', A); check('журнал: операции бюджета и премий', r.status === 200 && JSON.stringify(r.d).includes('budget.add') && JSON.stringify(r.d).includes('prem.manual'));
 
   // ---------- 8. таблицы выплат (главный администратор) ----------
-  await as(A, '/reports/config'); await page.waitForSelector('#tPos');
+  await as(A, '/lead/config'); await page.waitForSelector('#tPos');
   check('таблицы: 7 должностей, план 6 строк, 42 пункта', (await page.$$('#tPos tr')).length === 8 && (await page.$$('#tPlan tr[data-key]')).length === 6 && (await page.$$('#tItems tr[data-key]')).length === 42);
   check('план: «мероприятия внутри ВС РФ» — МП, тренировка, профилактика (без ГМП)', /Организовать МП, Проведение тренировки для военнослужащих, Организация профилактического мероприятия/.test(await page.textContent('#tPlan tr[data-key=event]')) && !/ГМП/.test(await page.textContent('#tPlan tr[data-key=event] summary')));
   await page.fill('#tItems tr[data-key=postavka] [data-f=pay]', '13500'); await page.click('[data-save=items]'); await page.waitForTimeout(600);
@@ -187,11 +190,11 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   await page.check('#leader'); await page.waitForTimeout(600);
   r = await call('GET', '/api/me', t3); check('чекбокс «Руководство ГУ ВП» на странице пользователя', r.d.user.leader === true);
   await page.goto(OFF + 'otchet.html'); await page.evaluate(t => localStorage.setItem('vpexam_token', t), L); await page.reload(); await page.waitForSelector('#ecoBar .eco-out');
-  check('сайт отчётов: руководству видна ссылка «Отчёты и премии»', /Отчёты и премии/.test(await page.textContent('#ecoBar')));
+  check('сайт отчётов: руководству в шторке видна ссылка «Руководство: отчёты»', /Руководство: отчёты/.test(await page.textContent('#ecoDrawer')) && (await page.getAttribute('#ecoDrawer a[href$="#/lead"]', 'href')) === SITE + '#/lead');
   // мобильный вид
   const m = await b.newPage({ viewport: { width: 390, height: 800 } }); await m.goto(OFF + 'otchet.html'); await m.waitForSelector('#ecoBar');
-  check('мобильный: полоса «ГУ ВП» помещается в ширину (сайт отчётов)', await m.evaluate(() => { const e = document.getElementById('ecoBar'); return e.scrollWidth <= e.clientWidth + 1 && e.clientWidth <= innerWidth; }));
-  await m.goto(SITE + '#/'); await m.waitForSelector('.eco-bar');
+  check('мобильный: шапка сайта отчётов помещается в ширину', await m.evaluate(() => { const e = document.querySelector('header.topbar'); return e.scrollWidth <= e.clientWidth + 1 && e.getBoundingClientRect().right <= innerWidth + 1; }));
+  await m.goto(SITE + '#/'); await m.waitForSelector('.login, #burger:not([hidden])');
   check('мобильный: учебный сайт без горизонтальной прокрутки', await m.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await m.screenshot({ path: SHOTS + 'rep-mobile.png' }); await m.close();
   check('нет ошибок JS на страницах', errs.length === 0, errs);

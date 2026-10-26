@@ -20,8 +20,11 @@ const STATUS_RU = {
   watched: ['Просмотрена', 'ok'], not_started: ['Не начата', ''], locked: ['Закрыта', 'lock'],
 };
 function badge(st) { const x = STATUS_RU[st] || [st, '']; return `<span class="badge ${x[1]}">${esc(x[0])}</span>`; }
-const ROLE_RU = { candidate: 'Кандидат', examiner: 'Проверяющий', admin: 'Администратор' };
-function isLeadUser() { return !!(App.me && (App.me.leader || App.me.super)); }
+const ROLE_RU = { candidate: 'Пользователь', examiner: 'Проверяющий', admin: 'Администратор' };
+// Роли доступа (сервер присылает caps): vp, reatt, examiner, admin, lead, super. Проверка — на сервере, здесь только меню.
+function can(c) { return !!(App.me && App.me.caps && App.me.caps[c]); }
+function isLeadUser() { return can('lead'); }
+const CAP_RU = { vp: '«ВП»', reatt: '«Переаттестация»', examiner: '«Проверяющий» или «Администратор»', admin: '«Администратор»', lead: '«Руководство ГУ ВП»' };
 
 async function api(method, path, body) {
   const h = {};
@@ -44,9 +47,10 @@ async function render() {
   renderHeader();
   if (!App.me && path !== '/') { location.hash = '#/'; return; }
   for (const r of App.routes) {
-    const m = r.re.exec(path);
+    const m = r.re.exec(path.split("?")[0]);
     if (!m) continue;
     if (r.opts.role && !hasRole(r.opts.role)) { setView('<div class="alert err">Недостаточно прав для этого раздела.</div>'); return; }
+    if (r.opts.cap && !can(r.opts.cap)) { setView(noAccess(r.opts.cap)); return; }
     const mine = ++App.seq;
     try { await r.fn(...m.slice(1).map(decodeURIComponent)); }
     catch (e) { if (mine === App.seq) setView(`<div class="alert err">${esc(e.message)}</div><a class="btn" href="#/">На главную</a>`); }
@@ -58,20 +62,65 @@ async function render() {
   setView('<div class="alert warn">Страница не найдена.</div><a class="btn" href="#/">На главную</a>');
 }
 function hasRole(role) { const l = { candidate: 0, examiner: 1, admin: 2 }; return App.me && (l[App.me.role] || 0) >= l[role]; }
+function noAccess(c) { return `<div class="card noacc"><h2>Раздел недоступен</h2><p>Этот раздел открывается с ролью ${CAP_RU[c] || ''}. Роли назначает администратор — обратитесь к руководству ГУ ВП.</p>
+  <p class="small mut">Без ролей доступны «База данных» и «Личные дела».</p><div class="row"><a class="btn" href="#/">На главную</a><a class="btn" href="#/docs">База данных</a><a class="btn" href="#/people">Личные дела</a></div></div>`; }
+// Разделы сайта (шторка): [путь, название, иконка, нужная роль (null — всем, кто вошёл), подпись]
+const MENU = [
+  ['/', 'Главная', '⌂', null],
+  ['/study', 'Учебный отдел', '🎓', 'vp', 'курсы, лекции, экзамены'],
+  ['/reatt', 'Переаттестация', '📋', 'reatt'],
+  ['/reports', 'Отчёты', '📝', 'vp', 'еженедельный отчёт'],
+  ['/premiums', 'Премирование', '₽', 'vp', 'премии недели'],
+  ['/promo', 'Система повышения', '⭐', 'vp'],
+  ['/docs', 'База данных', '📚', null, 'документация'],
+  ['/people', 'Личные дела', '🗂', null],
+  ['/lead', 'Руководство', '🛡', 'lead', 'проверка отчётов, фонд, бюджет'],
+  ['/admin', 'Админка', '⚙', 'examiner'],
+  ['/profile', 'Профиль', '👤', null],
+];
+const MENU_ALIAS = { '/lectures': '/study', '/lecture': '/study', '/exams': '/study', '/exam': '/study', '/course': '/study', '/attempt': '/study', '/doc': '/docs', '/doc-edit': '/docs', '/person': '/people' };
+function menuActive(path) {
+  const top = '/' + (path.split('/')[1] || '').split('?')[0];
+  const t = MENU_ALIAS[top] || top;
+  return t === '/' ? '/' : t;
+}
+function openDrawer(open) {
+  const d = $('#drawer'), ov = $('#drawerOv'), b = $('#burger');
+  document.body.classList.toggle('drawer-open', open);
+  d.setAttribute('aria-hidden', open ? 'false' : 'true'); ov.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) { const a = d.querySelector('a.on') || d.querySelector('a'); if (a) a.focus({ preventScroll: true }); }
+}
 function renderHeader() {
   const s = App.config && App.config.settings;
   if (s) { $('#siteTitle').textContent = s.site_title; document.title = s.site_title; }
-  const path = (location.hash || '#/').slice(1);
-  const link = (href, txt) => `<a href="#${href}" class="${(href === '/' ? path === '/' : path.startsWith(href)) ? 'on' : ''}">${txt}</a>`;
-  const er = $('#ecoReports'); if (er) er.href = CFG.REPORTS_URL;
-  const ea = $('#ecoAdmin'); if (ea) ea.hidden = !hasRole('examiner');
-  const el = $('#ecoLead'); if (el) el.hidden = !isLeadUser();
-  if (!App.me) { $('#nav').innerHTML = ''; $('#userbox').innerHTML = ''; return; }
-  $('#nav').innerHTML = link('/', 'Главная') + link('/lectures', 'Лекции') + link('/exams', 'Экзамены') + link('/reatt', 'Переаттестация') + link('/profile', 'Профиль') + (hasRole('examiner') ? link('/admin', 'Управление') : '') + (isLeadUser() ? link('/reports', 'Отчёты и премии') : '');
+  const path = (location.hash || '#/').slice(1) || '/';
+  const burger = $('#burger'), drawer = $('#drawer');
+  if (!App.me) { $('#userbox').innerHTML = ''; burger.hidden = true; drawer.innerHTML = ''; openDrawer(false); $('#secTitle').textContent = 'Главное управление Военной полиции'; return; }
+  const act = menuActive(path);
+  const items = MENU.filter(m => !m[3] || can(m[3]));
+  const cur = MENU.find(m => m[0] === act);
+  $('#secTitle').textContent = cur && cur[0] !== '/' ? cur[1] : 'Главное управление Военной полиции';
   const u = App.me;
-  $('#userbox').innerHTML = `${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : ''}<span>${esc(userName(u))}</span><button class="btn sm" id="logoutBtn">Выйти</button>`;
+  drawer.innerHTML = `<div class="drawer-head"><img src="assets/emblem.png" alt=""><div><b>ГУ ВП</b><div class="small mut">${esc(userName(u))}${u.rank ? ' · ' + esc(u.rank) : ''}</div></div>
+      <button type="button" class="drawer-x" id="drawerX" aria-label="Закрыть меню">✕</button></div>
+    <nav class="drawer-nav">${items.map(m => `<a href="#${m[0]}" class="${m[0] === act ? 'on' : ''}"><i>${m[2]}</i><span>${esc(m[1])}${m[4] ? `<small>${esc(m[4])}</small>` : ''}</span></a>`).join('')}</nav>
+    <div class="drawer-foot">${can('vp') ? `<a href="${esc(CFG.REPORTS_URL.replace(/otchet\.html$/, ''))}" target="_blank" rel="noopener">Сайт бланков ↗</a>` : ''}
+      <div class="small mut">${rolesText(u)}</div></div>`;
+  burger.hidden = false;
+  burger.onclick = () => openDrawer(!document.body.classList.contains('drawer-open'));
+  $('#drawerOv').onclick = () => openDrawer(false);
+  $('#drawerX').onclick = () => openDrawer(false);
+  drawer.querySelectorAll('a[href^="#"]').forEach(a => a.addEventListener('click', () => openDrawer(false)));
+  $('#userbox').innerHTML = `<a href="#/profile" class="ub-me" title="Профиль">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : ''}<span>${esc(userName(u))}</span></a><button class="btn sm" id="logoutBtn">Выйти</button>`;
   $('#logoutBtn').onclick = async () => { try { await api('POST', '/api/logout'); } catch (_) {} localStorage.removeItem(TOKEN_KEY); App.me = null; location.hash = '#/'; render(); };
 }
+function rolesText(u) {
+  const r = [];
+  if (u.super) r.push('Главный администратор'); else if (u.role === 'admin') r.push('Администратор'); else if (u.role === 'examiner') r.push('Проверяющий');
+  if (u.leader) r.push('Руководство ГУ ВП'); if (u.vp) r.push('ВП'); if (u.reatt) r.push('Переаттестация');
+  return r.length ? 'Роли: ' + r.join(', ') : 'Ролей пока нет';
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) { openDrawer(false); $('#burger').focus(); } });
 
 // ---------- старт ----------
 async function boot() {
@@ -109,19 +158,7 @@ async function checkVersion() {
 // ---------- страницы кандидата ----------
 route('/', async () => {
   if (!App.me) return loginPage();
-  const s = App.config ? App.config.settings : {};
-  const [L, E] = await Promise.all([api('GET', '/api/lectures'), api('GET', '/api/exams')]);
-  const done = L.lectures.filter(l => l.status === 'watched').length;
-  setView(`
-    <div class="card"><h1>${esc(s.site_title || 'Учебный центр')}</h1><div class="welcome">${esc(s.welcome_text || '')}</div></div>
-    <div class="grid">
-      <div class="card flat"><h3>Лекции</h3><div class="stat"><b>${done} / ${L.lectures.length}</b>просмотрено</div>
-        <p><a class="btn" href="#/lectures">К лекциям</a></p></div>
-      <div class="card flat"><h3>Экзамен</h3>${E.exams.length ? E.exams.map(e => `<div class="row between" style="margin-bottom:8px"><span>${esc(e.title)}</span>${examBadge(e)}</div>`).join('') : '<p class="mut">Экзамен пока не опубликован.</p>'}
-        <p><a class="btn" href="#/exams">К экзаменам</a></p></div>
-      <div class="card flat"><h3>Переаттестация</h3><p class="mut small">Вопросы выбираются случайно в каждой попытке.</p><p><a class="btn" href="#/reatt">К переаттестации</a></p></div>
-      <div class="card flat"><h3>Профиль</h3><p class="mut small">${App.me.ic_name ? 'Игровое имя: ' + esc(App.me.ic_name) : 'Укажите игровое имя и статик, чтобы проверяющему было проще вас найти.'}</p><p><a class="btn" href="#/profile">Открыть</a></p></div>
-    </div>`);
+  return homePage();
 });
 
 function loginPage() {
@@ -167,17 +204,18 @@ route('/lectures', async () => {
   setView(`<h1>Лекции</h1>
     ${L.all_required_done && L.lectures.length ? '<div class="alert ok">Все обязательные лекции просмотрены. Какие лекции нужны для каждого экзамена — смотрите в разделе «Экзамены».</div>' : `<p class="mut">${App.config && App.config.settings && App.config.settings.sequential_lectures ? 'Лекции открываются по порядку. ' : ''}Перематывать вперёд нельзя — лекция засчитывается после полного просмотра. Для каждого экзамена нужны свои лекции — список есть в разделе «Экзамены».</p>`}
     ${items || '<div class="alert info">Лекции пока не добавлены.</div>'}`);
-});
+}, { cap: 'vp' });
 
 route('/lecture/:id', async (id) => {
   const { lecture: l } = await api('GET', '/api/lectures/' + encodeURIComponent(id));
-  setView(`<p><a href="#/lectures">← Все лекции</a></p>
+  const back = l.course_id ? `#/course/${l.course_id}` : '#/study';
+  setView(`<p><a href="${back}">← К курсу</a></p>
     <h1>${esc(l.title)}</h1>
     <div id="playerBox"></div>
     <div class="pmsg" id="pmsg"></div>
     ${l.description ? `<div class="card flat" style="margin-top:14px"><div class="welcome">${esc(l.description)}</div></div>` : ''}`);
   window.VPPlayer.mount($('#playerBox'), l, $('#pmsg'));
-});
+}, { cap: 'vp' });
 
 route('/exams', async () => {
   const E = await api('GET', '/api/exams');
@@ -187,7 +225,7 @@ route('/exams', async () => {
       <p class="mut small">${examMeta(e)}</p>
       ${examLecturesHtml(e)}
       <a class="btn" href="#/exam/${e.id}">Подробнее</a></div>`).join('') || '<div class="alert info">Экзамены пока не опубликованы.</div>'}`);
-});
+}, { cap: 'vp' });
 // Блок «какие лекции нужны для этого экзамена»: просмотренные и оставшиеся (со ссылками).
 function examLecturesHtml(e) {
   const ls = e.lectures || [];
@@ -210,7 +248,7 @@ function examMeta(e) {
 route('/exam/:id', async (id) => {
   const { exam: e } = await api('GET', '/api/exams/' + encodeURIComponent(id));
   const atts = e.attempts.map(a => `<tr class="click" data-href="#/attempt/${a.id}"><td>#${a.id}</td><td>${fmtDate(a.started_at)}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td></tr>`).join('');
-  setView(`<p><a href="#/exams">← Экзамены</a></p>
+  setView(`<p><a href="#/course/${e.course_id || 0}">← К курсу</a></p>
     <div class="card"><h1>${esc(e.title)}</h1>
       ${e.description ? `<div class="welcome">${esc(e.description)}</div>` : ''}
       <p class="mut small">${examMeta(e)}</p>
@@ -228,7 +266,7 @@ route('/exam/:id', async (id) => {
     try { const r = await api('POST', `/api/exams/${e.id}/start`); location.hash = '#/attempt/' + r.attempt_id; }
     catch (err) { toast(err.message, true); sb.disabled = false; }
   };
-});
+}, { cap: 'vp' });
 
 route('/attempt/:id', async (id) => {
   const { attempt: a } = await api('GET', '/api/attempts/' + encodeURIComponent(id));
@@ -327,27 +365,7 @@ route('/reatt', async () => {
     try { const r = await api('POST', `/api/reatt/${b.dataset.v}/start`); location.hash = '#/attempt/' + r.attempt_id; }
     catch (err) { toast(err.message, true); b.disabled = false; }
   });
-});
+}, { cap: 'reatt' });
 
-route('/profile', async () => {
-  const u = App.me;
-  const { attempts } = await api('GET', '/api/my/attempts');
-  setView(`<h1>Профиль</h1>
-    <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:64px;height:64px;border-radius:50%;border:2px solid var(--gold)">` : ''}
-      <div><div><b>${esc(u.global_name || u.username)}</b> <span class="mut">@${esc(u.username)}</span></div><div class="small mut">Discord ID: ${esc(u.id)} · ${esc(ROLE_RU[u.role] || u.role)}${u.super ? ' (главный)' : ''}</div></div></div>
-      <form id="pf" style="margin-top:16px"><div class="fgrid">
-        <label class="f"><span>Игровое имя (Имя Фамилия)</span><input name="ic_name" maxlength="100" value="${esc(u.ic_name)}"></label>
-        <label class="f"><span>Статик</span><input name="static_id" maxlength="30" value="${esc(u.static_id)}"></label>
-        <label class="f"><span>Звание</span><input name="rank" maxlength="60" value="${esc(u.rank)}"></label></div>
-        <button class="btn gold">Сохранить</button></form></div>
-    <div class="card flat"><h3>Мои попытки</h3>${attempts.length ? `<table><tr><th>№</th><th>Экзамен</th><th>Дата</th><th>Статус</th><th>Результат</th></tr>${attempts.map(a => `<tr class="click" data-href="#/attempt/${a.id}"><td>#${a.id}</td><td>${esc(a.title)}</td><td>${fmtDate(a.submitted_at || a.started_at)}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : '<p class="mut">Попыток пока нет.</p>'}</div>`);
-  $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; });
-  $('#pf').onsubmit = async (ev) => {
-    ev.preventDefault();
-    const f = new FormData(ev.target);
-    try { App.me = (await api('PUT', '/api/me', Object.fromEntries(f))).user; renderHeader(); toast('Профиль сохранён'); }
-    catch (e) { toast(e.message, true); }
-  };
-});
 
 document.addEventListener('DOMContentLoaded', boot);

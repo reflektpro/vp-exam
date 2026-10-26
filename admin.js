@@ -1,8 +1,8 @@
 /* Панель управления (администратор / проверяющий). Права проверяются на сервере. */
 'use strict';
 function adminNav(active) {
-  const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Кандидаты', 'examiner'],
-    ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
+  const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Пользователи и роли', 'examiner'],
+    ['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
   return `<div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
 }
 function formObj(form) {
@@ -14,6 +14,16 @@ function formObj(form) {
     else o[el.name] = el.value;
   }
   return o;
+}
+const PROFILE_RU = { ic_name: 'Имя Фамилия', rank: 'звание', static_id: 'статик', position: 'должность' };
+function roleBadges(u) {
+  const b = [];
+  if (u.super) b.push('<span class="badge gold">Главный админ ★</span>'); else if (u.role === 'admin') b.push('<span class="badge gold">Администратор</span>'); else if (u.role === 'examiner') b.push('<span class="badge info">Проверяющий</span>');
+  if (u.leader) b.push('<span class="badge gold">Руководство</span>'); if (u.vp) b.push('<span class="badge ok">ВП</span>'); if (u.reatt) b.push('<span class="badge">Переаттестация</span>');
+  return b.join(' ') || '<span class="small mut">нет ролей</span>';
+}
+function courseSelect(courses, cur) {
+  return `<label class="f"><span>Курс (раздел «Учебный отдел»)</span><select name="course_id"><option value="">— без курса —</option>${courses.map(c => `<option value="${c.id}" ${c.id === cur ? 'selected' : ''}>${esc(c.title)}${c.published ? '' : ' (скрыт)'}</option>`).join('')}</select></label>`;
 }
 function bindRows() { $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; }); }
 const yes = v => v ? '✔' : '—';
@@ -52,7 +62,7 @@ async function quickPublish(kind, id, pub, errBox) {
 
 route('/admin', async () => {
   const s = await api('GET', '/api/admin/stats');
-  setView(`<h1>Управление</h1>${adminNav('/admin')}
+  setView(`<h1>Админка</h1>${adminNav('/admin')}
     <div class="grid">
       <div class="stat"><b>${s.pending_review}</b>попыток ждут проверки</div>
       <div class="stat"><b>${s.users}</b>пользователей</div>
@@ -64,9 +74,10 @@ route('/admin', async () => {
       <div class="stat"><b>${s.reatt_pending} / ${s.reatt_total}</b>переаттестаций ждут проверки / всего</div>
     </div>
     ${hasRole('admin') ? `<div class="card flat" style="margin-top:18px"><h3>Как наполнить сайт</h3><ol class="small">
-      <li>«Лекции» → «Добавить лекцию»: название, ссылка на видео (mp4/webm), длительность (кнопка «Определить по видео»), порядок, «Опубликована».</li>
-      <li>«Экзамены» → «Создать экзамен»: параметры, затем вопросы (один ответ / несколько / краткий / развёрнутый). Опубликуйте экзамен.</li>
-      <li>В каждом экзамене блок «Обязательные лекции»: все опубликованные лекции (по умолчанию), только выбранные или без лекций. Экзамен открывается кандидату, когда просмотрены его лекции.</li>
+      <li>«Курсы» → «Создать курс»: название, описание, какие лекции (по порядку) и какой экзамен входят в курс. В «Учебном отделе» курс — это лекции и экзамен в конце.</li>
+      <li>«Лекции» → «Добавить лекцию»: название, курс, ссылка на видео (YouTube или mp4/webm), длительность (кнопка «Определить по видео»), «Опубликована».</li>
+      <li>«Экзамены» → «Создать экзамен»: курс, параметры, затем вопросы. Опубликуйте экзамен. По умолчанию экзамен курса открывается после обязательных лекций своего курса.</li>
+      <li>«Пользователи и роли»: роли «ВП» (учебный отдел, отчёты, премирование), «Переаттестация», «Руководство ГУ ВП», «Проверяющий», «Администратор»; профиль сотрудника (имя, звание, статик).</li>
       <li>Попытки с ответами на ручную проверку (свободная форма, кейсы, файлы, голосовые) попадают в «Проверка».</li>
       <li>«Банк вопросов» — вопросы и кейсы переаттестации по категориям (ПК, УК, ВУ…), импорт JSON. «Переаттестация» — квоты обеих версий.</li></ol></div>` : ''}`);
 });
@@ -90,13 +101,15 @@ route('/admin/lectures', async () => {
 
 route('/admin/lecture/:id', async (id) => {
   const isNew = id === 'new';
-  let l = { title: '', description: '', video_url: '', duration_sec: 0, required: 1, published: 0 };
-  if (!isNew) { const { lectures } = await api('GET', '/api/admin/lectures'); l = lectures.find(x => String(x.id) === id); if (!l) throw new Error('Лекция не найдена'); }
+  let l = { title: '', description: '', video_url: '', duration_sec: 0, required: 1, published: 0, course_id: Number(new URLSearchParams(location.hash.split('?')[1] || '').get('course')) || null };
+  const [{ courses }, LL] = await Promise.all([api('GET', '/api/admin/courses'), isNew ? null : api('GET', '/api/admin/lectures')]);
+  if (!isNew) { l = LL.lectures.find(x => String(x.id) === id); if (!l) throw new Error('Лекция не найдена'); }
   const saved = sessionStorage.getItem('vp_saved_msg'); sessionStorage.removeItem('vp_saved_msg');
   setView(`<p><a href="#/admin/lectures">← Лекции</a></p><h1>${isNew ? 'Новая лекция' : 'Лекция: ' + esc(l.title)}</h1>
     ${saved ? `<div class="alert ok">${esc(saved)}</div>` : ''}
     <form class="card" id="lf" novalidate>
       <label class="f"><span>Название *</span><input name="title" maxlength="200" value="${esc(l.title)}"></label>
+      ${courseSelect(courses, l.course_id)}
       <label class="f"><span>Описание (показывается под видео)</span><textarea name="description" maxlength="10000">${esc(l.description)}</textarea></label>
       <label class="f"><span>Ссылка на видео: YouTube (можно «По ссылке») или прямая ссылка на файл .mp4/.webm, либо путь на сайте videos/lecture1.mp4</span><input name="video_url" maxlength="1000" value="${esc(l.video_url)}" placeholder="https://www.youtube.com/watch?v=…"></label>
       <div class="small" id="vinfo" style="margin:-6px 0 12px"></div>
@@ -180,7 +193,7 @@ route('/admin/exams', async () => {
 function examLecSummary(e) {
   let main;
   if (e.lecture_mode === 'none') main = '<span class="mut">не нужны — открыт сразу</span>';
-  else if (e.lecture_mode === 'all') main = `все опубликованные <span class="mut">(${e.effective_lecture_count})</span>`;
+  else if (e.lecture_mode === 'all') main = `${e.course_id ? 'обязательные лекции курса' : 'все опубликованные'} <span class="mut">(${e.effective_lecture_count})</span>`;
   else {
     const ls = e.required_lectures || [];
     const names = ls.slice(0, 3).map(l => l.deleted ? `<s class="mut">#${l.id}</s>` : esc(l.title) + (l.published ? '' : ' <span class="badge warn">черновик</span>'));
@@ -192,12 +205,14 @@ const QTYPE_RU = window.QT.LABELS;
 route('/admin/exam/:id', async (id) => {
   const isNew = id === 'new';
   let e = { title: '', description: '', time_limit_min: 30, max_attempts: 3, cooldown_min: 60, pass_pct: 70, shuffle_questions: 1, shuffle_options: 1, requires_lectures: 1, lecture_mode: 'all', required_lecture_ids: [], published: 0 }, qs = [];
-  const [er, lr] = await Promise.all([isNew ? null : api('GET', '/api/admin/exams/' + encodeURIComponent(id)), api('GET', '/api/admin/lectures')]);
+  const [er, lr, cr] = await Promise.all([isNew ? null : api('GET', '/api/admin/exams/' + encodeURIComponent(id)), api('GET', '/api/admin/lectures'), api('GET', '/api/admin/courses')]);
   if (er) { e = er.exam; qs = er.questions; }
+  if (isNew) e.course_id = Number(new URLSearchParams(location.hash.split('?')[1] || '').get('course')) || null;
   const allLec = lr.lectures;
   setView(`<p><a href="#/admin/exams">← Экзамены</a></p><h1>${isNew ? 'Новый экзамен' : 'Экзамен: ' + esc(e.title)}</h1>
     <form class="card" id="ef">
       <label class="f"><span>Название *</span><input name="title" maxlength="200" required value="${esc(e.title)}"></label>
+      ${courseSelect(cr.courses, e.course_id)}
       <label class="f"><span>Описание / инструкция для кандидата</span><textarea name="description" maxlength="10000">${esc(e.description)}</textarea></label>
       <div class="fgrid">
         <label class="f"><span>Лимит времени, мин (0 — без лимита)</span><input type="number" name="time_limit_min" min="0" max="1440" value="${e.time_limit_min}"></label>
@@ -241,7 +256,7 @@ function reqLecturesBlock(e, lectures) {
   const missing = (e.required_lectures || []).filter(l => l.deleted);
   return `<fieldset class="reqbox" id="reqbox"><legend>Обязательные лекции</legend>
     <div class="small mut" style="margin-bottom:6px">Какие лекции кандидат должен досмотреть, чтобы открыть <b>этот</b> экзамен.</div>
-    <label class="chk" style="margin-bottom:4px"><input type="checkbox" id="reqAll" ${all ? 'checked' : ''}> <span><b>Все опубликованные лекции</b> <span class="small mut">— по умолчанию, как раньше: все опубликованные лекции с отметкой «Обязательная», включая будущие</span></span></label>
+    <label class="chk" style="margin-bottom:4px"><input type="checkbox" id="reqAll" ${all ? 'checked' : ''}> <span><b>Все обязательные лекции курса</b> <span class="small mut">— по умолчанию: опубликованные лекции курса этого экзамена с отметкой «Обязательная», включая будущие (экзамен без курса — все обязательные лекции сайта)</span></span></label>
     <div class="small mut" style="margin:8px 0 0">или отметьте только нужные:</div>
     ${lectures.length ? `<div class="reqlist ${all ? 'off' : ''}" id="reqList">${lectures.map((l, i) => `<label class="chk"><input type="checkbox" class="reql" value="${l.id}" ${sel.has(l.id) ? 'checked' : ''} ${all ? 'disabled' : ''}>
       <span>${i + 1}. ${esc(l.title)} ${l.published ? '' : '<span class="badge warn">черновик</span>'}${l.required ? '' : ' <span class="badge">необязательная</span>'}</span></label>`).join('')}</div>` : '<div class="small mut">Лекций пока нет.</div>'}
@@ -505,11 +520,11 @@ route('/admin/reatt/:id', async (id) => {
 route('/admin/users', async () => {
   const q = new URLSearchParams((location.hash.split('?')[1]) || '').get('q') || '';
   const r = await api('GET', '/api/admin/users?q=' + encodeURIComponent(q));
-  setView(`<h1>Кандидаты и сотрудники</h1>${adminNav('/admin/users')}
+  setView(`<h1>Пользователи и роли</h1>${adminNav('/admin/users')}
     <form class="row" id="sf" style="margin-bottom:14px"><input name="q" value="${esc(q)}" placeholder="Поиск: Discord ID, ник, игровое имя, статик" style="max-width:420px"><button class="btn">Найти</button></form>
-    <table><tr><th>Пользователь</th><th>Игровое имя / статик</th><th>Роль</th><th>Лекции</th><th>Попытки</th><th>Последний вход</th></tr>
+    <table><tr><th>Пользователь</th><th>Игровое имя / статик</th><th>Роли</th><th>Лекции</th><th>Попытки</th><th>Последний вход</th></tr>
     ${r.users.map(u => `<tr class="click" data-href="#/admin/user/${u.id}"><td>${esc(u.global_name || u.username)}<div class="small mut">${esc(u.id)}</div></td><td>${esc(u.ic_name || '—')}<div class="small mut">${esc(u.static_id)}</div></td>
-      <td>${esc(ROLE_RU[u.role])}${u.super ? ' ★' : ''}${u.leader ? ' <span class="badge gold">Руководство</span>' : ''}${u.blocked ? ' <span class="badge err">заблокирован</span>' : ''}</td><td>${u.lectures_watched} / ${r.lectures_total}</td><td>${u.attempt_count} ${u.last_status ? badge(u.last_status) : ''}</td><td>${fmtDate(u.last_login_at)}</td></tr>`).join('')}</table>`);
+      <td>${roleBadges(u)}${u.blocked ? ' <span class="badge err">заблокирован</span>' : ''}</td><td>${u.lectures_watched} / ${r.lectures_total}</td><td>${u.attempt_count} ${u.last_status ? badge(u.last_status) : ''}</td><td>${fmtDate(u.last_login_at)}</td></tr>`).join('')}</table>`);
   $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/admin/users?q=' + encodeURIComponent(ev.target.q.value); };
   bindRows();
 }, { role: 'examiner' });
@@ -518,14 +533,26 @@ route('/admin/users\\?.*', () => App.routes.find(r => r.p === '/admin/users').fn
 route('/admin/user/:id', async (id) => {
   const r = await api('GET', '/api/admin/users/' + encodeURIComponent(id));
   const u = r.user, adm = hasRole('admin');
-  setView(`<p><a href="#/admin/users">← Кандидаты</a></p>
-    <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:56px;height:56px;border-radius:50%">` : ''}<div><h2 style="margin:0">${esc(u.global_name || u.username)}</h2>
+  setView(`<p><a href="#/admin/users">← Пользователи</a></p>
+    <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:56px;height:56px;border-radius:50%">` : ''}<div><h2 style="margin:0">${esc(u.ic_name || u.global_name || u.username)}</h2>
       <div class="small mut">@${esc(u.username)} · Discord ID ${esc(u.id)} · создан ${fmtDate(u.created_at)} · вход ${fmtDate(u.last_login_at)}</div>
-      <div>Игровое имя: <b>${esc(u.ic_name || '—')}</b> · Статик: <b>${esc(u.static_id || '—')}</b> · Звание: <b>${esc(u.rank || '—')}</b></div></div></div>
-      ${adm ? `<div class="row" style="margin-top:14px"><label>Роль: <select id="role" ${u.super ? 'disabled' : ''} style="width:auto">${['candidate', 'examiner', 'admin'].map(x => `<option value="${x}" ${u.role === x ? 'selected' : ''}>${ROLE_RU[x]}</option>`).join('')}</select></label>
-        ${u.super ? '<span class="small mut">главный администратор (ADMIN_IDS)</span>' : ''}
-        <button class="btn sm" id="blk" ${u.super ? 'disabled' : ''}>${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
-        <label class="chk" style="margin:0"><input type="checkbox" id="leader" ${u.leader ? 'checked' : ''}> Руководство ГУ ВП <span class="small mut">(отчёты, премии, бюджет)</span></label></div>` : (u.leader ? '<p><span class="badge gold">Руководство ГУ ВП</span></p>' : '')}</div>
+      <div>${roleBadges(u)}</div></div></div>
+      ${adm ? `<h3 style="margin-top:16px">Роли</h3><div class="roles-box">
+        <label class="chk"><input type="checkbox" id="r_vp" ${u.vp ? 'checked' : ''}> <span><b>ВП</b> <span class="small mut">— учебный отдел (курсы, лекции, экзамены), отчёты, премирование, система повышения</span></span></label>
+        <label class="chk"><input type="checkbox" id="r_reatt" ${u.reatt ? 'checked' : ''}> <span><b>Переаттестация</b> <span class="small mut">— раздел переаттестации</span></span></label>
+        <label class="chk"><input type="checkbox" id="leader" ${u.leader ? 'checked' : ''}> <span><b>Руководство ГУ ВП</b> <span class="small mut">— проверка и удаление отчётов, премии, фонд, бюджет, нарушения</span></span></label>
+        <div class="row"><label>Админ-права: <select id="role" ${u.super ? 'disabled' : ''} style="width:auto">${['candidate', 'examiner', 'admin'].map(x => `<option value="${x}" ${u.role === x ? 'selected' : ''}>${x === 'candidate' ? 'нет' : ROLE_RU[x]}</option>`).join('')}</select></label>
+          ${u.super ? '<span class="small mut">главный администратор (ADMIN_IDS) — все разделы</span>' : '<span class="small mut">Проверяющий — проверка попыток; Администратор — всё содержимое сайта и все разделы</span>'}</div>
+        <p><button class="btn sm" id="blk" ${u.super ? 'disabled' : ''}>${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button></p></div>
+      <h3>Профиль сотрудника</h3><form id="upf"><div class="fgrid">
+        <label class="f"><span>Имя Фамилия</span><input name="ic_name" maxlength="100" value="${esc(u.ic_name)}"></label>
+        <label class="f"><span>Звание</span><input name="rank" maxlength="60" list="rankList" value="${esc(u.rank)}"></label>
+        <label class="f"><span>Статик</span><input name="static_id" maxlength="30" value="${esc(u.static_id)}"></label>
+        <label class="f"><span>Должность</span><input name="position" maxlength="80" list="posList" value="${esc(u.position)}"></label></div>
+        <datalist id="rankList">${RANKS.map(x => `<option>${x}</option>`).join('')}</datalist><datalist id="posList">${POSITIONS.map(x => `<option>${x}</option>`).join('')}</datalist>
+        <button class="btn gold sm">Сохранить профиль</button></form>`
+      : `<div style="margin-top:10px">Имя: <b>${esc(u.ic_name || '—')}</b> · Статик: <b>${esc(u.static_id || '—')}</b> · Звание: <b>${esc(u.rank || '—')}</b> · Должность: <b>${esc(u.position || '—')}</b></div>`}
+      ${r.profile_log && r.profile_log.length ? `<details class="plog"><summary class="small">Журнал изменений профиля (${r.profile_log.length})</summary><table class="small">${r.profile_log.map(x => `<tr><td>${fmtDate(x.at)}</td><td>${x.self ? 'сам' : esc(x.by)}</td><td>${Object.entries(x.changes).map(([k, v]) => `${esc(PROFILE_RU[k] || k)}: «${esc(v[0])}» → «${esc(v[1])}»`).join('<br>')}</td></tr>`).join('')}</table></details>` : ''}</div>
     <div class="card flat"><div class="row between"><h3>Прогресс лекций</h3>${adm ? '<button class="btn sm danger" id="rstAll">Сбросить весь прогресс</button>' : ''}</div>
       <table><tr><th>Лекция</th><th>Досмотрено до</th><th>Засчитано времени</th><th>Отклонено heartbeat</th><th>Статус</th>${adm ? '<th></th>' : ''}</tr>
       ${r.lectures.map(l => `<tr><td>${esc(l.title)}${l.published ? '' : ' <span class="badge">черновик</span>'}</td><td>${l.max_pos != null ? fmtTime(l.max_pos) + ' / ' + fmtTime(l.duration_sec) : '—'}</td><td>${l.watched_sec != null ? fmtTime(l.watched_sec) : '—'}</td><td>${l.rejected || 0}</td>
@@ -537,6 +564,9 @@ route('/admin/user/:id', async (id) => {
   const act = async (method, path, body, ok) => { try { await api(method, path, body); toast(ok); render(); } catch (e) { toast(e.message, true); } };
   const role = $('#role'); if (role && !u.super) role.onchange = () => act('PUT', '/api/admin/users/' + u.id, { role: role.value }, 'Роль изменена');
   const ld = $('#leader'); if (ld) ld.onchange = () => act('PUT', '/api/admin/users/' + u.id, { leader: ld.checked }, ld.checked ? 'Назначена роль «Руководство ГУ ВП»' : 'Роль «Руководство ГУ ВП» снята');
+  const rv = $('#r_vp'); if (rv) rv.onchange = () => act('PUT', '/api/admin/users/' + u.id, { vp: rv.checked }, rv.checked ? 'Назначена роль «ВП»' : 'Роль «ВП» снята');
+  const rr = $('#r_reatt'); if (rr) rr.onchange = () => act('PUT', '/api/admin/users/' + u.id, { reatt: rr.checked }, rr.checked ? 'Назначена роль «Переаттестация»' : 'Роль «Переаттестация» снята');
+  const upf = $('#upf'); if (upf) upf.onsubmit = (ev) => { ev.preventDefault(); act('PUT', '/api/admin/users/' + u.id, Object.fromEntries(new FormData(upf)), 'Профиль сохранён'); };
   const blk = $('#blk'); if (blk && !u.super) blk.onclick = () => { if (confirm(u.blocked ? 'Разблокировать?' : 'Заблокировать пользователя? Его сессии будут завершены.')) act('PUT', '/api/admin/users/' + u.id, { blocked: !u.blocked }, 'Готово'); };
   $('#rstAll').onclick = () => { if (confirm('Сбросить прогресс всех лекций этого пользователя?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, {}, 'Прогресс сброшен'); };
   $$('[data-rl]').forEach(b => b.onclick = () => { if (confirm('Сбросить прогресс этой лекции?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, { lecture_id: Number(b.dataset.rl) }, 'Прогресс сброшен'); });
@@ -614,4 +644,60 @@ route('/admin/audit', async () => {
   const { log } = await api('GET', '/api/admin/audit');
   setView(`<h1>Журнал действий</h1>${adminNav('/admin/audit')}
     ${log.length ? `<table><tr><th>Время</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Детали</th></tr>${log.map(l => `<tr><td>${fmtDate(l.at)}</td><td>${esc(l.global_name || l.username || l.actor_id)}</td><td>${esc(ACTION_RU[l.action] || l.action)}</td><td>${esc(l.target || '')}</td><td class="small mut" style="max-width:380px;word-break:break-word">${esc((l.details || '').slice(0, 300))}</td></tr>`).join('')}</table>` : '<div class="alert info">Журнал пуст.</div>'}`);
+}, { role: 'admin' });
+
+// ---------- курсы ----------
+route('/admin/courses', async () => {
+  const { courses, lectures, exams } = await api('GET', '/api/admin/courses');
+  const free = lectures.filter(l => !l.course_id || !courses.some(c => c.id === l.course_id)).length + exams.filter(e => !e.course_id || !courses.some(c => c.id === e.course_id)).length;
+  setView(`<h1>Курсы</h1>${adminNav('/admin/courses')}
+    <p class="small mut">Курс — набор лекций по порядку и экзамен в конце. Кандидат видит курсы в «Учебном отделе»; экзамен курса открывается после обязательных лекций курса.</p>
+    <p><a class="btn gold" href="#/admin/course/new">+ Создать курс</a></p>
+    ${courses.length ? `<table><tr><th>Порядок</th><th>Курс</th><th>Лекций</th><th>Экзаменов</th><th>Статус</th></tr>${courses.map((c, i) => `<tr><td><button class="btn sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button> <button class="btn sm" data-down="${i}" ${i < courses.length - 1 ? '' : 'disabled'}>↓</button></td>
+      <td><a href="#/admin/course/${c.id}"><b>${esc(c.title)}</b></a>${c.description ? `<div class="small mut">${esc(c.description.slice(0, 120))}</div>` : ''}</td><td class="num">${c.lecture_count}</td><td class="num">${c.exam_count}</td>
+      <td>${c.published ? '<span class="badge ok">виден</span>' : '<span class="badge warn">скрыт</span>'}</td></tr>`).join('')}</table>` : '<div class="alert info">Курсов пока нет.</div>'}
+    ${free ? `<div class="alert warn small">Без курса: ${free} (лекции/экзамены). Они показываются в «Учебном отделе» в разделе «Без курса» — добавьте их в курс.</div>` : ''}`);
+  const ids = courses.map(c => c.id);
+  const move = async (i, d) => { const a = ids.slice(); [a[i], a[i + d]] = [a[i + d], a[i]]; await api('POST', '/api/admin/courses/reorder', { ids: a }); render(); };
+  $$('[data-up]').forEach(b => b.onclick = () => move(+b.dataset.up, -1));
+  $$('[data-down]').forEach(b => b.onclick = () => move(+b.dataset.down, 1));
+}, { role: 'admin' });
+
+route('/admin/course/:id', async (id) => {
+  const isNew = id === 'new';
+  const { courses, lectures, exams } = await api('GET', '/api/admin/courses');
+  const c = isNew ? { title: '', description: '', published: 1 } : courses.find(x => String(x.id) === id);
+  if (!c) throw new Error('Курс не найден');
+  const cname = (cid) => { const x = courses.find(k => k.id === cid); return x ? x.title : ''; };
+  let inLec = isNew ? [] : lectures.filter(l => l.course_id === c.id).map(l => l.id);
+  const inEx = new Set(isNew ? [] : exams.filter(e => e.course_id === c.id).map(e => e.id));
+  setView(`<p><a href="#/admin/courses">← Курсы</a></p><h1>${isNew ? 'Новый курс' : 'Курс: ' + esc(c.title)}</h1>
+    <form class="card" id="cf">
+      <label class="f"><span>Название *</span><input name="title" maxlength="200" value="${esc(c.title)}" placeholder="Например: Курс молодого бойца ВП"></label>
+      <label class="f"><span>Описание (видно в «Учебном отделе»)</span><textarea name="description" maxlength="10000">${esc(c.description)}</textarea></label>
+      <label class="chk"><input type="checkbox" name="published" ${c.published ? 'checked' : ''}> Курс виден в «Учебном отделе» (скрытый курс прячет и свои лекции и экзамены)</label>
+      <div class="grid two"><div><h3>Лекции курса (по порядку)</h3><ol class="clist" id="lecIn"></ol>
+        <label class="f"><span>Добавить лекцию</span><select id="lecAdd"></select></label></div>
+        <div><h3>Экзамен курса</h3>${exams.length ? exams.map(e => `<label class="chk"><input type="checkbox" class="exk" value="${e.id}" ${inEx.has(e.id) ? 'checked' : ''}> <span>${esc(e.title)} ${e.published ? '' : '<span class="badge warn">черновик</span>'}${e.course_id && e.course_id !== c.id && cname(e.course_id) ? ` <span class="small mut">(сейчас в курсе «${esc(cname(e.course_id))}»)</span>` : ''}</span></label>`).join('') : '<p class="small mut">Экзаменов пока нет.</p>'}
+          <p class="small mut">Экзамен курса по умолчанию открывается после обязательных лекций курса (можно изменить в настройках экзамена).</p>
+          ${isNew ? '' : `<div class="row"><a class="btn sm" href="#/admin/lecture/new?course=${c.id}">+ Новая лекция в курс</a><a class="btn sm" href="#/admin/exam/new?course=${c.id}">+ Новый экзамен в курс</a></div>`}</div></div>
+      <div class="row" style="margin-top:12px"><button class="btn gold">Сохранить курс</button>${isNew ? '' : '<button type="button" class="btn danger sm" id="delC">Удалить курс</button>'}</div><div id="ferr" class="ferr"></div></form>`);
+  const paint = () => {
+    $('#lecIn').innerHTML = inLec.map((lid, i) => { const l = lectures.find(x => x.id === lid); return `<li><span>${esc(l.title)} ${l.published ? '' : '<span class="badge warn">черновик</span>'}${l.required ? '' : ' <span class="badge">необязательная</span>'}</span>
+      <span class="row"><button type="button" class="btn sm" data-u="${i}" ${i ? '' : 'disabled'}>↑</button><button type="button" class="btn sm" data-d="${i}" ${i < inLec.length - 1 ? '' : 'disabled'}>↓</button><button type="button" class="btn sm danger" data-x="${i}">✕</button></span></li>`; }).join('') || '<li class="mut small">Лекций нет</li>';
+    $('#lecAdd').innerHTML = '<option value="">— выбрать лекцию —</option>' + lectures.filter(l => !inLec.includes(l.id)).map(l => `<option value="${l.id}">${esc(l.title)}${l.course_id && cname(l.course_id) ? ' (сейчас в «' + esc(cname(l.course_id)) + '»)' : ''}</option>`).join('');
+    $$('#lecIn [data-u]').forEach(b => b.onclick = () => { const i = +b.dataset.u; [inLec[i - 1], inLec[i]] = [inLec[i], inLec[i - 1]]; paint(); });
+    $$('#lecIn [data-d]').forEach(b => b.onclick = () => { const i = +b.dataset.d; [inLec[i + 1], inLec[i]] = [inLec[i], inLec[i + 1]]; paint(); });
+    $$('#lecIn [data-x]').forEach(b => b.onclick = () => { inLec.splice(+b.dataset.x, 1); paint(); });
+  };
+  paint();
+  $('#lecAdd').onchange = (e) => { if (e.target.value) { inLec.push(Number(e.target.value)); paint(); } };
+  $('#cf').onsubmit = async (ev) => {
+    ev.preventDefault(); const f = ev.target;
+    try {
+      const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/courses' + (isNew ? '' : '/' + c.id), { title: f.title.value, description: f.description.value, published: f.published.checked, lecture_ids: inLec, exam_ids: $$('.exk:checked').map(x => Number(x.value)) });
+      toast('Курс сохранён'); if (isNew) location.hash = '#/admin/course/' + r.course.id; else render();
+    } catch (e) { $('#ferr').innerHTML = `<div class="alert err">${esc(e.message)}</div>`; toast(e.message, true); }
+  };
+  const del = $('#delC'); if (del) del.onclick = async () => { if (!confirm(`Удалить курс «${c.title}»? Лекции и экзамены останутся (без курса).`)) return; try { await api('DELETE', '/api/admin/courses/' + c.id); location.hash = '#/admin/courses'; } catch (e) { toast(e.message, true); } };
 }, { role: 'admin' });

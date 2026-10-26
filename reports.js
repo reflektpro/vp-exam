@@ -1,6 +1,6 @@
-/* «Отчёты и премии» — роль «Руководство ГУ ВП» (и главные администраторы). Расчёт — на сервере (worker: computePremiums). */
+/* «Руководство: отчёты и премии» — роль «Руководство ГУ ВП» и администраторы. Расчёт — на сервере (worker: computePremiums). */
 'use strict';
-function isLead() { return !!(App.me && (App.me.leader || App.me.super)); }
+function isLead() { return can('lead'); }
 const RUB = n => (Number(n) || 0).toLocaleString('ru-RU') + ' ₽';
 const GROUP_RU = { main: 'Основная отчётность', extra: 'Дополнительная отчётность', gu: 'Работа ГУ ВП' };
 const REP_ST = { submitted: ['Отправлен', 'info'], review: ['На проверке', 'warn'], approved: ['Принят', 'ok'], rejected: ['Отклонён', 'err'], missing: ['Нет отчёта', 'err'] };
@@ -13,7 +13,7 @@ function addD(w, n) { const d = new Date(w + 'T00:00:00Z'); d.setUTCDate(d.getUT
 function weekLabel(w) { const f = (s) => s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4); return f(w) + ' — ' + f(addD(w, 6)); }
 function hashQ() { return new URLSearchParams((location.hash.split('?')[1]) || ''); }
 function leadNav(active) {
-  const items = [['/reports', 'Неделя и премии'], ['/reports/violations', 'Нарушения'], ['/reports/budget', 'Бюджет ГУ ВП'], ['/reports/staff', 'Состав'], ['/reports/config', 'Таблицы выплат']];
+  const items = [['/lead', 'Неделя и премии'], ['/lead/violations', 'Нарушения'], ['/lead/budget', 'Бюджет ГУ ВП'], ['/lead/staff', 'Состав'], ['/lead/config', 'Таблицы выплат']];
   return `<div class="subnav">${items.map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
 }
 function weekPicker(week, base) {
@@ -21,10 +21,10 @@ function weekPicker(week, base) {
     <input type="date" id="wkDate" value="${week}" style="width:auto"><a class="btn sm" href="#${base}">Текущая</a></div>`;
 }
 function bindWeekPicker(base) { const d = $('#wkDate'); if (d) d.onchange = () => { if (d.value) location.hash = `#${base}?week=${mondayOf(new Date(d.value + 'T12:00:00'))}`; }; }
-const leadRoute = (p, fn) => { route(p, async (...a) => { if (!isLead()) { setView('<div class="alert err">Раздел доступен роли «Руководство ГУ ВП» и главным администраторам.</div>'); return; } return fn(...a); }); route(p + '\\?.*', () => App.routes.find(r => r.p === p).fn()); };
+const leadRoute = (p, fn) => { route(p, async (...a) => { if (!isLead()) { setView(noAccess('lead')); return; } return fn(...a); }); route(p + '\\?.*', () => App.routes.find(r => r.p === p).fn()); };
 
 // ---------- неделя: сводная таблица и премии ----------
-leadRoute('/reports', async () => {
+leadRoute('/lead', async () => {
   const q = hashQ();
   const d = await api('GET', '/api/lead/week' + (q.get('week') ? '?week=' + encodeURIComponent(q.get('week')) : ''));
   const showAll = q.get('all') === '1';
@@ -35,8 +35,8 @@ leadRoute('/reports', async () => {
   const T = d.totals;
   const missingTxt = (r) => r.plan ? (r.plan.level === 'normal' ? '' : (r.plan.level === 'min' ? r.plan.missing_normal : r.plan.missing_min).map(x => `${x.name}: ещё ${x.need}`).join('\n')) : '';
   const rowCls = (r) => r.status === 'missing' ? 'r-missing' : r.late ? 'r-late' : r.status === 'rejected' ? 'r-late' : '';
-  setView(`<h1>Отчёты и премии</h1>${leadNav('/reports')}
-    ${weekPicker(d.week, '/reports')}
+  setView(`<h1>Руководство: отчёты и премии</h1>${leadNav('/lead')}
+    ${weekPicker(d.week, '/lead')}
     <p class="small mut">Срок подачи: ${fmtDate(d.deadline)} (МСК)${d.deadline_passed ? ' — <b>прошёл</b>' : ''}. Премия — только при отчёте в срок. Отклонённые пункты не считаются, расчёт обновляется сразу.</p>
     <div class="grid fundgrid">
       <form class="card flat" id="fundF"><h3>Премиальный фонд недели</h3>
@@ -46,22 +46,23 @@ leadRoute('/reports', async () => {
       <div class="card flat"><h3>Расчёт</h3>
         <div class="kv"><span>Фонд</span><b>${RUB(d.fund)}</b></div>
         <div class="kv"><span>Базовая премия (оклад + действия)</span><b>${RUB(T.base)}</b></div>
-        <div class="kv"><span>Выплачено из фонда всего</span><b>${RUB(T.paid)}</b></div>
+        <div class="kv total"><span>Итого из фонда</span><b id="paidFund">${RUB(T.paid)}</b></div>
         <div class="kv"><span>Остаток фонда</span><b class="${T.remaining < 0 ? 'neg' : 'pos'}" id="remaining">${RUB(T.remaining)}</b></div>
-        <div class="kv"><span>Наградные из бюджета ГУ ВП</span><b>${RUB(T.award_budget)}</b></div>
+        <div class="budget-box"><div class="small mut">Наградные из бюджета ГУ ВП — отдельно, другой источник (в «Итого из фонда» не входят)</div><b id="budgetTotal">${RUB(T.award_budget)}</b></div>
+        ${d.deleted_count ? `<details class="small" id="delBox"><summary>Удалённых отчётов за неделю: ${d.deleted_count}</summary><div id="delList" class="mut">загрузка…</div></details>` : ''}
         ${!d.fund_set ? '<div class="alert warn small">Фонд недели не указан — надбавки не рассчитываются.</div>' : ''}
         ${T.fund_short ? '<div class="alert err small">Фонда не хватает даже на базовую премию — база выплачивается, надбавки не начисляются.</div>' : ''}
         ${!T.fund_short && (T.add_short || T.award_short || T.ss_short) ? `<div class="alert warn small">Фонда не хватает на все надбавки: урезаны ${[T.add_short && 'дополнительная', T.award_short && 'наградная', T.ss_short && 'премия СС'].filter(Boolean).join(', ')}.</div>` : ''}
-        ${d.deadline_passed ? `<button class="btn sm" id="leftBtn" ${T.remaining > 0 ? '' : 'disabled'}>Перенести остаток в бюджет ГУ ВП</button>${d.leftover_posted != null ? ` <span class="small mut">перенесено: ${RUB(d.leftover_posted)}</span>` : ''}` : ''}
+        ${d.deadline_passed ? `<button class="btn sm" id="leftBtn" ${T.remaining > 0 ? '' : 'disabled'}>Перенести остаток в бюджет ГУ ВП</button>${d.leftover_posted != null ? ` <span class="small mut">перенесено: ${RUB(d.leftover_posted)}</span>` : ''}${d.leftover_stale ? '<div class="alert warn small">Расчёт изменился после переноса остатка (например, удалён или перепроверен отчёт). Перенесите остаток заново.</div>' : ''}` : ''}
       </div></div>
     <div class="row between" style="margin:6px 0 8px"><div class="row">
-      <a class="btn sm ${showAll ? 'gold' : ''}" href="#/reports?week=${d.week}${showAll ? '' : '&all=1'}">${showAll ? 'Только отмеченные пункты' : 'Все пункты'}</a>
+      <a class="btn sm ${showAll ? 'gold' : ''}" href="#/lead?week=${d.week}${showAll ? '' : '&all=1'}">${showAll ? 'Только отмеченные пункты' : 'Все пункты'}</a>
       <span class="small mut">${d.rows.length} сотрудн. · красным — нет отчёта, жёлтым — после срока / отклонён</span></div>
       <div class="row"><button class="btn sm" id="csvBtn">Экспорт CSV</button><button class="btn sm" id="xlsxBtn">Экспорт XLSX</button></div></div>
     ${d.rows.length ? `<div class="tblwrap"><table class="prem"><thead>
       <tr><th rowspan="2">Сотрудник</th><th rowspan="2">Должность</th>${groups.map(g => `<th colspan="${g.items.length}" class="grp">${GROUP_RU[g.g]}</th>`).join('')}
         <th rowspan="2">Баллы</th><th rowspan="2">План</th><th rowspan="2">Оклад</th><th rowspan="2">Действия</th><th rowspan="2">Вычет</th><th rowspan="2">База</th><th rowspan="2">Доп.</th>
-        <th rowspan="2">Наградная<div class="small mut">из фонда</div></th><th rowspan="2">Премия СС</th><th rowspan="2">Наградная<div class="small mut">бюджет ГУ ВП</div></th><th rowspan="2">Итого</th><th rowspan="2">Отчёт</th></tr>
+        <th rowspan="2">Наградная<div class="small mut">из фонда</div></th><th rowspan="2">Премия СС</th><th rowspan="2">Итого<div class="small mut">из фонда</div></th><th rowspan="2" class="bcol">Наградная<div class="small">бюджет ГУ ВП, отдельно</div></th><th rowspan="2">Отчёт</th></tr>
       <tr>${groups.map(g => g.items.map(i => `<th class="ic" title="${esc(i.name)} — ${RUB(i.pay)}"><span>${esc(i.name)}</span></th>`).join('')).join('')}</tr></thead>
       <tbody>${d.rows.map(r => `<tr class="${rowCls(r)}" data-uid="${esc(r.user_id)}">
         <td><b>${esc(r.name)}</b>${r.senior ? ' <span class="badge info">СС</span>' : ''}<div class="small mut">${esc(r.static_id || r.user_id)}</div>${r.strikes ? `<div class="small neg">нарушений: ${r.strikes}</div>` : ''}</td>
@@ -75,15 +76,15 @@ leadRoute('/reports', async () => {
         <td class="num">${r.add ? RUB(r.add) : '—'}${r.add_want > r.add ? `<div class="small neg">урезано с ${RUB(r.add_want)}</div>` : ''}</td>
         <td><input class="m-award" type="number" min="0" step="1" value="${esc(rowManual(r, 'award'))}" ${r.eligible ? '' : 'disabled'} title="${RUB(d.config.rules.award_min)} – ${RUB(d.config.rules.award_max)}">${r.award_want > r.award ? `<div class="small neg">выплачено ${RUB(r.award)}</div>` : ''}</td>
         <td>${r.senior ? `<input class="m-ss" type="number" min="0" max="${d.config.rules.ss_max}" step="1" value="${esc(rowManual(r, 'ss'))}">${r.ss_want > r.ss ? `<div class="small neg">выплачено ${RUB(r.ss)}</div>` : ''}` : '<span class="small mut">не СС</span>'}</td>
-        <td><input class="m-ab" type="number" min="0" step="1" value="${esc(r.award_budget || '')}"></td>
-        <td class="num"><b>${RUB(r.total)}</b></td>
-        <td>${r.report_id ? `<a href="#/reports/report/${r.report_id}">${repBadge(r.status)}</a>${r.late ? ' <span class="badge err">после срока</span>' : ''}${r.edited_after_deadline ? ' <span class="badge warn" title="Отчёт изменён после срока">изм.</span>' : ''}<div class="small mut">${fmtDate(r.submitted_at)}</div>` : repBadge('missing')}</td>
+        <td class="num"><b>${RUB(r.total_fund)}</b></td>
+        <td class="bcol"><input class="m-ab" type="number" min="0" step="1" value="${esc(r.award_budget || '')}"></td>
+        <td>${r.report_id ? `<a href="#/lead/report/${r.report_id}">${repBadge(r.status)}</a>${r.late ? ' <span class="badge err">после срока</span>' : ''}${r.edited_after_deadline ? ' <span class="badge warn" title="Отчёт изменён после срока">изм.</span>' : ''}<div class="small mut">${fmtDate(r.submitted_at)}</div>` : repBadge('missing')}</td>
       </tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="${2 + cols.length + 5}"><b>Итого</b></td><td class="num"><b>${RUB(T.base)}</b></td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.add, 0))}</td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.award, 0))}</td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.ss, 0))}</td><td class="num">${RUB(T.award_budget)}</td><td class="num"><b>${RUB(d.rows.reduce((s, r) => s + r.total, 0))}</b></td><td></td></tr></tfoot>
+      <tfoot><tr><td colspan="${2 + cols.length + 5}"><b>Итого</b></td><td class="num"><b>${RUB(T.base)}</b></td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.add, 0))}</td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.award, 0))}</td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.ss, 0))}</td><td class="num"><b>${RUB(d.rows.reduce((s, r) => s + r.total_fund, 0))}</b></td><td class="num bcol"><b>${RUB(T.award_budget)}</b></td><td></td></tr></tfoot>
     </table></div>
     <p class="small mut">Наградная из фонда: ${RUB(d.config.rules.award_min)}–${RUB(d.config.rules.award_max)}; премия СС — до ${RUB(d.config.rules.ss_max)} (только старшему составу); лимит на человека ${RUB(d.config.rules.person_cap)} (оклад + премия + доп. + наградная из фонда). Наградная из бюджета ГУ ВП — сверх лимита и списывается с бюджета ГУ ВП. Значения сохраняются при выходе из поля.</p>`
     : '<div class="alert info">За эту неделю нет отчётов, а состав ГУ ВП ещё не отмечен (раздел «Состав»).</div>'}`);
-  bindWeekPicker('/reports');
+  bindWeekPicker('/lead');
   $('#fundF').onsubmit = async (ev) => { ev.preventDefault(); try { await api('PUT', `/api/lead/week/${d.week}/fund`, { fund: ev.target.fund.value, note: ev.target.note.value }); toast('Фонд сохранён'); render(); } catch (e) { toast(e.message, true); } };
   const lb = $('#leftBtn'); if (lb) lb.onclick = async () => { if (!confirm(`Перенести остаток ${RUB(T.remaining)} в бюджет ГУ ВП?`)) return; try { await api('POST', `/api/lead/week/${d.week}/leftover`); toast('Остаток перенесён'); render(); } catch (e) { toast(e.message, true); } };
   $$('tr[data-uid]').forEach(tr => {
@@ -96,13 +97,15 @@ leadRoute('/reports', async () => {
     tr.querySelectorAll('input').forEach(i => i.onchange = save);
   });
   const exportRows = () => {
-    const head = ['Сотрудник', 'Discord ID', 'Статик', 'Должность', ...d.config.items.map(i => i.name), 'Баллы', 'План', 'Не хватает', 'Оклад (уровень)', 'Оклад', 'Действия', 'Вычет %', 'Вычет', 'База', 'Доп. премия', 'Наградная (фонд)', 'Премия СС', 'Наградная (бюджет ГУ ВП)', 'Итого', 'Статус отчёта', 'После срока', 'Причина', 'Нарушений'];
+    const head = ['Сотрудник', 'Discord ID', 'Статик', 'Должность', ...d.config.items.map(i => i.name), 'Баллы', 'План', 'Не хватает', 'Оклад (уровень)', 'Оклад', 'Действия', 'Вычет %', 'Вычет', 'База', 'Доп. премия', 'Наградная (фонд)', 'Премия СС', 'Итого из фонда', 'Наградная из бюджета ГУ ВП (отдельно)', 'Статус отчёта', 'После срока', 'Причина', 'Нарушений'];
     const body = d.rows.map(r => [r.name, r.user_id, r.static_id, posName(r.position), ...d.config.items.map(i => r.counts[i.key] || 0), r.points || 0, r.plan ? PLAN_RU[r.plan.level][0] : '', missingTxt(r).replace(/\n/g, '; '),
-      r.eligible ? TIER_RU[r.oklad_tier] : '', r.oklad, r.actions, r.deduct_pct, r.deduction, r.base, r.add, r.award, r.ss, r.award_budget, r.total, (REP_ST[r.status] || [r.status])[0], r.late ? 'да' : '', r.reason || '', r.strikes || 0]);
-    body.push(['Итого', '', '', '', ...d.config.items.map(() => ''), '', '', '', '', '', '', '', '', T.base, d.rows.reduce((s, r) => s + r.add, 0), d.rows.reduce((s, r) => s + r.award, 0), d.rows.reduce((s, r) => s + r.ss, 0), T.award_budget, d.rows.reduce((s, r) => s + r.total, 0), '', '', '', '']);
-    body.push(['Фонд', d.fund], ['Остаток фонда', T.remaining]);
+      r.eligible ? TIER_RU[r.oklad_tier] : '', r.oklad, r.actions, r.deduct_pct, r.deduction, r.base, r.add, r.award, r.ss, r.total_fund, r.award_budget, (REP_ST[r.status] || [r.status])[0], r.late ? 'да' : '', r.reason || '', r.strikes || 0]);
+    body.push(['Итого', '', '', '', ...d.config.items.map(() => ''), '', '', '', '', '', '', '', '', T.base, d.rows.reduce((s, r) => s + r.add, 0), d.rows.reduce((s, r) => s + r.award, 0), d.rows.reduce((s, r) => s + r.ss, 0), d.rows.reduce((s, r) => s + r.total_fund, 0), T.award_budget, '', '', '', '']);
+    body.push(['Фонд', d.fund], ['Итого из фонда', T.paid], ['Остаток фонда', T.remaining], ['Наградные из бюджета ГУ ВП (отдельно)', T.award_budget]);
     return [head, ...body];
   };
+  const db = $('#delBox'); if (db) db.addEventListener('toggle', async () => { if (!db.open || db.dataset.done) return; db.dataset.done = 1;
+    try { const r = await api('GET', '/api/lead/deleted?week=' + d.week); $('#delList').innerHTML = r.deleted.map(x => `<div>${esc(x.name)} — удалил ${esc(x.deleted_by)}, ${fmtDate(x.deleted_at)}${x.reason ? ': «' + esc(x.reason) + '»' : ''}</div>`).join('') || 'нет'; } catch (e) { $('#delList').textContent = e.message; } });
   $('#csvBtn').onclick = () => { const csv = exportRows().map(r => r.map(c => { const s = String(c == null ? '' : c); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(';')).join('\r\n'); downloadBlob(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }), `premii_${d.week}.csv`); };
   $('#xlsxBtn').onclick = () => downloadBlob(xlsxBlob(exportRows(), 'Премии ' + d.week), `premii_${d.week}.xlsx`);
 });
@@ -141,8 +144,8 @@ function zipStore(files) {
 }
 
 // ---------- один отчёт ----------
-route('/reports/report/:id', async (id) => {
-  if (!isLead()) { setView('<div class="alert err">Раздел доступен роли «Руководство ГУ ВП».</div>'); return; }
+route('/lead/report/:id', async (id) => {
+  if (!isLead()) { setView(noAccess('lead')); return; }
   const d = await api('GET', '/api/lead/reports/' + encodeURIComponent(id));
   const r = d.report, c = d.calc, cfgItems = new Map(d.config.items.map(i => [i.key, i]));
   const h = r.header || {};
@@ -154,7 +157,7 @@ route('/reports/report/:id', async (id) => {
           <button class="btn sm i-ok">Принять</button><button class="btn sm danger i-rej">Отклонить</button>${rv.status ? '<button class="btn sm i-clr" title="Снять отметку">↺</button>' : ''}</div></div>
       ${it.links && it.links.length ? `<ol class="links">${it.links.map(u => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a></li>`).join('')}</ol>` : '<div class="small neg">ссылок нет</div>'}
       <input class="icom" placeholder="комментарий к пункту" value="${esc(rv.comment || '')}"></div>`; };
-  setView(`<p><a href="#/reports?week=${r.week}">← Неделя ${weekLabel(r.week)}</a></p>
+  setView(`<p><a href="#/lead?week=${r.week}">← Неделя ${weekLabel(r.week)}</a></p>
     <div class="card"><div class="row between"><h2 style="margin:0">Отчёт: ${esc(h.rank || '')} ${esc(h.name || '')}</h2><div class="row">${repBadge(r.status)}${r.late ? '<span class="badge err">после срока — без премии</span>' : ''}${r.edited_after_deadline ? '<span class="badge warn">изменён после срока</span>' : ''}</div></div>
       <p class="small mut">Discord: ${esc(d.user ? (d.user.global_name || d.user.username) : r.user_id)} (${esc(r.user_id)}) · удостоверение ${esc(h.static_id || '—')} · ${esc(h.unit || '')} · период ${esc(weekLabel(r.week))}
         · первая отправка ${fmtDate(r.first_submitted_at)} · версия ${r.version} от ${fmtDate(r.submitted_at)} · срок ${fmtDate(r.deadline)}</p>
@@ -170,14 +173,17 @@ route('/reports/report/:id', async (id) => {
         <div class="kv"><span>Вычет ${c.deduct_pct}%</span><b>${c.deduction ? '−' + RUB(c.deduction) : '—'}</b></div>
         <div class="kv"><span>База (не больше ${RUB(c.max)})</span><b>${RUB(c.base)}</b></div>
         <div class="kv"><span>Дополнительная</span><b>${RUB(c.add)}</b></div><div class="kv"><span>Наградная (фонд)</span><b>${RUB(c.award)}</b></div>
-        <div class="kv"><span>Премия СС</span><b>${RUB(c.ss)}</b></div><div class="kv"><span>Наградная (бюджет ГУ ВП)</span><b>${RUB(c.award_budget)}</b></div>
-        <div class="kv total"><span>Итого</span><b>${RUB(c.total)}</b></div>` : `<div class="alert err">Без премии: ${esc(c.reason)}</div>`) : ''}</div></div>
+        <div class="kv"><span>Премия СС</span><b>${RUB(c.ss)}</b></div>
+        <div class="kv total"><span>Итого из фонда</span><b>${RUB(c.total_fund)}</b></div>
+        <div class="budget-box"><div class="small mut">Наградная из бюджета ГУ ВП — отдельно</div><b>${RUB(c.award_budget)}</b></div>` : `<div class="alert err">Без премии: ${esc(c.reason)}</div>`) : ''}</div></div>
     <div class="card"><div class="row between"><h3 style="margin:0">Пункты и доказательства</h3><button class="btn sm" id="allOk">Принять все непроверенные</button></div>
       ${['main', 'extra', 'gu'].map(g => { const list = r.items.filter(i => i.group === g); return list.length ? `<h4>${GROUP_RU[g]}</h4>${list.map(itemRow).join('')}` : ''; }).join('')}</div>
     <form class="card" id="rf"><h3>Решение по отчёту</h3>
       <label class="f"><span>Комментарий для сотрудника</span><textarea name="comment" maxlength="2000">${esc(r.comment)}</textarea></label>
       <div class="row"><button type="button" class="btn gold" data-st="approved">Принять отчёт</button><button type="button" class="btn danger" data-st="rejected">Отклонить отчёт</button><button type="button" class="btn" data-st="review">На проверке</button><button type="button" class="btn" data-st="">Сохранить комментарий</button></div>
       ${d.reviewer ? `<p class="small mut">Проверял: ${esc(d.reviewer)} · ${fmtDate(r.reviewed_at)}</p>` : ''}</form>
+    <div class="card flat danger-zone"><h3>Удалить отчёт</h3><p class="small mut">Если отчёт явно недостоверный или отправлен по ошибке. Копия отчёта и история правок сохранятся в журнале, премии недели пересчитаются, сотрудник сможет сдать неделю заново (если срок прошёл — уже после срока). Неделя без отчёта считается нарушением.</p>
+      <div class="row"><input id="delReason" placeholder="причина удаления (видна в журнале)" style="flex:1;min-width:220px"><button type="button" class="btn danger" id="delRep">Удалить отчёт</button></div></div>
     ${d.history.length ? `<div class="card flat"><h3>История правок</h3><table><tr><th>Версия</th><th>Отправлена</th><th>Пункты</th></tr>${d.history.map(v => `<tr><td>${v.version}</td><td>${fmtDate(v.submitted_at)}${v.after_deadline ? ' <span class="badge warn">после срока</span>' : ''}</td><td class="small">${v.items.map(i => `${esc(i.name)}: ${i.n}`).join('; ')}</td></tr>`).join('')}</table></div>` : ''}`);
   const send = async (body, msg) => { try { await api('POST', `/api/lead/reports/${r.id}/review`, body); toast(msg); render(); } catch (e) { toast(e.message, true); } };
   $$('.ritem').forEach(el => {
@@ -188,13 +194,17 @@ route('/reports/report/:id', async (id) => {
   });
   $('#allOk').onclick = () => { const items = {}; r.items.filter(i => !i.review).forEach(i => { items[i.key] = { status: 'ok' }; }); if (!Object.keys(items).length) return toast('Все пункты уже проверены'); send({ items }, 'Пункты приняты'); };
   $('#pos').onchange = () => send({ position: $('#pos').value }, 'Должность исправлена');
+  $('#delRep').onclick = async () => {
+    if (!confirm(`Удалить отчёт ${h.rank || ''} ${h.name || ''} за неделю ${weekLabel(r.week)}? Это нельзя отменить — копия останется только в журнале.`)) return;
+    try { await api('DELETE', '/api/lead/reports/' + r.id, { reason: $('#delReason').value }); toast('Отчёт удалён'); location.hash = '#/lead?week=' + r.week; } catch (e) { toast(e.message, true); }
+  };
   $$('#rf [data-st]').forEach(b => b.onclick = () => send(b.dataset.st ? { status: b.dataset.st, comment: $('#rf').comment.value } : { comment: $('#rf').comment.value }, 'Сохранено'));
 });
 
 // ---------- нарушения ----------
-leadRoute('/reports/violations', async () => {
+leadRoute('/lead/violations', async () => {
   const d = await api('GET', '/api/lead/violations');
-  setView(`<h1>Нарушения: отчёт не сдан в срок</h1>${leadNav('/reports/violations')}
+  setView(`<h1>Нарушения: отчёт не сдан в срок</h1>${leadNav('/lead/violations')}
     <p class="small mut">Считаются недели с начала учёта сотрудника (раздел «Состав»), срок которых прошёл (последняя закрытая неделя — ${weekLabel(d.last_closed_week)}). 1 — предупреждение, 2 — выговор, 3 — увольнение. Сообщения в Discord автоматически не отправляются. Нарушение можно снять (уважительная причина).</p>
     ${d.users.length ? `<table><tr><th>Сотрудник</th><th>Нарушений</th><th>Мера</th><th>Недели</th></tr>${d.users.map(u => `<tr><td><b>${esc(u.name)}</b><div class="small mut">${esc(u.static_id || u.user_id)} · учёт с ${u.staff_since ? weekLabel(u.staff_since).slice(0, 10) : '—'}</div></td>
       <td class="num">${u.strikes}</td><td>${u.label ? `<span class="badge ${u.strikes >= 3 ? 'err' : 'warn'}">${esc(u.label)}</span>` : '<span class="badge ok">нет</span>'}</td>
@@ -208,15 +218,15 @@ leadRoute('/reports/violations', async () => {
 });
 
 // ---------- бюджет ГУ ВП ----------
-leadRoute('/reports/budget', async () => {
+leadRoute('/lead/budget', async () => {
   const q = hashQ();
   const d = await api('GET', '/api/lead/budget' + (q.get('week') ? '?week=' + encodeURIComponent(q.get('week')) : ''));
   const st = await api('GET', '/api/lead/staff');
   const people = st.users.filter(u => u.staff || u.senior);
-  setView(`<h1>Бюджет ГУ ВП</h1>${leadNav('/reports/budget')}
+  setView(`<h1>Бюджет ГУ ВП</h1>${leadNav('/lead/budget')}
     <div class="grid two"><div class="card flat"><h3>Баланс</h3><div class="big ${d.balance < 0 ? 'neg' : 'pos'}" id="balance">${RUB(d.balance)}</div>
       <p class="small mut">Взносы СС + остатки премиального фонда + поступления − снятия − наградные из бюджета (вписываются в таблице недели).</p></div>
-      <div class="card flat"><h3>Взносы СС за неделю</h3>${weekPicker(d.week, '/reports/budget')}
+      <div class="card flat"><h3>Взносы СС за неделю</h3>${weekPicker(d.week, '/lead/budget')}
         <p class="small mut">Минимум ${RUB(d.min_contribution)} в неделю с каждого сотрудника старшего состава.</p>
         ${d.contributions.length ? `<table>${d.contributions.map(c => `<tr><td>${esc(c.name)}</td><td class="num">${RUB(c.paid)}</td><td>${c.ok ? '<span class="badge ok">внесено</span>' : '<span class="badge err">не внесено</span>'}</td></tr>`).join('')}</table>` : '<p class="small mut">Старший состав не отмечен (раздел «Состав»).</p>'}</div></div>
     <form class="card" id="bf"><h3>Новая операция</h3><div class="row">
@@ -230,7 +240,7 @@ leadRoute('/reports/budget', async () => {
       ${d.entries.map(e => `<tr class="${e.deleted_at ? 'deleted' : ''}"><td>${fmtDate(e.created_at)}</td><td>${KIND_RU[e.kind] || e.kind}</td><td class="num ${e.sign < 0 ? 'neg' : 'pos'}">${e.sign < 0 ? '−' : '+'}${RUB(e.amount)}</td><td>${esc(e.user_name)}</td><td>${e.week ? weekLabel(e.week).slice(0, 10) : ''}</td><td>${esc(e.note)}</td><td>${esc(e.created_by)}</td>
         <td>${e.deleted_at ? `<span class="small mut">удалена ${fmtDate(e.deleted_at)}</span>` : `<button class="btn sm danger" data-del="${e.id}">Удалить</button>`}</td></tr>`).join('')}</table>` : '<p class="mut">Операций пока нет.</p>'}
       ${d.awards.length ? `<h4>Наградные из бюджета ГУ ВП</h4><table>${d.awards.map(a => `<tr><td>${weekLabel(a.week)}</td><td>${esc(a.name)}</td><td class="num neg">−${RUB(a.amount)}</td></tr>`).join('')}</table>` : ''}</div>`);
-  bindWeekPicker('/reports/budget');
+  bindWeekPicker('/lead/budget');
   $('#bf').onsubmit = async (ev) => { ev.preventDefault(); const f = ev.target;
     const wk = f.week.value ? mondayOf(new Date(f.week.value + 'T12:00:00')) : d.week;
     try { await api('POST', '/api/lead/budget', { kind: f.kind.value, amount: f.amount.value, user_id: f.user_id.value || undefined, week: wk, note: f.note.value }); toast('Операция записана'); render(); } catch (e) { toast(e.message, true); } };
@@ -238,11 +248,11 @@ leadRoute('/reports/budget', async () => {
 });
 
 // ---------- состав ----------
-leadRoute('/reports/staff', async () => {
+leadRoute('/lead/staff', async () => {
   const [d, cfg] = await Promise.all([api('GET', '/api/lead/staff'), api('GET', '/api/report-config')]);
   const f = (hashQ().get('q') || '').toLowerCase();
   const list = d.users.filter(u => !f || [u.id, u.username, u.global_name, u.ic_name, u.static_id].some(x => String(x || '').toLowerCase().includes(f)));
-  setView(`<h1>Состав ГУ ВП</h1>${leadNav('/reports/staff')}
+  setView(`<h1>Состав ГУ ВП</h1>${leadNav('/lead/staff')}
     <p class="small mut">«В составе» — обязан сдавать еженедельный отчёт: попадает в сводную таблицу (даже без отчёта) и в учёт нарушений с недели «учёт с». «СС» — старший состав: премия СС и еженедельный взнос в бюджет. Должность в премии берётся из отчёта; здесь — для сотрудников без отчёта. Роль «Руководство ГУ ВП» назначают администраторы на странице пользователя.</p>
     <form class="row" id="sf" style="margin-bottom:12px"><input name="q" value="${esc(f)}" placeholder="Поиск" style="max-width:320px"><button class="btn sm">Найти</button></form>
     <table><tr><th>Пользователь</th><th>В составе</th><th>СС</th><th>Должность</th><th>Учёт с недели</th><th>Отчётов</th></tr>
@@ -250,7 +260,7 @@ leadRoute('/reports/staff', async () => {
       <td><input type="checkbox" class="s-staff" ${u.staff ? 'checked' : ''}></td><td><input type="checkbox" class="s-senior" ${u.senior ? 'checked' : ''}></td>
       <td><select class="s-pos" style="width:auto"><option value="">—</option>${cfg.positions.map(p => `<option value="${p.key}" ${p.key === u.staff_position ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
       <td><input type="date" class="s-since" value="${esc(u.staff_since || '')}" style="width:auto"></td><td class="num">${u.reports}</td></tr>`).join('')}</table>`);
-  $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/reports/staff?q=' + encodeURIComponent(ev.target.q.value); };
+  $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/lead/staff?q=' + encodeURIComponent(ev.target.q.value); };
   $$('tr[data-uid]').forEach(tr => {
     const put = async (body) => { try { await api('PUT', '/api/lead/staff/' + tr.dataset.uid, body); toast('Сохранено'); render(); } catch (e) { toast(e.message, true); } };
     tr.querySelector('.s-staff').onchange = (e) => put({ staff: e.target.checked });
@@ -261,13 +271,13 @@ leadRoute('/reports/staff', async () => {
 });
 
 // ---------- таблицы выплат (редактирует главный администратор) ----------
-leadRoute('/reports/config', async () => {
+leadRoute('/lead/config', async () => {
   const d = await api('GET', '/api/lead/config');
   const C = d.config, ed = d.can_edit, dis = ed ? '' : 'disabled';
   const names = new Map(C.items.map(i => [i.key, i.name]));
   const R = C.rules;
   const unpaid = C.items.filter(i => !i.pay);
-  setView(`<h1>Таблицы выплат и план</h1>${leadNav('/reports/config')}
+  setView(`<h1>Таблицы выплат и план</h1>${leadNav('/lead/config')}
     ${ed ? '' : '<div class="alert info">Изменять таблицы может только главный администратор. Здесь — просмотр.</div>'}
     <div class="card"><h3>Оклады по должностям (Таблица «Все выплаты»)</h3>
       <table id="tPos"><tr><th>Ключ</th><th>Должность</th><th>Нулевой</th><th>Минимальный</th><th>Средний</th><th>Максимальная выплата</th></tr>
