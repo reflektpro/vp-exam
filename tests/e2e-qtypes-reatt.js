@@ -252,7 +252,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         const ans = Object.fromEntries(qs.map(q => [q.id, 'Решение кейса']));
         r = await call('POST', `/api/attempts/${id}/submit`, tok, { answers: ans }); check(`cases#${k}: отправка → на проверке`, r.d.status === 'pending_review', r.d);
       } else {
-        check(`${ver}#${k}: только автопроверяемые типы`, qs.every(q => q.kind !== 'case' && ['single', 'multi', 'number', 'match', 'order'].includes(q.type)), [...new Set(qs.map(q => q.type))]);
+        check(`${ver}#${k}: только автопроверяемые типы`, qs.every(q => q.kind !== 'case' && !['long', 'case', 'file', 'voice', 'text'].includes(q.type)), [...new Set(qs.map(q => q.type))]);
         r = await call('POST', `/api/attempts/${id}/submit`, tok, { answers: {} }); check(`${ver}#${k}: пустая отправка → сразу итог «не сдан»`, r.d.status === 'failed', r.d);
       }
     }

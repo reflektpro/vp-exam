@@ -1,7 +1,7 @@
 // Статический сервер с поддержкой Range: сайт из ../vp_exam, медиа из ./ по /__media/
 const http = require('http'), fs = require('fs'), path = require('path');
-const SITE = path.resolve(__dirname, '..'), MEDIA = __dirname;
-const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.webm': 'video/webm' };
+const SITE = path.resolve(process.env.SITE_DIR || path.join(__dirname, '..')), MEDIA = __dirname;
+const types = { '.json': 'application/json', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.webm': 'video/webm' };
 http.createServer((req, res) => {
   let p = decodeURIComponent(req.url.split('?')[0]);
   let file = p.startsWith('/__media/') ? path.join(MEDIA, p.slice(9)) : path.join(SITE, p === '/' ? 'index.html' : p);
@@ -16,4 +16,4 @@ http.createServer((req, res) => {
       fs.createReadStream(file, { start: s, end: e }).pipe(res);
     } else { res.writeHead(200, { 'Content-Type': type, 'Content-Length': st.size, 'Accept-Ranges': 'bytes' }); fs.createReadStream(file).pipe(res); }
   });
-}).listen(8080, () => console.log('serving on 8080'));
+}).listen(+(process.env.PORT || 8080), () => console.log('serving on ' + (process.env.PORT || 8080)));

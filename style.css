@@ -186,3 +186,35 @@ pre.code{background:#101413;border:1px solid var(--line);padding:10px;border-rad
 .g-pt[open] { background: rgba(0,0,0,.25); padding: 4px 6px; border-radius: 6px; }
 .login-note{display:flex;gap:8px;align-items:flex-start;justify-content:center;max-width:380px;margin:4px auto 0;line-height:1.45;text-align:left;opacity:.9}
 .login-note-ic{flex:none;margin-top:2px;opacity:.75}
+/* ===== единая экосистема ГУ ВП ===== */
+.eco-bar{display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:4px 24px;background:#0b0e0d;border-bottom:1px solid #2a322f;font:13px Oswald,"Segoe UI",sans-serif;letter-spacing:1px;text-transform:uppercase}
+.eco-bar b{color:var(--gold2);margin-right:10px;letter-spacing:2px}
+.eco-bar a{color:var(--txt);opacity:.75;text-decoration:none;padding:3px 10px;border-radius:3px}
+.eco-bar a:hover,.eco-bar a.on{opacity:1;color:var(--gold2);background:#1b2120}
+/* ===== отчёты и премии ===== */
+.badge.gold{border-color:var(--gold);color:var(--gold2);background:#2b2616}
+.weekpick{margin-bottom:10px}.weekpick b{font-family:Oswald,sans-serif;letter-spacing:1px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px dashed #2c3532}.kv.total{border-bottom:0;font-size:17px;color:var(--gold2)}
+.neg{color:#ff9c94}.pos{color:#9fe0a8}.big{font:600 30px Oswald,sans-serif}
+.grid.two{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.fundgrid{grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-bottom:6px}
+.tblwrap{overflow:auto;max-width:100%;border:1px solid var(--line);border-radius:6px;margin-bottom:10px}
+table.prem{font-size:13px;min-width:100%}
+table.prem th,table.prem td{padding:5px 7px;vertical-align:top}
+table.prem th.grp{text-align:center;background:#232b2e}
+table.prem th.ic{height:150px;vertical-align:bottom;padding:4px 2px;min-width:28px}
+table.prem th.ic span{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;max-height:145px;overflow:hidden;text-overflow:ellipsis;font-weight:400;font-size:12px}
+table.prem td.num,td.num{text-align:right;white-space:nowrap}
+table.prem input{width:110px;padding:4px 6px;font-size:13px}
+table.prem .miss{max-width:220px;white-space:normal}
+tr.r-missing td{background:rgba(160,34,34,.16)}
+tr.r-late td{background:rgba(224,179,65,.12)}
+tr.deleted td{opacity:.45;text-decoration:line-through}
+.ritem{border:1px solid var(--line);border-left:4px solid #4a5550;border-radius:5px;padding:10px 12px;margin:8px 0;background:#1b2120}
+.ritem.acc{border-left-color:var(--ok)}.ritem.rej{border-left-color:var(--err);opacity:.8}
+.ritem .links{margin:6px 0;padding-left:22px;font-size:13px;word-break:break-all}
+.ritem .icom{margin-top:6px;font-size:13px}
+.plan-items{max-height:260px;overflow:auto;padding:6px;background:#161b1a;border-radius:4px}
+.plan-items label{display:flex;margin:2px 0}
+.grid.rules{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+.strike{text-decoration:line-through}

@@ -21,6 +21,7 @@ const STATUS_RU = {
 };
 function badge(st) { const x = STATUS_RU[st] || [st, '']; return `<span class="badge ${x[1]}">${esc(x[0])}</span>`; }
 const ROLE_RU = { candidate: 'Кандидат', examiner: 'Проверяющий', admin: 'Администратор' };
+function isLeadUser() { return !!(App.me && (App.me.leader || App.me.super)); }
 
 async function api(method, path, body) {
   const h = {};
@@ -62,8 +63,11 @@ function renderHeader() {
   if (s) { $('#siteTitle').textContent = s.site_title; document.title = s.site_title; }
   const path = (location.hash || '#/').slice(1);
   const link = (href, txt) => `<a href="#${href}" class="${(href === '/' ? path === '/' : path.startsWith(href)) ? 'on' : ''}">${txt}</a>`;
+  const er = $('#ecoReports'); if (er) er.href = CFG.REPORTS_URL;
+  const ea = $('#ecoAdmin'); if (ea) ea.hidden = !hasRole('examiner');
+  const el = $('#ecoLead'); if (el) el.hidden = !isLeadUser();
   if (!App.me) { $('#nav').innerHTML = ''; $('#userbox').innerHTML = ''; return; }
-  $('#nav').innerHTML = link('/', 'Главная') + link('/lectures', 'Лекции') + link('/exams', 'Экзамены') + link('/reatt', 'Переаттестация') + link('/profile', 'Профиль') + (hasRole('examiner') ? link('/admin', 'Управление') : '');
+  $('#nav').innerHTML = link('/', 'Главная') + link('/lectures', 'Лекции') + link('/exams', 'Экзамены') + link('/reatt', 'Переаттестация') + link('/profile', 'Профиль') + (hasRole('examiner') ? link('/admin', 'Управление') : '') + (isLeadUser() ? link('/reports', 'Отчёты и премии') : '');
   const u = App.me;
   $('#userbox').innerHTML = `${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : ''}<span>${esc(userName(u))}</span><button class="btn sm" id="logoutBtn">Выйти</button>`;
   $('#logoutBtn').onclick = async () => { try { await api('POST', '/api/logout'); } catch (_) {} localStorage.removeItem(TOKEN_KEY); App.me = null; location.hash = '#/'; render(); };

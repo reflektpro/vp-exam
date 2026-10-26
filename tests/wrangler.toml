@@ -5,7 +5,7 @@ compatibility_date = "2025-09-01"
 [vars]
 TEST_MODE = "1"
 ADMIN_IDS = "417660389723996170,711459160268734505"
-ALLOWED_ORIGINS = "http://localhost:8080,http://127.0.0.1:8080"
+ALLOWED_ORIGINS = "http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081"
 FRONTEND_URL = "http://localhost:8080/"
 [[d1_databases]]
 binding = "DB"

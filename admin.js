@@ -509,7 +509,7 @@ route('/admin/users', async () => {
     <form class="row" id="sf" style="margin-bottom:14px"><input name="q" value="${esc(q)}" placeholder="Поиск: Discord ID, ник, игровое имя, статик" style="max-width:420px"><button class="btn">Найти</button></form>
     <table><tr><th>Пользователь</th><th>Игровое имя / статик</th><th>Роль</th><th>Лекции</th><th>Попытки</th><th>Последний вход</th></tr>
     ${r.users.map(u => `<tr class="click" data-href="#/admin/user/${u.id}"><td>${esc(u.global_name || u.username)}<div class="small mut">${esc(u.id)}</div></td><td>${esc(u.ic_name || '—')}<div class="small mut">${esc(u.static_id)}</div></td>
-      <td>${esc(ROLE_RU[u.role])}${u.super ? ' ★' : ''}${u.blocked ? ' <span class="badge err">заблокирован</span>' : ''}</td><td>${u.lectures_watched} / ${r.lectures_total}</td><td>${u.attempt_count} ${u.last_status ? badge(u.last_status) : ''}</td><td>${fmtDate(u.last_login_at)}</td></tr>`).join('')}</table>`);
+      <td>${esc(ROLE_RU[u.role])}${u.super ? ' ★' : ''}${u.leader ? ' <span class="badge gold">Руководство</span>' : ''}${u.blocked ? ' <span class="badge err">заблокирован</span>' : ''}</td><td>${u.lectures_watched} / ${r.lectures_total}</td><td>${u.attempt_count} ${u.last_status ? badge(u.last_status) : ''}</td><td>${fmtDate(u.last_login_at)}</td></tr>`).join('')}</table>`);
   $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/admin/users?q=' + encodeURIComponent(ev.target.q.value); };
   bindRows();
 }, { role: 'examiner' });
@@ -524,7 +524,8 @@ route('/admin/user/:id', async (id) => {
       <div>Игровое имя: <b>${esc(u.ic_name || '—')}</b> · Статик: <b>${esc(u.static_id || '—')}</b> · Звание: <b>${esc(u.rank || '—')}</b></div></div></div>
       ${adm ? `<div class="row" style="margin-top:14px"><label>Роль: <select id="role" ${u.super ? 'disabled' : ''} style="width:auto">${['candidate', 'examiner', 'admin'].map(x => `<option value="${x}" ${u.role === x ? 'selected' : ''}>${ROLE_RU[x]}</option>`).join('')}</select></label>
         ${u.super ? '<span class="small mut">главный администратор (ADMIN_IDS)</span>' : ''}
-        <button class="btn sm" id="blk" ${u.super ? 'disabled' : ''}>${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button></div>` : ''}</div>
+        <button class="btn sm" id="blk" ${u.super ? 'disabled' : ''}>${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
+        <label class="chk" style="margin:0"><input type="checkbox" id="leader" ${u.leader ? 'checked' : ''}> Руководство ГУ ВП <span class="small mut">(отчёты, премии, бюджет)</span></label></div>` : (u.leader ? '<p><span class="badge gold">Руководство ГУ ВП</span></p>' : '')}</div>
     <div class="card flat"><div class="row between"><h3>Прогресс лекций</h3>${adm ? '<button class="btn sm danger" id="rstAll">Сбросить весь прогресс</button>' : ''}</div>
       <table><tr><th>Лекция</th><th>Досмотрено до</th><th>Засчитано времени</th><th>Отклонено heartbeat</th><th>Статус</th>${adm ? '<th></th>' : ''}</tr>
       ${r.lectures.map(l => `<tr><td>${esc(l.title)}${l.published ? '' : ' <span class="badge">черновик</span>'}</td><td>${l.max_pos != null ? fmtTime(l.max_pos) + ' / ' + fmtTime(l.duration_sec) : '—'}</td><td>${l.watched_sec != null ? fmtTime(l.watched_sec) : '—'}</td><td>${l.rejected || 0}</td>
@@ -535,6 +536,7 @@ route('/admin/user/:id', async (id) => {
   if (!adm) return;
   const act = async (method, path, body, ok) => { try { await api(method, path, body); toast(ok); render(); } catch (e) { toast(e.message, true); } };
   const role = $('#role'); if (role && !u.super) role.onchange = () => act('PUT', '/api/admin/users/' + u.id, { role: role.value }, 'Роль изменена');
+  const ld = $('#leader'); if (ld) ld.onchange = () => act('PUT', '/api/admin/users/' + u.id, { leader: ld.checked }, ld.checked ? 'Назначена роль «Руководство ГУ ВП»' : 'Роль «Руководство ГУ ВП» снята');
   const blk = $('#blk'); if (blk && !u.super) blk.onclick = () => { if (confirm(u.blocked ? 'Разблокировать?' : 'Заблокировать пользователя? Его сессии будут завершены.')) act('PUT', '/api/admin/users/' + u.id, { blocked: !u.blocked }, 'Готово'); };
   $('#rstAll').onclick = () => { if (confirm('Сбросить прогресс всех лекций этого пользователя?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, {}, 'Прогресс сброшен'); };
   $$('[data-rl]').forEach(b => b.onclick = () => { if (confirm('Сбросить прогресс этой лекции?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, { lecture_id: Number(b.dataset.rl) }, 'Прогресс сброшен'); });

@@ -7,3 +7,4 @@ tests/*.log
 tests/e2e-results.json
 .dev.vars
 tests/e2e-qtypes-results.json
+tests/e2e-reports-results.json

@@ -200,6 +200,7 @@ function publicUser(u) {
     avatar_url: u.avatar ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=128` : null,
     ic_name: u.ic_name || '', static_id: u.static_id || '', rank: u.rank || '',
     role: u.role, super: !!u.super, blocked: !!u.blocked,
+    leader: !!u.leader, staff: !!u.staff, senior: !!u.senior, staff_position: u.staff_position || '',
     created_at: u.created_at, last_login_at: u.last_login_at,
   };
 }
@@ -1762,6 +1763,7 @@ async function updateUser(request, env, actor, id) {
     ch.blocked = bool(b.blocked, false);
   }
   for (const k of ['ic_name', 'static_id', 'rank']) if (b[k] !== undefined) ch[k] = str(b[k], 100, { name: k });
+  if (b.leader !== undefined) ch.leader = bool(b.leader, false); // роль «Руководство ГУ ВП» — назначают администраторы
   const keys = Object.keys(ch);
   if (!keys.length) throw new HttpError(400, 'Нечего изменять');
   const stmts = [env.DB.prepare(`UPDATE users SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')} WHERE id = ?${keys.length + 1}`).bind(...keys.map(k => ch[k]), id)];
@@ -1918,6 +1920,595 @@ async function adminStats(env) {
 }
 
 // ---------- router ----------
+// ===================================================================================
+// ---------- Отчёты и премии (единая экосистема с сайтом отчётов vp-raport-offline) ----------
+// Неделя — понедельник 'YYYY-MM-DD'. Срок подачи — воскресенье 19:00 МСК (UTC+3, без перехода на летнее время).
+// Конфигурация (prem_config): items — пункты отчёта и выплата за 1 действие (Таблицы 1–2 приказа № 01_10),
+// positions — оклады по должностям (Таблица «Все выплаты»), plan — строки минимального/нормального плана
+// и какие пункты в них засчитываются, rules — проценты вычета, лимиты, сроки.
+const PREM_DEFAULT = {
+  items: [
+    // Основная отчётность (wk — баллы еженедельного отчёта, 'n' — баллы вписываются вручную)
+    { key: 'postavka', name: 'Участие в поставочном мероприятии', group: 'main', pay: 12500, pay_name: 'Участие в поставочном мероприятии', wk: 20 },
+    { key: 'otbitie', name: 'Участие в отбитии гос. складов', group: 'main', pay: 11500, pay_name: 'Участие в отбитии гос. складов', wk: 20 },
+    { key: 'training', name: 'Проведение тренировки для военнослужащих', group: 'main', pay: 9500, pay_name: 'Проведение тренировки для военнослужащих', wk: 3 },
+    { key: 'proc', name: 'Передать проц. действия правоохранительным органам', group: 'main', pay: 9500, pay_name: 'Передать проц. действия', wk: 5 },
+    { key: 'event6', name: 'Организовать МП', group: 'main', pay: 12000, pay_name: 'Организовать МП', wk: 'n' },
+    { key: 'gmp_org', name: 'Организовать ГМП', group: 'main', pay: 50000, pay_name: 'Организовать ГМП', wk: 'n' },
+    { key: 'pmp', name: 'Проведение ПМП', group: 'main', pay: 1500, pay_name: 'Проведение ПМП', wk: 3 },
+    { key: 'excursion', name: 'Проведение экскурсий для граждан по территории ВЧ', group: 'main', pay: 30000, pay_name: 'Проведение экскурсий для граждан по территории ВЧ', wk: 25 },
+    { key: 'oath', name: 'Принятие присяги у ВА', group: 'main', pay: 5000, pay_name: 'Принятие присяги ВА', wk: 1 },
+    // Дополнительная отчётность
+    { key: 'kraz', name: 'Участие в КРАЗе', group: 'extra', pay: 13000, pay_name: 'Участие в КРАЗе' },
+    { key: 'mp_visit', name: 'Посетить МП', group: 'extra', pay: 5000, pay_name: 'Посетить МП' },
+    { key: 'gmp', name: 'Посетить ГМП', group: 'extra', pay: 10500, pay_name: 'Посетить ГМП' },
+    { key: 'poverka', name: 'Участие в вечерней поверке', group: 'extra', pay: 8500, pay_name: 'Участие в вечерней поверке' },
+    { key: 'post_kom', name: 'Пост дежурный по комендатуре 60 минут', group: 'extra', pay: 15000, pay_name: 'Пост Дежурный по Комендатуре 60 минут' },
+    { key: 'post_shtab', name: 'Пост дежурный по штабу 60 минут', group: 'extra', pay: 15000, pay_name: 'Пост Дежурный по Штабу 60 минут' },
+    { key: 'post_kpp1', name: 'Пост дежурный по КПП - 1 60 минут', group: 'extra', pay: 35000, pay_name: 'Пост Дежурный по КПП-1 60 минут' },
+    { key: 'post_kpp2', name: 'Пост дежурный по КПП - 2 60 минут', group: 'extra', pay: 30000, pay_name: 'Пост Дежурный по КПП-2 60 минут' },
+    { key: 'naryad', name: 'Наряд ВП (КПП, патруль гарнизона, комендантский пост, 60 мин)', group: 'extra', pay: 0, pay_name: '', legacy: true },
+    { key: 'sso', name: 'Участие в налёте в форме ССО', group: 'extra', pay: 13000, pay_name: 'Участие в налёте в форме ССО' },
+    { key: 'patrol_city', name: 'Патруль по городу 60 минут', group: 'extra', pay: 38000, pay_name: 'Патруль по городу 60 минут' },
+    { key: 'patrol_gar', name: 'Патруль по гарнизону 60 минут', group: 'extra', pay: 35000, pay_name: 'Патруль по гарнизону 60 минут' },
+    { key: 'patrol_vch', name: 'Патруль по ВЧ 60 минут', group: 'extra', pay: 27000, pay_name: 'Патруль по ВЧ 60 минут' },
+    { key: 'patrol', name: 'Организация патрулирования', group: 'extra', pay: 0, pay_name: '', legacy: true },
+    { key: 'lecture_va', name: 'Проведение лекции ВА', group: 'extra', pay: 7000, pay_name: 'Проведение лекции ВА' },
+    { key: 'exam_va', name: 'Проведение экзамена ВА', group: 'extra', pay: 7500, pay_name: 'Проведение экзаменов ВА' },
+    { key: 'thanks', name: 'Благодарность от руководства', group: 'extra', pay: 2500, pay_name: 'Получение благодарности от руководства (50 баллов)' },
+    // Работа ГУ ВП
+    { key: 'city', name: 'Вывести военнослужащего в город', group: 'gu', pay: 5000, pay_name: 'Вывести военнослужащего в город' },
+    { key: 'reattest', name: 'Провести переаттестацию', group: 'gu', pay: 7500, pay_name: 'Провести переаттестацию' },
+    { key: 'vzysk', name: 'Написание рапорта на взыскание / выдача взыскания', group: 'gu', pay: 7000, pay_name: 'Написание рапорта на взыскание / выдача взыскания' },
+    { key: 'vygovor', name: 'Выговор, не из рапорта на взыскание', group: 'gu', pay: 0, pay_name: '', legacy: true },
+    { key: 'prof', name: 'Организация профилактического мероприятия', group: 'gu', pay: 6500, pay_name: 'Организация профилактического мероприятия' },
+    { key: 'prizyv', name: 'Принять участие в призывных мероприятиях', group: 'gu', pay: 13500, pay_name: 'Принять участие в призывных мероприятиях' },
+    { key: 'guardhouse', name: 'Посадить военнослужащего на гауптвахту', group: 'gu', pay: 7500, pay_name: 'Посадить военнослужащего на гауптвахту' },
+    { key: 'convoy', name: 'Сопровождение колонны ВС РФ', group: 'gu', pay: 4500, pay_name: 'Сопровождение колонны ВС РФ' },
+    { key: 'complaint', name: 'Рассмотрение жалобы на сотрудника ВС РФ', group: 'gu', pay: 7500, pay_name: 'Рассмотрение жалобы на сотрудника' },
+    { key: 'otrab', name: 'Рассмотрение рапорта на отработку дисц. взыскания', group: 'gu', pay: 8000, pay_name: 'Рассмотрение рапорта на отработку дисц. взыскания' },
+    { key: 'obzhal', name: 'Рассмотрение рапорта на обжалование дисц. взыскания', group: 'gu', pay: 8000, pay_name: 'Рассмотрение рапорта на обжалование дисц. взыскания' },
+    { key: 'docs', name: 'Проверка документов у личного состава', group: 'gu', pay: 4500, pay_name: 'Проверка документов у личного состава' },
+    { key: 'inspect', name: 'Личный осмотр личного состава', group: 'gu', pay: 4000, pay_name: 'Личный осмотр личного состава' },
+    { key: 'lecture_vp', name: 'Проведение лекции ВП', group: 'gu', pay: 7000, pay_name: 'Проведение лекции ВП' },
+    { key: 'exam_vp', name: 'Проведение экзамена ВП', group: 'gu', pay: 8000, pay_name: 'Проведение экзамена ВП' },
+    { key: 'soch', name: 'Поиски и поимка СОЧ', group: 'gu', pay: 40000, pay_name: 'Поиски и поимка СОЧ' },
+  ],
+  positions: [
+    { key: 'kom_gar', name: 'Комендант Гарнизона', zero: 85000, min: 170000, avg: 340000, max: 850000 },
+    { key: 'kom_bat', name: 'Ком. Бат. ВП', zero: 80000, min: 160000, avg: 320000, max: 800000 },
+    { key: 'zam_kom_bat', name: 'Зам. Ком. Бат. ВП', zero: 75000, min: 150000, avg: 300000, max: 750000 },
+    { key: 'insp_kom', name: 'Инспектор Комендатуры', zero: 68750, min: 137500, avg: 275000, max: 687500 },
+    { key: 'instr', name: 'Инструктор ВП', zero: 65000, min: 130000, avg: 260000, max: 650000 },
+    { key: 'insp', name: 'Инспектор ВП', zero: 55000, min: 110000, avg: 220000, max: 550000 },
+    { key: 'stazh', name: 'Стажёр ВП', zero: 35000, min: 70000, avg: 140000, max: 350000 },
+  ],
+  plan: [
+    { key: 'postavka', name: 'Участие в поставочных мероприятиях', min: 6, normal: 10, items: ['postavka'] },
+    { key: 'otbitie', name: 'Участие в отбитиях гос. складов', min: 2, normal: 3, items: ['otbitie'] },
+    { key: 'proc', name: 'Передача проц. действий правоохранительным органам', min: 1, normal: 2, items: ['proc'] },
+    { key: 'event', name: 'Мероприятия внутри ВС РФ (МП, тренировка, профилактическое)', min: 1, normal: 2, items: ['event6', 'training', 'prof'] },
+    { key: 'pmp', name: 'Реанимации военнослужащих (ПМП)', min: 3, normal: 5, items: ['pmp'] },
+    { key: 'gu', name: 'Действия ГУ ВП (вся «Работа ГУ ВП» + проц. действия + тренировки)', min: 5, normal: 8,
+      items: ['city', 'reattest', 'vzysk', 'vygovor', 'prof', 'prizyv', 'guardhouse', 'convoy', 'complaint', 'otrab', 'obzhal', 'docs', 'inspect', 'lecture_vp', 'exam_vp', 'soch', 'proc', 'training'] },
+  ],
+  rules: {
+    ded_none: 50, ded_min: 20,           // вычет из выплат за действия, %: отчёт без минимального плана / минимальный план
+    add_cap: 400000,                     // дополнительная премия — не больше на человека
+    award_min: 100000, award_max: 700000, // наградная премия из фонда
+    ss_max: 500000,                      // премия старшего состава
+    person_cap: 2000000,                 // оклад + премия + дополнительная + наградная (из фонда)
+    thanks_points: 50,                   // 1 благодарность = 50 баллов
+    fund_min: 8000000, fund_max: 20000000,
+    ss_contrib_min: 150000,              // еженедельный взнос СС в бюджет ГУ ВП
+    deadline_dow: 0, deadline_hour: 19,  // воскресенье 19:00 МСК
+  },
+};
+const PREM_CFG_KEYS = ['items', 'positions', 'plan', 'rules'];
+const MSK_OFFSET_MS = 3 * 3600 * 1000;
+const WEEK_RE = /^\d{4}-\d{2}-\d{2}$/;
+const POS_ALIASES = { 'комендант гарнизона': 'kom_gar', 'ком. бат. вп': 'kom_bat', 'ком. бат вп': 'kom_bat', 'командир батальона вп': 'kom_bat', 'командир батальона военной полиции': 'kom_bat',
+  'зам. ком. бат. вп': 'zam_kom_bat', 'зам. ком. бат вп': 'zam_kom_bat', 'заместитель командира батальона вп': 'zam_kom_bat', 'инспектор комендатуры': 'insp_kom', 'инспектор военной комендатуры': 'insp_kom',
+  'инструктор вп': 'instr', 'инспектор вп': 'insp', 'стажёр вп': 'stazh', 'стажер вп': 'stazh' };
+
+// --- даты ---
+function weekOf(ms) { // понедельник недели (по МСК), куда попадает момент ms
+  const d = new Date(ms + MSK_OFFSET_MS); const dow = (d.getUTCDay() + 6) % 7;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - dow)).toISOString().slice(0, 10);
+}
+function weekParam(v, name = 'неделя') {
+  const s = String(v || '');
+  if (!WEEK_RE.test(s)) throw new HttpError(400, `Некорректная ${name}: нужен понедельник ГГГГ-ММ-ДД`);
+  const d = new Date(s + 'T00:00:00Z'); if (isNaN(d) || d.toISOString().slice(0, 10) !== s || d.getUTCDay() !== 1) throw new HttpError(400, `Некорректная ${name}: нужен понедельник ГГГГ-ММ-ДД`);
+  return s;
+}
+function addDays(week, n) { const d = new Date(week + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function weekDeadline(week, rules = PREM_DEFAULT.rules) { // epoch ms: день недели deadline_dow (0 = вс) в deadline_hour по МСК
+  const off = rules.deadline_dow === 0 ? 6 : rules.deadline_dow - 1;
+  return Date.parse(addDays(week, off) + 'T00:00:00Z') + rules.deadline_hour * 3600000 - MSK_OFFSET_MS;
+}
+
+// --- конфигурация ---
+async function premConfig(env) {
+  const cfg = JSON.parse(JSON.stringify(PREM_DEFAULT));
+  const { results } = await env.DB.prepare('SELECT k, v FROM prem_config').all();
+  for (const r of results) { const v = parseJ(r.v, null); if (v && PREM_CFG_KEYS.includes(r.k)) cfg[r.k] = r.k === 'rules' ? { ...PREM_DEFAULT.rules, ...v } : v; }
+  return cfg;
+}
+function money(v, name, max = 100000000) { return int(v === '' || v == null ? 0 : Math.round(Number(v)), 0, max, name); }
+function premConfigInput(k, v) {
+  if (k === 'items') {
+    if (!Array.isArray(v) || !v.length || v.length > 200) throw new HttpError(400, 'Пункты: нужен непустой список');
+    const seen = new Set();
+    return v.map((x, i) => {
+      const key = str(x.key, 40, { required: true, name: `пункт ${i + 1}: ключ` });
+      if (!/^[a-z0-9_]{1,40}$/.test(key) || seen.has(key)) throw new HttpError(400, `Пункт ${i + 1}: ключ — латиница/цифры/_, без повторов`); seen.add(key);
+      const group = ['main', 'extra', 'gu'].includes(x.group) ? x.group : (() => { throw new HttpError(400, `Пункт ${key}: группа main/extra/gu`); })();
+      const o = { key, name: str(x.name, 200, { required: true, name: `пункт ${key}: название` }), group, pay: money(x.pay, `пункт ${key}: выплата`, 10000000), pay_name: str(x.pay_name, 200, { name: 'строка таблицы' }) };
+      if (group === 'main') o.wk = x.wk === 'n' ? 'n' : int(x.wk, 0, 1000, `пункт ${key}: баллы`, 0);
+      if (x.legacy) o.legacy = true;
+      return o;
+    });
+  }
+  if (k === 'positions') {
+    if (!Array.isArray(v) || !v.length || v.length > 30) throw new HttpError(400, 'Должности: нужен непустой список');
+    const seen = new Set();
+    return v.map((x, i) => {
+      const key = str(x.key, 40, { required: true, name: `должность ${i + 1}: ключ` });
+      if (!/^[a-z0-9_]{1,40}$/.test(key) || seen.has(key)) throw new HttpError(400, `Должность ${i + 1}: ключ — латиница/цифры/_, без повторов`); seen.add(key);
+      const o = { key, name: str(x.name, 100, { required: true, name: `должность ${key}: название` }) };
+      for (const f of ['zero', 'min', 'avg', 'max']) o[f] = money(x[f], `должность ${o.name}: ${f}`);
+      if (!(o.zero <= o.min && o.min <= o.avg && o.avg <= o.max)) throw new HttpError(400, `Должность ${o.name}: должно быть нулевой ≤ минимальный ≤ средний ≤ максимальная выплата`);
+      return o;
+    });
+  }
+  if (k === 'plan') {
+    if (!Array.isArray(v) || v.length > 30) throw new HttpError(400, 'План: нужен список строк');
+    const seen = new Set();
+    return v.map((x, i) => {
+      const key = str(x.key, 40, { required: true, name: `строка плана ${i + 1}: ключ` });
+      if (!/^[a-z0-9_]{1,40}$/.test(key) || seen.has(key)) throw new HttpError(400, `Строка плана ${i + 1}: ключ — латиница/цифры/_, без повторов`); seen.add(key);
+      const items = (Array.isArray(x.items) ? x.items : String(x.items || '').split(',')).map(s => String(s).trim()).filter(Boolean);
+      if (!items.length) throw new HttpError(400, `Строка плана «${x.name || key}»: укажите пункты`);
+      const o = { key, name: str(x.name, 200, { required: true, name: `строка плана ${key}: название` }), min: int(x.min, 0, 1000, 'минимальный план'), normal: int(x.normal, 0, 1000, 'нормальный план'), items: [...new Set(items)] };
+      if (o.normal < o.min) throw new HttpError(400, `Строка плана «${o.name}»: нормальный план не может быть меньше минимального`);
+      return o;
+    });
+  }
+  if (k === 'rules') {
+    const d = PREM_DEFAULT.rules, o = {};
+    o.ded_none = int(v.ded_none ?? d.ded_none, 0, 100, 'вычет без плана, %'); o.ded_min = int(v.ded_min ?? d.ded_min, 0, 100, 'вычет при минимальном плане, %');
+    for (const f of ['add_cap', 'award_min', 'award_max', 'ss_max', 'person_cap', 'fund_min', 'fund_max', 'ss_contrib_min']) o[f] = money(v[f] ?? d[f], f, 1000000000);
+    o.thanks_points = int(v.thanks_points ?? d.thanks_points, 1, 10000, 'баллов за благодарность');
+    o.deadline_dow = int(v.deadline_dow ?? d.deadline_dow, 0, 6, 'день срока'); o.deadline_hour = int(v.deadline_hour ?? d.deadline_hour, 0, 23, 'час срока');
+    if (o.award_min > o.award_max) throw new HttpError(400, 'Наградная премия: минимум больше максимума');
+    if (o.fund_min > o.fund_max) throw new HttpError(400, 'Фонд: минимум больше максимума');
+    return o;
+  }
+  throw new HttpError(400, 'Неизвестный раздел настроек');
+}
+function positionKey(cfg, v) {
+  const s = String(v || '').trim(); if (!s) return '';
+  if (cfg.positions.some(p => p.key === s)) return s;
+  const low = s.toLowerCase().replace(/\s+/g, ' ');
+  const byName = cfg.positions.find(p => p.name.toLowerCase() === low); if (byName) return byName.key;
+  return POS_ALIASES[low] && cfg.positions.some(p => p.key === POS_ALIASES[low]) ? POS_ALIASES[low] : '';
+}
+
+// --- движок премий (чистые функции, покрыты tests/prem-unit.js) ---
+// Засчитанные количества: отклонённые проверяющим пункты не идут, n_ok — принятое количество (если проверяющий его уменьшил).
+function premCounts(items, review) {
+  const c = {};
+  for (const it of items || []) {
+    if (it.custom) continue;
+    const rv = (review || {})[it.key] || {};
+    if (rv.status === 'rejected') continue;
+    const n = rv.n_ok != null ? Math.min(rv.n_ok, it.n) : it.n;
+    if (n > 0) c[it.key] = (c[it.key] || 0) + n;
+  }
+  return c;
+}
+function premPlan(cfg, counts) {
+  const lines = cfg.plan.map(l => { const got = l.items.reduce((s, k) => s + (counts[k] || 0), 0); return { key: l.key, name: l.name, got, min: l.min, normal: l.normal, ok_min: got >= l.min, ok_normal: got >= l.normal }; });
+  const level = lines.every(l => l.ok_normal) ? 'normal' : lines.every(l => l.ok_min) ? 'min' : 'none';
+  return { level, lines, missing_min: lines.filter(l => !l.ok_min).map(l => ({ key: l.key, name: l.name, need: l.min - l.got })), missing_normal: lines.filter(l => !l.ok_normal).map(l => ({ key: l.key, name: l.name, need: l.normal - l.got })) };
+}
+// Базовая премия одного сотрудника: оклад по уровню плана + выплаты за действия − вычет, не больше максимальной выплаты должности.
+function premBase(cfg, p) {
+  const r = { eligible: false, reason: '', plan: null, actions: 0, deduct_pct: 0, deduction: 0, oklad: 0, oklad_tier: '', gross: 0, base: 0, excess: 0, max: 0 };
+  if (!p.report) { r.reason = 'нет отчёта'; return r; }
+  if (p.late) { r.reason = 'отчёт после срока'; return r; }
+  if (p.status === 'rejected') { r.reason = 'отчёт отклонён'; return r; }
+  const pos = cfg.positions.find(x => x.key === p.position);
+  const counts = p.counts || {};
+  r.plan = premPlan(cfg, counts);
+  const pay = new Map(cfg.items.map(i => [i.key, i.pay || 0]));
+  r.actions = Object.entries(counts).reduce((s, [k, n]) => s + (pay.get(k) || 0) * n, 0);
+  if (!pos) { r.reason = 'должность не указана'; return r; }
+  r.max = pos.max;
+  const R = cfg.rules;
+  if (r.plan.level === 'normal') { r.oklad_tier = 'avg'; r.oklad = pos.avg; r.deduct_pct = 0; }
+  else if (r.plan.level === 'min') { r.oklad_tier = 'min'; r.oklad = pos.min; r.deduct_pct = R.ded_min; }
+  else { r.oklad_tier = 'zero'; r.oklad = pos.zero; r.deduct_pct = R.ded_none; }
+  r.deduction = Math.round(r.actions * r.deduct_pct / 100);
+  r.gross = r.oklad + r.actions - r.deduction;
+  r.base = Math.min(r.gross, pos.max);
+  r.excess = Math.max(0, r.gross - pos.max);
+  r.eligible = true;
+  return r;
+}
+// Делит available между запросами want[] пропорционально (целые рубли, вниз); если хватает — платит всё.
+function premShare(want, available) {
+  const total = want.reduce((s, x) => s + x, 0);
+  if (total <= 0) return { paid: want.map(() => 0), short: false };
+  if (available >= total) return { paid: want.slice(), short: false };
+  if (available <= 0) return { paid: want.map(() => 0), short: true };
+  return { paid: want.map(x => Math.floor(available * x / total)), short: true };
+}
+// people: [{user_id, name, position, report:boolean, late, status, counts, award, ss, award_budget, senior}]
+// Порядок: базовая премия (оклад + действия) платится всегда → дополнительная (превышение над максимальной выплатой,
+// ≤ add_cap, при нехватке — пропорционально) → наградная из фонда → премия СС. Надбавки, на которые не хватает фонда,
+// урезаются (пропорционально внутри своей очереди). Лимит на человека person_cap: оклад + премия + доп. + наградная.
+// Премия СС и наградная из бюджета ГУ ВП в лимит не входят.
+function computePremiums(cfg, fund, people) {
+  const R = cfg.rules;
+  const rows = people.map(p => ({ user_id: p.user_id, name: p.name, position: p.position, ...premBase(cfg, p), add: 0, award: 0, ss: 0, award_budget: 0, add_want: 0, award_want: 0, ss_want: 0 }));
+  const base = rows.reduce((s, r) => s + r.base, 0);
+  let left = (fund || 0) - base;
+  const fundShort = left < 0;
+  const room = (r) => Math.max(0, R.person_cap - r.base - r.add - r.award);
+  // дополнительная
+  rows.forEach(r => { r.add_want = r.eligible ? Math.min(r.excess, R.add_cap, room(r)) : 0; });
+  let sh = premShare(rows.map(r => r.add_want), left); rows.forEach((r, i) => { r.add = sh.paid[i]; }); left -= rows.reduce((s, r) => s + r.add, 0);
+  const addShort = sh.short;
+  // наградная (из фонда)
+  rows.forEach((r, i) => { r.award_want = r.eligible ? Math.min(people[i].award || 0, room(r)) : 0; });
+  sh = premShare(rows.map(r => r.award_want), left); rows.forEach((r, i) => { r.award = sh.paid[i]; }); left -= rows.reduce((s, r) => s + r.award, 0);
+  const awardShort = sh.short;
+  // премия СС (вне лимита на человека)
+  rows.forEach((r, i) => { r.ss_want = people[i].senior && r.eligible ? Math.min(people[i].ss || 0, R.ss_max) : 0; });
+  sh = premShare(rows.map(r => r.ss_want), left); rows.forEach((r, i) => { r.ss = sh.paid[i]; }); left -= rows.reduce((s, r) => s + r.ss, 0);
+  const ssShort = sh.short;
+  rows.forEach((r, i) => { r.award_budget = people[i].award_budget || 0; r.total_fund = r.base + r.add + r.award + r.ss; r.total = r.total_fund + r.award_budget; });
+  const paid = rows.reduce((s, r) => s + r.total_fund, 0);
+  return { rows, fund: fund || 0, base_total: base, paid_from_fund: paid, remaining: (fund || 0) - paid, fund_short: fundShort, add_short: addShort, award_short: awardShort, ss_short: ssShort,
+    award_budget_total: rows.reduce((s, r) => s + r.award_budget, 0) };
+}
+function weeklyPoints(cfg, items) {
+  const wk = new Map(cfg.items.filter(i => i.group === 'main').map(i => [i.key, i.wk]));
+  return (items || []).reduce((s, it) => { const w = wk.get(it.key); if (w === 'n') return s + (it.n > 0 ? (it.vp || 0) : 0); return s + (typeof w === 'number' ? w * it.n : 0); }, 0);
+}
+function strikeLabel(n) { return n <= 0 ? '' : n === 1 ? 'предупреждение' : n === 2 ? 'выговор' : 'увольнение'; }
+
+// --- отчёты сотрудника ---
+const REPORT_STATUS = ['submitted', 'review', 'approved', 'rejected'];
+function cleanLinks(v) {
+  const arr = (Array.isArray(v) ? v : String(v || '').split(/\s+/)).map(s => String(s).trim()).filter(Boolean);
+  if (arr.length > 60) throw new HttpError(400, 'Слишком много ссылок у одного пункта (макс. 60)');
+  return arr.map(u => { if (u.length > 1000 || !/^https?:\/\/[^\s]+$/i.test(u)) throw new HttpError(400, 'Ссылка должна начинаться с http:// или https://: ' + u.slice(0, 80)); return u; });
+}
+function reportInput(cfg, b) {
+  const week = weekParam(b.week);
+  const h = b.header || {};
+  const position = positionKey(cfg, b.position || h.position);
+  if (!position) throw new HttpError(400, 'Выберите должность из списка (' + cfg.positions.map(p => p.name).join(', ') + ')');
+  const header = {
+    number: str(h.number, 40, { name: 'номер' }), date: str(h.date, 20, { name: 'дата' }),
+    rank: str(h.rank, 60, { required: true, name: 'звание' }), name: str(h.name, 100, { required: true, name: 'имя фамилия' }),
+    static_id: str(h.static_id, 30, { required: true, name: 'номер удостоверения' }), unit: str(h.unit, 120, { name: 'подразделение' }),
+    from: str(h.from, 20, { name: 'начало периода' }), to: str(h.to, 20, { name: 'конец периода' }),
+    result: str(h.result, 2000, { name: 'общий результат' }), extra: str(h.extra, 2000, { name: 'дополнительные сведения' }),
+  };
+  if (header.from && header.from !== week) throw new HttpError(400, 'Отчётный период должен начинаться с понедельника выбранной недели');
+  if (header.to && header.to !== addDays(week, 6)) throw new HttpError(400, 'Отчётный период — с понедельника по воскресенье одной недели');
+  const known = new Map(cfg.items.map(i => [i.key, i]));
+  if (!Array.isArray(b.items) || b.items.length > 200) throw new HttpError(400, 'Пункты отчёта: нужен список');
+  const seen = new Set();
+  const items = b.items.map((x, i) => {
+    const custom = !!x.custom;
+    const key = str(x.key, 40, { required: true, name: `пункт ${i + 1}` });
+    if (!/^[a-z0-9_]{1,40}$/i.test(key) || seen.has(key)) throw new HttpError(400, `Пункт ${i + 1}: некорректный или повторный ключ`); seen.add(key);
+    if (!custom && !known.has(key)) throw new HttpError(400, `Неизвестный пункт отчёта: ${key}`);
+    const k = known.get(key);
+    const o = { key, name: custom ? str(x.name, 200, { required: true, name: 'свой пункт' }) : k.name, group: custom ? (['main', 'extra', 'gu'].includes(x.group) ? x.group : 'extra') : k.group,
+      n: int(x.n, 0, 1000, `количество «${custom ? x.name : k.name}»`), links: cleanLinks(x.links) };
+    if (custom) o.custom = true;
+    if (!custom && k.wk === 'n') o.vp = int(x.vp, 0, 100000, `баллы «${k.name}»`, 0);
+    if (!custom && key === 'thanks' && x.points != null && x.points !== '') { o.points = int(x.points, 0, 1000000, 'баллы благодарностей'); o.n = Math.floor(o.points / cfg.rules.thanks_points); }
+    return o;
+  }).filter(x => x.n > 0);
+  if (!items.length) throw new HttpError(400, 'В отчёте нет ни одного выполненного пункта');
+  return { week, position, header, items };
+}
+function sameItem(a, b) { return a && b && a.n === b.n && (a.vp || 0) === (b.vp || 0) && JSON.stringify(a.links) === JSON.stringify(b.links); }
+async function submitReport(request, env, user) {
+  await rateLimit(env, 'report:' + user.id, 30, 600);
+  const cfg = await premConfig(env);
+  const b = await readJson(request, 400000);
+  const r = reportInput(cfg, b);
+  const now = Date.now();
+  if (r.week > weekOf(now)) throw new HttpError(400, 'Нельзя отправить отчёт за будущую неделю');
+  const deadline = weekDeadline(r.week, cfg.rules);
+  const points = weeklyPoints(cfg, r.items);
+  const old = await env.DB.prepare('SELECT * FROM reports WHERE user_id = ?1 AND week = ?2').bind(user.id, r.week).first();
+  const data = JSON.stringify({ header: r.header, items: r.items });
+  let id, version;
+  if (!old) {
+    const late = now > deadline ? 1 : 0;
+    const row = await env.DB.prepare(`INSERT INTO reports (user_id, week, position, data, points, status, late, first_submitted_at, submitted_at, version, item_review, created_at, updated_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, 'submitted', ?6, ?7, ?7, 1, '{}', ?7, ?7) RETURNING id`).bind(user.id, r.week, r.position, data, points, late, now).first();
+    id = row.id; version = 1;
+  } else {
+    // правка в том же отчёте: история версий; опоздание определяется первой отправкой; отметки проверки по изменённым пунктам сбрасываются
+    const oldItems = parseJ(old.data, {}).items || [];
+    const review = parseJ(old.item_review, {});
+    const om = new Map(oldItems.map(i => [i.key, i]));
+    for (const k of Object.keys(review)) { const ni = r.items.find(i => i.key === k); if (!ni || !sameItem(om.get(k), ni)) delete review[k]; }
+    version = (old.version || 1) + 1; id = old.id;
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO report_history (report_id, version, data, position, submitted_at, after_deadline) VALUES (?1, ?2, ?3, ?4, ?5, ?6)').bind(old.id, old.version || 1, old.data, old.position, old.submitted_at, old.submitted_at > deadline ? 1 : 0),
+      env.DB.prepare(`UPDATE reports SET position = ?1, data = ?2, points = ?3, status = 'submitted', item_review = ?4, submitted_at = ?5, version = ?6, updated_at = ?5, edited_after_deadline = CASE WHEN ?5 > ?7 THEN 1 ELSE edited_after_deadline END WHERE id = ?8`)
+        .bind(r.position, data, points, JSON.stringify(review), now, version, deadline, old.id),
+    ]);
+  }
+  return json({ report: await reportPublic(env, cfg, await env.DB.prepare('SELECT * FROM reports WHERE id = ?1').bind(id).first(), true), created: !old });
+}
+async function reportPublic(env, cfg, row, mine) {
+  if (!row) return null;
+  const d = parseJ(row.data, {});
+  const review = parseJ(row.item_review, {});
+  const counts = premCounts(d.items, review);
+  const pos = cfg.positions.find(p => p.key === row.position);
+  const o = { id: row.id, user_id: row.user_id, week: row.week, deadline: weekDeadline(row.week, cfg.rules), position: row.position, position_name: pos ? pos.name : row.position,
+    header: d.header || {}, items: (d.items || []).map(i => ({ ...i, review: review[i.key] || null })), points: row.points, status: row.status, late: !!row.late, edited_after_deadline: !!row.edited_after_deadline,
+    first_submitted_at: row.first_submitted_at, submitted_at: row.submitted_at, version: row.version, comment: row.comment || '', reviewed_at: row.reviewed_at, reviewed_by: row.reviewed_by,
+    plan: premPlan(cfg, counts) };
+  return o;
+}
+async function myReports(env, user, url) {
+  const cfg = await premConfig(env);
+  const cur = weekOf(Date.now());
+  const week = url.searchParams.get('week') ? weekParam(url.searchParams.get('week')) : cur;
+  const row = await env.DB.prepare('SELECT * FROM reports WHERE user_id = ?1 AND week = ?2').bind(user.id, week).first();
+  const { results } = await env.DB.prepare('SELECT id, week, status, late, submitted_at, version, comment FROM reports WHERE user_id = ?1 ORDER BY week DESC LIMIT 20').bind(user.id).all();
+  return json({ week, current_week: cur, deadline: weekDeadline(week, cfg.rules), now: Date.now(), report: await reportPublic(env, cfg, row, true), recent: results.map(r => ({ ...r, late: !!r.late })),
+    user: publicUser(user) });
+}
+function premConfigPublic(cfg) {
+  return { items: cfg.items, positions: cfg.positions.map(p => ({ key: p.key, name: p.name })), plan: cfg.plan, rules: { thanks_points: cfg.rules.thanks_points, deadline_dow: cfg.rules.deadline_dow, deadline_hour: cfg.rules.deadline_hour } };
+}
+
+// --- руководство: неделя, премии ---
+function requireLead(user) { if (!(user.leader || user.super)) throw new HttpError(403, 'Раздел доступен роли «Руководство ГУ ВП»'); }
+function requireSuper(user) { if (!user.super) throw new HttpError(403, 'Изменять таблицы выплат может только главный администратор'); }
+async function weekData(env, week) {
+  const cfg = await premConfig(env);
+  const [wk, rep, staff, man] = await Promise.all([
+    env.DB.prepare('SELECT * FROM prem_weeks WHERE week = ?1').bind(week).first(),
+    env.DB.prepare('SELECT r.*, u.username, u.global_name, u.ic_name, u.static_id, u.staff, u.senior FROM reports r JOIN users u ON u.id = r.user_id WHERE r.week = ?1').bind(week).all(),
+    env.DB.prepare("SELECT id, username, global_name, ic_name, static_id, staff, senior, staff_position, staff_since FROM users WHERE staff = 1 AND (staff_since IS NULL OR staff_since <= ?1)").bind(week).all(),
+    env.DB.prepare('SELECT * FROM prem_manual WHERE week = ?1').bind(week).all(),
+  ]);
+  const manual = new Map(man.results.map(m => [m.user_id, m]));
+  const people = new Map();
+  const nm = (u) => u.ic_name || u.global_name || u.username || u.id;
+  for (const u of staff.results) people.set(u.id, { user_id: u.id, name: nm(u), static_id: u.static_id || '', staff: 1, senior: !!u.senior, position: u.staff_position || '', report: false, row: null });
+  for (const r of rep.results) {
+    const d = parseJ(r.data, {}); const p = people.get(r.user_id) || { user_id: r.user_id, name: nm(r), static_id: r.static_id || '', staff: r.staff ? 1 : 0, senior: !!r.senior };
+    Object.assign(p, { report: true, row: r, position: r.position, late: !!r.late, status: r.status, counts: premCounts(d.items, parseJ(r.item_review, {})), items: d.items || [], header: d.header || {} });
+    p.name = r.ic_name || (d.header && d.header.name) || p.name; if (!p.static_id && d.header) p.static_id = d.header.static_id || '';
+    people.set(r.user_id, p);
+  }
+  const list = [...people.values()].map(p => { const m = manual.get(p.user_id) || {}; return { ...p, award: m.award || 0, ss: m.ss || 0, award_budget: m.award_budget || 0, manual_note: m.note || '' }; });
+  const posOrder = new Map(cfg.positions.map((p, i) => [p.key, i]));
+  list.sort((a, b) => (posOrder.get(a.position) ?? 99) - (posOrder.get(b.position) ?? 99) || String(a.name).localeCompare(String(b.name), 'ru'));
+  const calc = computePremiums(cfg, wk ? wk.fund : 0, list);
+  return { cfg, wk, list, calc };
+}
+async function leadWeek(env, url) {
+  const week = url.searchParams.get('week') ? weekParam(url.searchParams.get('week')) : weekOf(Date.now());
+  const { cfg, wk, list, calc } = await weekData(env, week);
+  const deadline = weekDeadline(week, cfg.rules);
+  const strikes = await strikeMap(env, cfg);
+  const rows = list.map((p, i) => ({ user_id: p.user_id, name: p.name, static_id: p.static_id, staff: !!p.staff, senior: !!p.senior, position: p.position, report_id: p.row ? p.row.id : null,
+    status: p.report ? p.status : 'missing', late: !!p.late, submitted_at: p.row ? p.row.first_submitted_at : null, edited_after_deadline: p.row ? !!p.row.edited_after_deadline : false,
+    points: p.row ? p.row.points : 0, counts: p.counts || {}, manual_note: p.manual_note, m_award: p.award, m_ss: p.ss, strikes: strikes.get(p.user_id) || 0, ...calc.rows[i] }));
+  const leftover = await env.DB.prepare("SELECT id, amount FROM budget_ledger WHERE kind = 'leftover' AND week = ?1 AND deleted_at IS NULL").bind(week).first();
+  return json({ week, deadline, deadline_passed: Date.now() > deadline, current_week: weekOf(Date.now()), fund: wk ? wk.fund : 0, fund_note: wk ? wk.note || '' : '', fund_set: !!wk,
+    rows, totals: { base: calc.base_total, paid: calc.paid_from_fund, remaining: calc.remaining, award_budget: calc.award_budget_total, fund_short: calc.fund_short, add_short: calc.add_short, award_short: calc.award_short, ss_short: calc.ss_short },
+    leftover_posted: leftover ? leftover.amount : null, config: { items: cfg.items, positions: cfg.positions, plan: cfg.plan, rules: cfg.rules } });
+}
+async function leadSetFund(request, env, actor, week) {
+  const cfg = await premConfig(env); const b = await readJson(request);
+  const fund = money(b.fund, 'премиальный фонд', 1000000000);
+  if (fund && (fund < cfg.rules.fund_min || fund > cfg.rules.fund_max)) throw new HttpError(400, `Премиальный фонд — от ${cfg.rules.fund_min.toLocaleString('ru-RU')} до ${cfg.rules.fund_max.toLocaleString('ru-RU')} ₽`);
+  const note = str(b.note, 500, { name: 'примечание' });
+  await env.DB.prepare('INSERT INTO prem_weeks (week, fund, note, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(week) DO UPDATE SET fund = excluded.fund, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at')
+    .bind(week, fund, note, actor.id, Date.now()).run();
+  await audit(env, actor, 'prem.fund', week, { fund, note });
+  return json({ ok: true });
+}
+async function leadSetManual(request, env, actor, week, uid) {
+  const cfg = await premConfig(env); const R = cfg.rules; const b = await readJson(request);
+  const u = await env.DB.prepare('SELECT id, senior FROM users WHERE id = ?1').bind(uid).first();
+  if (!u) throw new HttpError(404, 'Пользователь не найден');
+  const award = money(b.award, 'наградная премия'), ss = money(b.ss, 'премия СС'), award_budget = money(b.award_budget, 'наградная из бюджета ГУ ВП');
+  if (award && (award < R.award_min || award > R.award_max)) throw new HttpError(400, `Наградная премия — от ${R.award_min.toLocaleString('ru-RU')} до ${R.award_max.toLocaleString('ru-RU')} ₽ (или 0)`);
+  if (ss && !u.senior) throw new HttpError(400, 'Премия СС — только сотрудникам старшего состава (отметка «СС» в списке состава)');
+  if (ss > R.ss_max) throw new HttpError(400, `Премия СС — не больше ${R.ss_max.toLocaleString('ru-RU')} ₽`);
+  const note = str(b.note, 500, { name: 'примечание' });
+  await env.DB.prepare(`INSERT INTO prem_manual (week, user_id, award, ss, award_budget, note, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    ON CONFLICT(week, user_id) DO UPDATE SET award = excluded.award, ss = excluded.ss, award_budget = excluded.award_budget, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+    .bind(week, uid, award, ss, award_budget, note, actor.id, Date.now()).run();
+  await audit(env, actor, 'prem.manual', uid, { week, award, ss, award_budget, note });
+  return json({ ok: true });
+}
+async function leadPostLeftover(env, actor, week) {
+  const { calc } = await weekData(env, week);
+  const cfg = await premConfig(env);
+  if (Date.now() <= weekDeadline(week, cfg.rules)) throw new HttpError(400, 'Остаток можно перенести только после срока подачи отчётов');
+  const amount = Math.max(0, calc.remaining);
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE budget_ledger SET deleted_at = ?1, deleted_by = ?2 WHERE kind = 'leftover' AND week = ?3 AND deleted_at IS NULL").bind(now, actor.id, week),
+    env.DB.prepare("INSERT INTO budget_ledger (kind, amount, user_id, week, note, created_by, created_at) VALUES ('leftover', ?1, NULL, ?2, ?3, ?4, ?5)").bind(amount, week, 'Остаток премиального фонда', actor.id, now),
+  ]);
+  await audit(env, actor, 'budget.leftover', week, { amount });
+  return json({ ok: true, amount });
+}
+async function leadReport(env, id) {
+  const cfg = await premConfig(env);
+  const row = await env.DB.prepare('SELECT * FROM reports WHERE id = ?1').bind(id).first();
+  if (!row) throw new HttpError(404, 'Отчёт не найден');
+  const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(row.user_id).first();
+  const { results: hist } = await env.DB.prepare('SELECT id, version, position, submitted_at, after_deadline, data FROM report_history WHERE report_id = ?1 ORDER BY version DESC').bind(id).all();
+  const rep = await reportPublic(env, cfg, row, false);
+  const { calc, list } = await weekData(env, row.week);
+  const idx = list.findIndex(p => p.user_id === row.user_id);
+  const reviewer = row.reviewed_by ? await env.DB.prepare('SELECT username, global_name, ic_name FROM users WHERE id = ?1').bind(row.reviewed_by).first() : null;
+  return json({ report: rep, user: u ? publicUser({ ...u, super: isSuper(env, u.id) }) : null, calc: idx >= 0 ? calc.rows[idx] : null,
+    reviewer: reviewer ? (reviewer.ic_name || reviewer.global_name || reviewer.username) : null,
+    history: hist.map(h => { const d = parseJ(h.data, {}); return { version: h.version, position: h.position, submitted_at: h.submitted_at, after_deadline: !!h.after_deadline, items: (d.items || []).map(i => ({ key: i.key, name: i.name, n: i.n, links: (i.links || []).length })) }; }),
+    config: { items: cfg.items, positions: cfg.positions, plan: cfg.plan } });
+}
+async function leadReview(request, env, actor, id) {
+  const cfg = await premConfig(env);
+  const row = await env.DB.prepare('SELECT * FROM reports WHERE id = ?1').bind(id).first();
+  if (!row) throw new HttpError(404, 'Отчёт не найден');
+  const b = await readJson(request);
+  const d = parseJ(row.data, {});
+  const review = parseJ(row.item_review, {});
+  if (b.items && typeof b.items === 'object') {
+    for (const [k, v] of Object.entries(b.items)) {
+      const it = (d.items || []).find(i => i.key === k); if (!it) throw new HttpError(400, 'Нет такого пункта в отчёте: ' + k);
+      if (v === null || v.status === 'pending') { delete review[k]; continue; }
+      if (!['ok', 'rejected'].includes(v.status)) throw new HttpError(400, 'Статус пункта: ok или rejected');
+      const o = { status: v.status, comment: str(v.comment, 500, { name: 'комментарий к пункту' }), by: actor.id, at: Date.now() };
+      if (v.status === 'ok' && v.n_ok != null && v.n_ok !== '') { o.n_ok = int(v.n_ok, 0, it.n, `принято штук «${it.name}» (0…${it.n})`); if (o.n_ok === it.n) delete o.n_ok; }
+      review[k] = o;
+    }
+  }
+  let status = row.status;
+  if (b.status !== undefined) { if (!REPORT_STATUS.includes(b.status)) throw new HttpError(400, 'Статус отчёта: submitted, review, approved, rejected'); status = b.status; }
+  else if (status === 'submitted' && b.items) status = 'review';
+  const comment = b.comment !== undefined ? str(b.comment, 2000, { name: 'комментарий' }) : row.comment;
+  let position = row.position;
+  if (b.position !== undefined) { position = positionKey(cfg, b.position); if (!position) throw new HttpError(400, 'Неизвестная должность'); }
+  await env.DB.prepare('UPDATE reports SET item_review = ?1, status = ?2, comment = ?3, position = ?4, reviewed_by = ?5, reviewed_at = ?6 WHERE id = ?7')
+    .bind(JSON.stringify(review), status, comment, position, actor.id, Date.now(), id).run();
+  await audit(env, actor, 'report.review', id, { status, items: b.items ? Object.keys(b.items).length : 0, position: position !== row.position ? position : undefined });
+  return leadReport(env, id);
+}
+// --- состав, нарушения ---
+async function leadStaff(env) {
+  const { results } = await env.DB.prepare(`SELECT u.id, u.username, u.global_name, u.ic_name, u.static_id, u.staff, u.senior, u.leader, u.staff_position, u.staff_since, u.last_login_at,
+      (SELECT COUNT(*) FROM reports r WHERE r.user_id = u.id) AS reports FROM users u ORDER BY u.staff DESC, COALESCE(u.ic_name, u.global_name, u.username)`).all();
+  return json({ users: results.map(u => ({ ...u, staff: !!u.staff, senior: !!u.senior, leader: !!u.leader })), current_week: weekOf(Date.now()) });
+}
+async function leadSetStaff(request, env, actor, uid) {
+  const cfg = await premConfig(env); const b = await readJson(request);
+  const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(uid).first(); if (!u) throw new HttpError(404, 'Пользователь не найден');
+  const ch = {};
+  if (b.staff !== undefined) { ch.staff = bool(b.staff, false); if (ch.staff && !u.staff && b.staff_since === undefined && !u.staff_since) ch.staff_since = weekOf(Date.now()); }
+  if (b.senior !== undefined) ch.senior = bool(b.senior, false);
+  if (b.staff_position !== undefined) { ch.staff_position = b.staff_position ? positionKey(cfg, b.staff_position) : ''; if (b.staff_position && !ch.staff_position) throw new HttpError(400, 'Неизвестная должность'); }
+  if (b.staff_since !== undefined) ch.staff_since = b.staff_since ? weekParam(b.staff_since, 'неделя начала учёта') : null;
+  const keys = Object.keys(ch); if (!keys.length) throw new HttpError(400, 'Нечего изменять');
+  await env.DB.prepare(`UPDATE users SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')} WHERE id = ?${keys.length + 1}`).bind(...keys.map(k => ch[k]), uid).run();
+  await audit(env, actor, 'staff.update', uid, ch);
+  return json({ ok: true });
+}
+// Нарушения: по каждому сотруднику состава — недели с начала учёта (staff_since), срок которых прошёл, без отчёта в срок.
+// Снятые руководством (violation_excuses) не считаются. 1 — предупреждение, 2 — выговор, 3+ — увольнение.
+async function violationsData(env, cfg) {
+  const now = Date.now();
+  const { results: staff } = await env.DB.prepare('SELECT id, username, global_name, ic_name, static_id, staff_since, staff_position FROM users WHERE staff = 1').all();
+  const { results: reps } = await env.DB.prepare('SELECT user_id, week, late, first_submitted_at FROM reports').all();
+  const { results: exc } = await env.DB.prepare('SELECT user_id, week, note, by_id, at FROM violation_excuses').all();
+  const rm = new Map(reps.map(r => [r.user_id + '|' + r.week, r]));
+  const em = new Map(exc.map(e => [e.user_id + '|' + e.week, e]));
+  const lastClosed = (() => { let w = weekOf(now); if (now <= weekDeadline(w, cfg.rules)) w = addDays(w, -7); return w; })();
+  const out = [];
+  for (const u of staff) {
+    const since = u.staff_since || lastClosed;
+    const list = [];
+    for (let w = since; w <= lastClosed && list.length < 400; w = addDays(w, 7)) {
+      const r = rm.get(u.id + '|' + w);
+      if (r && !r.late) continue;
+      const e = em.get(u.id + '|' + w);
+      list.push({ week: w, kind: r ? 'late' : 'missing', excused: !!e, note: e ? e.note : '' });
+    }
+    const n = list.filter(x => !x.excused).length;
+    out.push({ user_id: u.id, name: u.ic_name || u.global_name || u.username, static_id: u.static_id || '', staff_since: u.staff_since, strikes: n, label: strikeLabel(n), list });
+  }
+  out.sort((a, b) => b.strikes - a.strikes || String(a.name).localeCompare(String(b.name), 'ru'));
+  return { last_closed_week: lastClosed, users: out };
+}
+async function strikeMap(env, cfg) { const v = await violationsData(env, cfg); return new Map(v.users.map(u => [u.user_id, u.strikes])); }
+async function leadExcuse(request, env, actor) {
+  const b = await readJson(request);
+  const uid = str(b.user_id, 25, { required: true, name: 'пользователь' }); const week = weekParam(b.week);
+  if (b.excused) await env.DB.prepare('INSERT OR REPLACE INTO violation_excuses (user_id, week, note, by_id, at) VALUES (?1, ?2, ?3, ?4, ?5)').bind(uid, week, str(b.note, 300, { name: 'причина' }), actor.id, Date.now()).run();
+  else await env.DB.prepare('DELETE FROM violation_excuses WHERE user_id = ?1 AND week = ?2').bind(uid, week).run();
+  await audit(env, actor, b.excused ? 'violation.excuse' : 'violation.restore', uid, { week });
+  return json({ ok: true });
+}
+// --- бюджет ГУ ВП ---
+const LEDGER_KINDS = { contribution: 1, leftover: 1, income: 1, withdrawal: -1 };
+async function leadBudget(env, url) {
+  const cfg = await premConfig(env);
+  const week = url.searchParams.get('week') ? weekParam(url.searchParams.get('week')) : weekOf(Date.now());
+  const { results } = await env.DB.prepare(`SELECT l.*, u.ic_name, u.global_name, u.username, c.ic_name AS c_ic, c.global_name AS c_gn, c.username AS c_un
+    FROM budget_ledger l LEFT JOIN users u ON u.id = l.user_id LEFT JOIN users c ON c.id = l.created_by ORDER BY l.created_at DESC LIMIT 1000`).all();
+  const { results: awards } = await env.DB.prepare('SELECT m.week, m.user_id, m.award_budget, u.ic_name, u.global_name, u.username FROM prem_manual m LEFT JOIN users u ON u.id = m.user_id WHERE m.award_budget > 0 ORDER BY m.week DESC').all();
+  const live = results.filter(r => !r.deleted_at);
+  const balance = live.reduce((s, r) => s + (LEDGER_KINDS[r.kind] || 0) * r.amount, 0) - awards.reduce((s, a) => s + a.award_budget, 0);
+  const { results: seniors } = await env.DB.prepare('SELECT id, ic_name, global_name, username FROM users WHERE senior = 1 ORDER BY COALESCE(ic_name, global_name, username)').all();
+  const paid = new Map(); live.filter(r => r.kind === 'contribution' && r.week === week).forEach(r => paid.set(r.user_id, (paid.get(r.user_id) || 0) + r.amount));
+  const nm = (a, b, c, id) => a || b || c || id || '';
+  return json({ week, balance, min_contribution: cfg.rules.ss_contrib_min,
+    contributions: seniors.map(s => ({ user_id: s.id, name: nm(s.ic_name, s.global_name, s.username, s.id), paid: paid.get(s.id) || 0, ok: (paid.get(s.id) || 0) >= cfg.rules.ss_contrib_min })),
+    entries: results.map(r => ({ id: r.id, kind: r.kind, amount: r.amount, sign: LEDGER_KINDS[r.kind] || 0, user_id: r.user_id, user_name: r.user_id ? nm(r.ic_name, r.global_name, r.username, r.user_id) : '', week: r.week, note: r.note || '',
+      created_by: nm(r.c_ic, r.c_gn, r.c_un, r.created_by), created_at: r.created_at, deleted_at: r.deleted_at, deleted_by: r.deleted_by })),
+    awards: awards.map(a => ({ week: a.week, user_id: a.user_id, name: nm(a.ic_name, a.global_name, a.username, a.user_id), amount: a.award_budget })) });
+}
+async function leadBudgetAdd(request, env, actor) {
+  const cfg = await premConfig(env); const b = await readJson(request);
+  if (!LEDGER_KINDS[b.kind]) throw new HttpError(400, 'Вид операции: contribution, leftover, income или withdrawal');
+  const amount = money(b.amount, 'сумма', 1000000000); if (!amount) throw new HttpError(400, 'Сумма должна быть больше 0');
+  let uid = null;
+  if (b.kind === 'contribution') { uid = str(b.user_id, 25, { required: true, name: 'кто внёс' }); if (!(await env.DB.prepare('SELECT id FROM users WHERE id = ?1').bind(uid).first())) throw new HttpError(404, 'Пользователь не найден'); }
+  const week = b.week ? weekParam(b.week) : weekOf(Date.now());
+  const note = str(b.note, 500, { name: 'примечание', required: b.kind === 'withdrawal' });
+  const row = await env.DB.prepare('INSERT INTO budget_ledger (kind, amount, user_id, week, note, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id').bind(b.kind, amount, uid, week, note, actor.id, Date.now()).first();
+  await audit(env, actor, 'budget.add', row.id, { kind: b.kind, amount, user_id: uid, week, note });
+  return json({ ok: true, id: row.id });
+}
+async function leadBudgetDelete(env, actor, id) {
+  const r = await env.DB.prepare('SELECT * FROM budget_ledger WHERE id = ?1 AND deleted_at IS NULL').bind(id).first(); if (!r) throw new HttpError(404, 'Запись не найдена');
+  await env.DB.prepare('UPDATE budget_ledger SET deleted_at = ?1, deleted_by = ?2 WHERE id = ?3').bind(Date.now(), actor.id, id).run();
+  await audit(env, actor, 'budget.delete', id, { kind: r.kind, amount: r.amount });
+  return json({ ok: true });
+}
+async function leadConfigPut(request, env, actor) {
+  const b = await readJson(request, 300000);
+  const stmts = []; const changed = [];
+  for (const k of PREM_CFG_KEYS) if (b[k] !== undefined) { const v = premConfigInput(k, b[k]); stmts.push(env.DB.prepare('INSERT INTO prem_config (k, v, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_by = excluded.updated_by, updated_at = excluded.updated_at').bind(k, JSON.stringify(v), actor.id, Date.now())); changed.push(k); }
+  if (!stmts.length) throw new HttpError(400, 'Нечего сохранять');
+  // строки плана ссылаются только на существующие пункты
+  const cfg = await premConfig(env); const items = b.items !== undefined ? premConfigInput('items', b.items) : cfg.items; const plan = b.plan !== undefined ? premConfigInput('plan', b.plan) : cfg.plan;
+  const keys = new Set(items.map(i => i.key)); for (const l of plan) for (const k of l.items) if (!keys.has(k)) throw new HttpError(400, `Строка плана «${l.name}»: нет пункта «${k}»`);
+  await env.DB.batch(stmts);
+  await audit(env, actor, 'prem.config', changed.join(','), null);
+  return json({ config: await premConfig(env) });
+}
+async function leadConfigReset(env, actor, k) {
+  if (!PREM_CFG_KEYS.includes(k)) throw new HttpError(400, 'Неизвестный раздел');
+  await env.DB.prepare('DELETE FROM prem_config WHERE k = ?1').bind(k).run();
+  await audit(env, actor, 'prem.config_reset', k, null);
+  return json({ config: await premConfig(env) });
+}
+
 async function route(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname.replace(/\/+$/, '') || '/';
@@ -1929,6 +2520,8 @@ async function route(request, env, ctx) {
   if (p === '/auth/callback' && M === 'GET') return authCallback(request, env, url);
   if (p === '/auth/exchange' && M === 'POST') return authExchange(request, env);
   if (p === '/api/config' && M === 'GET') return json({ oauth_configured: oauthConfigured(env), settings: await getSettings(env), redirect_uri: redirectUri(env, request) });
+
+  if (p === '/api/report-config' && M === 'GET') return json(premConfigPublic(await premConfig(env)));
 
   let m;
   if (!p.startsWith('/api/')) throw new HttpError(404, 'Не найдено');
@@ -1956,6 +2549,31 @@ async function route(request, env, ctx) {
   if ((m = /^\/api\/uploads\/(\d+)$/.exec(p)) && M === 'GET') return getUpload(env, user, idParam(m[1]));
   if (p === '/api/reatt' && M === 'GET') return listReatt(env, user);
   if ((m = /^\/api\/reatt\/([a-z0-9_-]{1,40})\/start$/.exec(p)) && M === 'POST') return startReatt(env, user, m[1]);
+
+  // еженедельные отчёты сотрудника
+  if (p === '/api/reports/my' && M === 'GET') return myReports(env, user, url);
+  if (p === '/api/reports' && M === 'POST') return submitReport(request, env, user);
+  // «Отчёты и премии» — роль «Руководство ГУ ВП» (и главные администраторы)
+  if (p.startsWith('/api/lead/')) {
+    requireLead(user);
+    if (p === '/api/lead/week' && M === 'GET') return leadWeek(env, url);
+    if ((m = /^\/api\/lead\/week\/(\d{4}-\d{2}-\d{2})\/fund$/.exec(p)) && M === 'PUT') return leadSetFund(request, env, user, weekParam(m[1]));
+    if ((m = /^\/api\/lead\/week\/(\d{4}-\d{2}-\d{2})\/manual\/(\d{5,25})$/.exec(p)) && M === 'PUT') return leadSetManual(request, env, user, weekParam(m[1]), m[2]);
+    if ((m = /^\/api\/lead\/week\/(\d{4}-\d{2}-\d{2})\/leftover$/.exec(p)) && M === 'POST') return leadPostLeftover(env, user, weekParam(m[1]));
+    if ((m = /^\/api\/lead\/reports\/(\d+)$/.exec(p)) && M === 'GET') return leadReport(env, idParam(m[1]));
+    if ((m = /^\/api\/lead\/reports\/(\d+)\/review$/.exec(p)) && M === 'POST') return leadReview(request, env, user, idParam(m[1]));
+    if (p === '/api/lead/staff' && M === 'GET') return leadStaff(env);
+    if ((m = /^\/api\/lead\/staff\/(\d{5,25})$/.exec(p)) && M === 'PUT') return leadSetStaff(request, env, user, m[1]);
+    if (p === '/api/lead/violations' && M === 'GET') return json(await violationsData(env, await premConfig(env)));
+    if (p === '/api/lead/violations/excuse' && M === 'POST') return leadExcuse(request, env, user);
+    if (p === '/api/lead/budget' && M === 'GET') return leadBudget(env, url);
+    if (p === '/api/lead/budget' && M === 'POST') return leadBudgetAdd(request, env, user);
+    if ((m = /^\/api\/lead\/budget\/(\d+)$/.exec(p)) && M === 'DELETE') return leadBudgetDelete(env, user, idParam(m[1]));
+    if (p === '/api/lead/config' && M === 'GET') return json({ config: await premConfig(env), defaults: PREM_DEFAULT, can_edit: !!user.super });
+    if (p === '/api/lead/config' && M === 'PUT') { requireSuper(user); return leadConfigPut(request, env, user); }
+    if ((m = /^\/api\/lead\/config\/(items|positions|plan|rules)\/reset$/.exec(p)) && M === 'POST') { requireSuper(user); return leadConfigReset(env, user, m[1]); }
+    throw new HttpError(404, 'Не найдено');
+  }
 
   if (p.startsWith('/api/admin/')) {
     requireRole(user, 'examiner'); // минимум — проверяющий; ниже уточняется
