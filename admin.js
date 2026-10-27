@@ -25,6 +25,12 @@ function roleBadges(u) {
 function courseSelect(courses, cur) {
   return `<label class="f"><span>Курс (раздел «Учебный отдел»)</span><select name="course_id"><option value="">— без курса —</option>${courses.map(c => `<option value="${c.id}" ${c.id === cur ? 'selected' : ''}>${esc(c.title)}${c.published ? '' : ' (скрыт)'}</option>`).join('')}</select></label>`;
 }
+const TRACK_RU = { rank: 'Система званий', position: 'Система должностей' };
+const TSTATUS_RU = { ready: ['готова', 'ok'], draft: ['черновик (сверить)', 'warn'], placeholder: ['заглушка (заполнить)', ''] };
+function topicSelect(courses, topics, cur) {
+  const opts = courses.map(c => { const ts = topics.filter(t => t.course_id === c.id && !t.link_topic_id); return ts.length ? `<optgroup label="${esc(c.title)}">${ts.map(t => `<option value="${t.id}" ${t.id === cur ? 'selected' : ''}>${esc(t.title)}</option>`).join('')}</optgroup>` : ''; }).join('');
+  return `<label class="f"><span>Тема курса (лекция попадёт в курс этой темы)</span><select name="topic_id"><option value="">— без темы —</option>${opts}</select></label>`;
+}
 function bindRows() { $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; }); }
 const yes = v => v ? '✔' : '—';
 // Блок «Статус публикации» + кнопки сохранения (общий для лекций и экзаменов).
@@ -101,15 +107,18 @@ route('/admin/lectures', async () => {
 
 route('/admin/lecture/:id', async (id) => {
   const isNew = id === 'new';
-  let l = { title: '', description: '', video_url: '', duration_sec: 0, required: 1, published: 0, course_id: Number(new URLSearchParams(location.hash.split('?')[1] || '').get('course')) || null };
-  const [{ courses }, LL] = await Promise.all([api('GET', '/api/admin/courses'), isNew ? null : api('GET', '/api/admin/lectures')]);
+  const hq = new URLSearchParams(location.hash.split('?')[1] || '');
+  let l = { title: '', description: '', video_url: '', duration_sec: 0, required: 1, published: 0, course_id: Number(hq.get('course')) || null, topic_id: Number(hq.get('topic')) || null };
+  const [{ courses, topics }, LL] = await Promise.all([api('GET', '/api/admin/courses'), isNew ? null : api('GET', '/api/admin/lectures')]);
   if (!isNew) { l = LL.lectures.find(x => String(x.id) === id); if (!l) throw new Error('Лекция не найдена'); }
   const saved = sessionStorage.getItem('vp_saved_msg'); sessionStorage.removeItem('vp_saved_msg');
   setView(`<p><a href="#/admin/lectures">← Лекции</a></p><h1>${isNew ? 'Новая лекция' : 'Лекция: ' + esc(l.title)}</h1>
     ${saved ? `<div class="alert ok">${esc(saved)}</div>` : ''}
     <form class="card" id="lf" novalidate>
       <label class="f"><span>Название *</span><input name="title" maxlength="200" value="${esc(l.title)}"></label>
+      ${topicSelect(courses, topics, l.topic_id)}
       ${courseSelect(courses, l.course_id)}
+      <p class="small mut" style="margin-top:-6px">Если выбрана тема, курс подставится автоматически.</p>
       <label class="f"><span>Описание (показывается под видео)</span><textarea name="description" maxlength="10000">${esc(l.description)}</textarea></label>
       <label class="f"><span>Ссылка на видео: YouTube (можно «По ссылке») или прямая ссылка на файл .mp4/.webm, либо путь на сайте videos/lecture1.mp4</span><input name="video_url" maxlength="1000" value="${esc(l.video_url)}" placeholder="https://www.youtube.com/watch?v=…"></label>
       <div class="small" id="vinfo" style="margin:-6px 0 12px"></div>
@@ -211,6 +220,10 @@ route('/admin/exam/:id', async (id) => {
   if (er) { e = er.exam; qs = er.questions; }
   if (isNew) e.course_id = Number(new URLSearchParams(location.hash.split('?')[1] || '').get('course')) || null;
   const allLec = lr.lectures;
+  if (isNew) { const tq = Number(new URLSearchParams(location.hash.split('?')[1] || '').get('topic')); e.topic_ids = tq ? [tq] : []; }
+  const etids = new Set(e.topic_ids || []);
+  const topicsBox = `<fieldset class="reqbox"><legend>Темы экзамена</legend><p class="small mut" style="margin-top:0">Экзамен показывается на страницах отмеченных тем и открывается после всех обязательных лекций этих тем (тогда блок «Обязательные лекции» ниже не учитывается). Можно отметить несколько тем — общий экзамен.</p>
+    ${cr.courses.filter(c => cr.topics.some(t => t.course_id === c.id)).map(c => `<div class="small" style="margin:6px 0 2px"><b>${esc(c.title)}</b> <span class="mut">${TRACK_RU[c.track] || ''}</span></div>${cr.topics.filter(t => t.course_id === c.id).map(t => `<label class="chk"><input type="checkbox" class="extopic" value="${t.id}" ${etids.has(t.id) ? 'checked' : ''}> ${esc(t.title)}${t.link_topic_id ? ' <span class="small mut">(связанная)</span>' : ''}</label>`).join('')}`).join('') || '<p class="small mut">Тем пока нет.</p>'}</fieldset>`;
   setView(`<p><a href="#/admin/exams">← Экзамены</a></p><h1>${isNew ? 'Новый экзамен' : 'Экзамен: ' + esc(e.title)}</h1>
     <form class="card" id="ef">
       <label class="f"><span>Название *</span><input name="title" maxlength="200" required value="${esc(e.title)}"></label>
@@ -228,6 +241,7 @@ route('/admin/exam/:id', async (id) => {
         <label class="f"><span>Вопросов в попытке (0 — не из банка)</span><input type="number" name="bank_count" min="0" max="500" value="${e.bank_count || 0}"></label></div></fieldset>
       <label class="chk"><input type="checkbox" name="shuffle_questions" ${e.shuffle_questions ? 'checked' : ''}> Перемешивать вопросы</label>
       <label class="chk"><input type="checkbox" name="shuffle_options" ${e.shuffle_options ? 'checked' : ''}> Перемешивать варианты ответов</label>
+      ${topicsBox}
       ${reqLecturesBlock(e, allLec)}
       ${pubBlock(e.published, false)}
       ${isNew ? '' : '<p style="margin-top:14px"><button type="button" class="btn danger sm" id="del">Удалить экзамен</button></p>'}
@@ -239,6 +253,7 @@ route('/admin/exam/:id', async (id) => {
   bindPub($('#ef'), async (pub) => {
     const body = formObj($('#ef')); delete body.pubstatus; body.published = pub;
     body.required_lectures = reqState();
+    body.topic_ids = $$('.extopic:checked').map(x => Number(x.value)); delete body.extopic;
     if (!String(body.title || '').trim()) throw new Error('Укажите название экзамена.');
     const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/exams' + (isNew ? '' : '/' + e.id), body);
     toast(r.exam.published ? 'Экзамен опубликован' : 'Черновик экзамена сохранён');
@@ -656,13 +671,13 @@ route('/admin/audit', async () => {
 
 // ---------- курсы ----------
 route('/admin/courses', async () => {
-  const { courses, lectures, exams } = await api('GET', '/api/admin/courses');
+  const { courses, lectures, exams, topics } = await api('GET', '/api/admin/courses');
   const free = lectures.filter(l => !l.course_id || !courses.some(c => c.id === l.course_id)).length + exams.filter(e => !e.course_id || !courses.some(c => c.id === e.course_id)).length;
   setView(`<h1>Курсы</h1>${adminNav('/admin/courses')}
-    <p class="small mut">Курс — набор лекций по порядку и экзамен в конце. Кандидат видит курсы в «Учебном отделе»; экзамен курса открывается после обязательных лекций курса.</p>
+    <p class="small mut">Курс → темы → короткие лекции по порядку → полная выгрузка (статья Базы данных) → видео → экзамены по темам. Две системы: «Система званий» и «Система должностей» (вкладки в «Учебном отделе»). Курс без тем — старый формат: лекции по порядку и экзамен.</p>
     <p><a class="btn gold" href="#/admin/course/new">+ Создать курс</a></p>
-    ${courses.length ? `<table><tr><th>Порядок</th><th>Курс</th><th>Лекций</th><th>Экзаменов</th><th>Статус</th></tr>${courses.map((c, i) => `<tr><td><button class="btn sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button> <button class="btn sm" data-down="${i}" ${i < courses.length - 1 ? '' : 'disabled'}>↓</button></td>
-      <td><a href="#/admin/course/${c.id}"><b>${esc(c.title)}</b></a>${c.description ? `<div class="small mut">${esc(c.description.slice(0, 120))}</div>` : ''}</td><td class="num">${c.lecture_count}</td><td class="num">${c.exam_count}</td>
+    ${courses.length ? `<table><tr><th>Порядок</th><th>Курс</th><th>Система</th><th>Тем</th><th>Лекций</th><th>Экзаменов</th><th>Статус</th></tr>${courses.map((c, i) => `<tr><td><button class="btn sm" data-up="${i}" ${i ? '' : 'disabled'}>↑</button> <button class="btn sm" data-down="${i}" ${i < courses.length - 1 ? '' : 'disabled'}>↓</button></td>
+      <td><a href="#/admin/course/${c.id}"><b>${esc(c.title)}</b></a>${c.description ? `<div class="small mut">${esc(c.description.slice(0, 120))}</div>` : ''}</td><td class="small">${TRACK_RU[c.track] || ''}</td><td class="num">${topics.filter(t => t.course_id === c.id).length}</td><td class="num">${c.lecture_count}</td><td class="num">${c.exam_count}</td>
       <td>${c.published ? '<span class="badge ok">виден</span>' : '<span class="badge warn">скрыт</span>'}</td></tr>`).join('')}</table>` : '<div class="alert info">Курсов пока нет.</div>'}
     ${free ? `<div class="alert warn small">Без курса: ${free} (лекции/экзамены). Они показываются в «Учебном отделе» в разделе «Без курса» — добавьте их в курс.</div>` : ''}`);
   const ids = courses.map(c => c.id);
@@ -673,18 +688,25 @@ route('/admin/courses', async () => {
 
 route('/admin/course/:id', async (id) => {
   const isNew = id === 'new';
-  const { courses, lectures, exams } = await api('GET', '/api/admin/courses');
-  const c = isNew ? { title: '', description: '', published: 1 } : courses.find(x => String(x.id) === id);
+  const { courses, lectures, exams, topics } = await api('GET', '/api/admin/courses');
+  const c = isNew ? { title: '', description: '', published: 1, track: 'rank', subtitle: '' } : courses.find(x => String(x.id) === id);
   if (!c) throw new Error('Курс не найден');
   const cname = (cid) => { const x = courses.find(k => k.id === cid); return x ? x.title : ''; };
   let inLec = isNew ? [] : lectures.filter(l => l.course_id === c.id).map(l => l.id);
   const inEx = new Set(isNew ? [] : exams.filter(e => e.course_id === c.id).map(e => e.id));
+  const myT = isNew ? [] : topics.filter(t => t.course_id === c.id);
+  const tname = (tid) => { const x = topics.find(k => k.id === tid); return x ? x.title : '#' + tid; };
   setView(`<p><a href="#/admin/courses">← Курсы</a></p><h1>${isNew ? 'Новый курс' : 'Курс: ' + esc(c.title)}</h1>
     <form class="card" id="cf">
       <label class="f"><span>Название *</span><input name="title" maxlength="200" value="${esc(c.title)}" placeholder="Например: Курс молодого бойца ВП"></label>
       <label class="f"><span>Описание (видно в «Учебном отделе»)</span><textarea name="description" maxlength="10000">${esc(c.description)}</textarea></label>
+      <div class="fgrid"><label class="f"><span>Система</span><select name="track"><option value="rank" ${c.track !== 'position' ? 'selected' : ''}>Система званий</option><option value="position" ${c.track === 'position' ? 'selected' : ''}>Система должностей</option></select></label></div>
       <label class="chk"><input type="checkbox" name="published" ${c.published ? 'checked' : ''}> Курс виден в «Учебном отделе» (скрытый курс прячет и свои лекции и экзамены)</label>
-      <div class="grid two"><div><h3>Лекции курса (по порядку)</h3><ol class="clist" id="lecIn"></ol>
+      ${isNew ? '' : `<h3>Темы курса</h3>${myT.length ? `<ol class="clist" id="topIn">${myT.map((t, i) => `<li><span><a href="#/admin/topic/${t.id}"><b>${esc(t.title)}</b></a> <span class="badge ${TSTATUS_RU[t.status][1]}">${TSTATUS_RU[t.status][0]}</span>${t.published ? '' : ' <span class="badge warn">скрыта</span>'}
+        <span class="small mut">· лекций ${t.link_topic_id ? '— связана с «' + esc(tname(t.link_topic_id)) + '»' : t.lecture_count}${t.doc_id ? ' · 📄 выгрузка' : ''}${t.has_video ? ' · 🎬 видео' : t.has_plan ? ' · план ролика' : ''}</span></span>
+        <span class="row"><button type="button" class="btn sm" data-tu="${i}" ${i ? '' : 'disabled'}>↑</button><button type="button" class="btn sm" data-td="${i}" ${i < myT.length - 1 ? '' : 'disabled'}>↓</button></span></li>`).join('')}</ol>` : '<p class="small mut">Тем нет — курс в старом формате (лекции по порядку). Добавьте тему, чтобы перейти на формат «темы».</p>'}
+        <p><a class="btn sm gold" href="#/admin/topic/new?course=${c.id}">+ Тема</a></p>`}
+      <div class="grid two"><div ${myT.length ? 'hidden' : ''}><h3>Лекции курса (по порядку)</h3><ol class="clist" id="lecIn"></ol>
         <label class="f"><span>Добавить лекцию</span><select id="lecAdd"></select></label></div>
         <div><h3>Экзамен курса</h3>${exams.length ? exams.map(e => `<label class="chk"><input type="checkbox" class="exk" value="${e.id}" ${inEx.has(e.id) ? 'checked' : ''}> <span>${esc(e.title)} ${e.published ? '' : '<span class="badge warn">черновик</span>'}${e.course_id && e.course_id !== c.id && cname(e.course_id) ? ` <span class="small mut">(сейчас в курсе «${esc(cname(e.course_id))}»)</span>` : ''}</span></label>`).join('') : '<p class="small mut">Экзаменов пока нет.</p>'}
           <p class="small mut">Экзамен курса по умолчанию открывается после обязательных лекций курса (можно изменить в настройках экзамена).</p>
@@ -700,10 +722,14 @@ route('/admin/course/:id', async (id) => {
   };
   paint();
   $('#lecAdd').onchange = (e) => { if (e.target.value) { inLec.push(Number(e.target.value)); paint(); } };
+  const tmove = async (i, d) => { const a = myT.slice(); [a[i], a[i + d]] = [a[i + d], a[i]]; try { for (let k = 0; k < a.length; k++) await api('PUT', '/api/admin/topics/' + a[k].id, { position: (k + 1) * 10 }); render(); } catch (e) { toast(e.message, true); } };
+  $$('[data-tu]').forEach(b => b.onclick = () => tmove(+b.dataset.tu, -1));
+  $$('[data-td]').forEach(b => b.onclick = () => tmove(+b.dataset.td, 1));
   $('#cf').onsubmit = async (ev) => {
     ev.preventDefault(); const f = ev.target;
     try {
-      const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/courses' + (isNew ? '' : '/' + c.id), { title: f.title.value, description: f.description.value, published: f.published.checked, lecture_ids: inLec, exam_ids: $$('.exk:checked').map(x => Number(x.value)) });
+      const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/courses' + (isNew ? '' : '/' + c.id), { title: f.title.value, description: f.description.value, published: f.published.checked, track: f.track.value,
+        ...(myT.length ? {} : { lecture_ids: inLec }), exam_ids: $$('.exk:checked').map(x => Number(x.value)) });
       toast('Курс сохранён'); if (isNew) location.hash = '#/admin/course/' + r.course.id; else render();
     } catch (e) { $('#ferr').innerHTML = `<div class="alert err">${esc(e.message)}</div>`; toast(e.message, true); }
   };
@@ -739,4 +765,44 @@ route('/admin/reatt/:id/access', async (id) => {
     if (!body.user_id && !confirm('Выдать доступ ВСЕМ пользователям с ролью «Переаттестация»?')) return;
     try { await api('POST', `/api/admin/reatt/${id}/access`, body); toast('Доступ выдан'); render(); } catch (e) { toast(e.message, true); } };
   $$('.g-rev').forEach(b => b.onclick = async () => { if (!confirm('Отозвать доступ?')) return; try { await api('DELETE', '/api/admin/reatt/access/' + b.dataset.g); toast('Доступ отозван'); render(); } catch (e) { toast(e.message, true); } });
+}, { role: 'admin' });
+
+// ---------- тема курса: лекции, полная выгрузка, видео и план ролика, экзамены ----------
+route('/admin/topic/:id', async (id) => {
+  const isNew = id === 'new';
+  const [all, cur] = await Promise.all([api('GET', '/api/admin/topics'), isNew ? null : api('GET', '/api/admin/topics/' + encodeURIComponent(id))]);
+  const cq = Number(new URLSearchParams(location.hash.split('?')[1] || '').get('course')) || null;
+  const t = cur ? cur.topic : { course_id: cq, title: '', description: '', status: 'draft', published: 1, link_topic_id: null, doc_id: null, video_url: '', video_plan: '' };
+  const course = all.courses.find(c => c.id === t.course_id);
+  const roots = all.topics.filter(x => !x.link_topic_id && x.id !== t.id);
+  setView(`<p><a href="#/admin/course/${t.course_id || ''}">← ${course ? esc(course.title) : 'Курсы'}</a></p><h1>${isNew ? 'Новая тема' : 'Тема: ' + esc(t.title)}</h1>
+    <form class="card" id="tf">
+      <div class="fgrid"><label class="f"><span>Курс</span><select name="course_id">${all.courses.map(c => `<option value="${c.id}" ${c.id === t.course_id ? 'selected' : ''}>${esc(c.title)} — ${TRACK_RU[c.track] || ''}</option>`).join('')}</select></label>
+        <label class="f"><span>Статус</span><select name="status">${Object.entries(TSTATUS_RU).map(([k, v]) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label></div>
+      <label class="f"><span>Название *</span><input name="title" maxlength="200" value="${esc(t.title)}"></label>
+      <label class="f"><span>Короткое описание (видно на карточке темы)</span><textarea name="description" maxlength="5000">${esc(t.description)}</textarea></label>
+      <label class="chk"><input type="checkbox" name="published" ${t.published ? 'checked' : ''}> Тема видна в «Учебном отделе»</label>
+      <label class="f"><span>Связанная тема (лекции, выгрузка и видео берутся из неё, прохождение общее)</span><select name="link_topic_id"><option value="">— нет, у темы свои лекции —</option>${roots.map(x => `<option value="${x.id}" ${x.id === t.link_topic_id ? 'selected' : ''}>${esc(x.course_title || '')} → ${esc(x.title)}</option>`).join('')}</select></label>
+      <fieldset class="reqbox"><legend>Полная выгрузка</legend><p class="small mut" style="margin-top:0">Статья Базы данных со всеми материалами темы. Кандидат увидит ссылку (и сможет открыть статью) только после всех лекций темы.</p>
+        <label class="f"><span>Статья</span><select name="doc_id"><option value="">— нет —</option>${all.docs.map(d => `<option value="${d.id}" ${d.id === t.doc_id ? 'selected' : ''}>${esc(d.category)} → ${esc(d.title)}</option>`).join('')}</select></label>
+        <a class="btn sm" href="#/doc-edit/new">+ Новая статья</a></fieldset>
+      <fieldset class="reqbox"><legend>Видео по теме</legend><p class="small mut" style="margin-top:0">Открывается после всех лекций. Пока ролика нет, кандидат видит «Видео готовится». В системе должностей видео не показывается.</p>
+        <label class="f"><span>Ссылка на видео (YouTube «По ссылке» или файл .mp4)</span><input name="video_url" maxlength="1000" value="${esc(t.video_url || '')}"></label>
+        <label class="f"><span>План ролика (Markdown; видят только администраторы)</span><textarea name="video_plan" maxlength="50000" style="min-height:160px">${esc(t.video_plan || '')}</textarea></label></fieldset>
+      <div class="row"><button class="btn gold">Сохранить тему</button>${isNew ? '' : '<button type="button" class="btn danger sm" id="delT">Удалить тему</button>'}</div><div id="ferr" class="ferr"></div></form>
+    ${isNew ? '' : `<div class="card flat"><h3>Лекции темы (${cur.lectures.length})</h3>${t.link_topic_id ? `<p class="small mut">Тема связана — лекции редактируются в исходной теме: <a href="#/admin/topic/${t.link_topic_id}">открыть</a>.</p>` : `
+      ${cur.lectures.length ? `<ol class="clist">${cur.lectures.map(l => `<li><span><a href="#/admin/lecture/${l.id}">${esc(l.title)}</a> ${l.published ? '' : '<span class="badge warn">черновик</span>'}${l.required ? '' : ' <span class="badge">необязательная</span>'}</span><span class="small mut">${l.has_body ? '📖 ~' + Math.max(1, Math.round(l.duration_sec / 60)) + ' мин' : '🎬 ' + fmtTime(l.duration_sec)}</span></li>`).join('')}</ol>` : '<p class="small mut">Лекций пока нет.</p>'}
+      <p class="small mut">Рекомендуется 4–5 коротких лекций, в сумме около 70% полной выгрузки. Порядок — в разделе «Лекции» (стрелки) или полем «Порядок».</p>
+      <a class="btn sm gold" href="#/admin/lecture/new?topic=${t.id}&course=${t.course_id}">+ Лекция в тему</a>`}</div>
+      <div class="card flat"><h3>Экзамены темы</h3>${cur.exams.length ? cur.exams.map(e => `<div><a href="#/admin/exam/${e.id}">${esc(e.title)}</a> ${e.published ? '<span class="badge ok">опубликован</span>' : '<span class="badge warn">черновик</span>'}</div>`).join('') : '<p class="small mut">Нет.</p>'}
+        <p><a class="btn sm" href="#/admin/exam/new?course=${t.course_id}&topic=${t.id}">+ Экзамен по теме</a></p></div>
+      <p><a class="btn" href="#/topic/${t.id}">Открыть тему как кандидат →</a></p>`}`);
+  $('#tf').onsubmit = async (ev) => {
+    ev.preventDefault(); const f = ev.target;
+    const body = { course_id: Number(f.course_id.value), status: f.status.value, title: f.title.value, description: f.description.value, published: f.published.checked,
+      link_topic_id: f.link_topic_id.value ? Number(f.link_topic_id.value) : null, doc_id: f.doc_id.value ? Number(f.doc_id.value) : null, video_url: f.video_url.value.trim(), video_plan: f.video_plan.value };
+    try { const r = await api(isNew ? 'POST' : 'PUT', '/api/admin/topics' + (isNew ? '' : '/' + t.id), body); toast('Тема сохранена'); if (isNew) location.hash = '#/admin/topic/' + r.topic.id; else render(); }
+    catch (e) { $('#ferr').innerHTML = `<div class="alert err">${esc(e.message)}</div>`; toast(e.message, true); }
+  };
+  const del = $('#delT'); if (del) del.onclick = async () => { if (!confirm(`Удалить тему «${t.title}»? Лекции останутся в курсе (без темы), экзамены потеряют эту тему.`)) return; try { await api('DELETE', '/api/admin/topics/' + t.id); location.hash = '#/admin/course/' + t.course_id; } catch (e) { toast(e.message, true); } };
 }, { role: 'admin' });

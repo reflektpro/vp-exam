@@ -115,7 +115,7 @@ function answerFor(p, s, wrong) {
   await ctx.addInitScript(t => { localStorage.setItem('vpexam_token', t); }, VP);
   const page = await ctx.newPage(); page.on('pageerror', e => errs.push(e.message));
   await page.goto(SITE + '#/study'); await page.waitForSelector('.course-card');
-  check('«Учебный отдел»: карточка курса', /По задержанию и процессуальному кодексу/.test(await page.textContent('.course-grid')));
+  check('«Учебный отдел»: карточка курса', /По задержанию и процессуальному кодексу/.test(await page.textContent('#app')));
   await page.click(`.course-card[href="#/course/${C.id}"]`); await page.waitForSelector('ol.steps');
   check('страница курса: 5 шагов-лекций + экзамен (закрыт)', (await page.$$('ol.steps li.step:not(.exam)')).length === 5 && (await page.$$('ol.steps li.step.exam.locked')).length === 1 && /Текст · чтение/.test(await page.textContent('ol.steps')));
   await page.screenshot({ path: SHOTS + 'pk-course.png', fullPage: true });

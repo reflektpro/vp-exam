@@ -181,7 +181,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   check('ВП видит курс: лекции и прогресс', cc && cc.lectures.length === 1 && cc.required_total === 1 && cc.required_done === 0, cc);
   r = await call('POST', '/api/admin/courses', T.exam, { title: 'x' }); check('проверяющий не создаёт курсы', r.status === 403);
   p = await open(T.vp, '/study'); await p.waitForSelector('.course-card');
-  check('учебный отдел: карточки курсов', /Курс молодого бойца/.test(await p.textContent('.course-grid')));
+  check('учебный отдел: карточки курсов', /Курс молодого бойца/.test(await p.textContent('#app')));
   await p.click(`.course-card[href="#/course/${cid}"]`); await p.waitForSelector('ol.steps');
   check('курс: шаги-лекции', /Лекция 1\. Устав/.test(await p.textContent('ol.steps')));
   await p.screenshot({ path: SHOTS + 'roles-course.png', fullPage: true });

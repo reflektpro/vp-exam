@@ -31,55 +31,120 @@ async function homePage() {
 }
 
 // ---------- учебный отдел: курсы ----------
-route('/study', async () => {
+const TRACKS = [['rank', 'Система званий', 'Курсы по уставам, кодексам, законам и правилам проекта — для присвоения званий.'], ['position', 'Система должностей', 'Курсы для назначения на должность: тема, лекции и экзамен по каждой должности.']];
+const TOPIC_ST = { draft: ['черновик', 'warn'], placeholder: ['готовится', ''] };
+function exState(ex) {
+  return !ex.length ? '' : ex.every(e => e.attempts.some(a => a.status === 'passed')) ? '<span class="badge ok">экзамены сданы</span>'
+    : ex.some(e => e.can_start || e.active_attempt_id) ? '<span class="badge info">экзамен открыт</span>' : ex.some(e => e.attempts.some(a => a.status === 'pending_review')) ? '<span class="badge warn">экзамен на проверке</span>' : '<span class="badge lock">🔒 экзамен после лекций</span>';
+}
+route('/study', () => studyPage(), { cap: 'vp' });
+route('/study\\?.*', () => studyPage(), { cap: 'vp' });
+async function studyPage() {
   const { courses } = await api('GET', '/api/courses');
+  const track = hashQ().get('track') || localStorage.getItem('vp_track') || 'rank';
+  localStorage.setItem('vp_track', track);
+  const withT = courses.filter(c => c.topics && c.topics.length), legacy = courses.filter(c => !(c.topics && c.topics.length));
   const card = (c) => {
-    const pct = c.required_total ? Math.round(c.required_done / c.required_total * 100) : (c.lectures_total ? Math.round(c.watched / c.lectures_total * 100) : 100);
-    const ex = c.exams;
-    const exState = !ex.length ? '<span class="badge">без экзамена</span>' : c.exam_passed ? '<span class="badge ok">экзамен сдан</span>'
-      : ex.some(e => e.can_start || e.active_attempt_id) ? '<span class="badge info">экзамен открыт</span>' : ex.some(e => e.attempts.some(a => a.status === 'pending_review')) ? '<span class="badge warn">экзамен на проверке</span>' : '<span class="badge lock">🔒 экзамен после лекций</span>';
+    const pct = c.topics_total ? Math.round(c.topics_done / c.topics_total * 100) : 0;
     return `<a class="course-card ${c.complete ? 'done' : ''}" href="#/course/${c.id}">
       <div class="row between"><h2>${esc(c.title)}</h2>${c.complete ? '<span class="badge ok">✔ пройден</span>' : ''}</div>
       ${c.description ? `<p class="small mut cdesc">${esc(c.description.slice(0, 220))}</p>` : ''}
-      <div class="small">Лекций: <b>${c.lectures_total}</b>${c.required_total ? ` · обязательных просмотрено <b>${c.required_done} из ${c.required_total}</b>` : ''} · экзаменов: <b>${ex.length}</b></div>
-      <div class="bar"><i style="width:${pct}%"></i></div><div class="row between small" style="margin-top:8px"><span class="mut">${pct}%</span>${exState}</div></a>`;
+      <div class="tchips">${c.topics.map(t => `<span class="tchip ${t.done ? 'done' : ''} ${t.status === 'placeholder' ? 'ph' : ''}" title="${esc(t.title)}">${t.done ? '✔ ' : ''}${esc(t.title)}</span>`).join('')}</div>
+      <div class="small">Тем: <b>${c.topics_total}</b> · пройдено <b>${c.topics_done}</b> · экзаменов: <b>${c.exams.length}</b></div>
+      <div class="bar"><i style="width:${pct}%"></i></div><div class="row between small" style="margin-top:8px"><span class="mut">${pct}%</span>${exState(c.exams)}</div></a>`;
   };
+  const oldCard = (c) => {
+    const pct = c.required_total ? Math.round(c.required_done / c.required_total * 100) : (c.lectures_total ? Math.round(c.watched / c.lectures_total * 100) : 100);
+    return `<a class="course-card ${c.complete ? 'done' : ''}" href="#/course/${c.id}"><div class="row between"><h2>${esc(c.title)}</h2>${c.complete ? '<span class="badge ok">✔ пройден</span>' : ''}</div>
+      ${c.description ? `<p class="small mut cdesc">${esc(c.description.slice(0, 220))}</p>` : ''}
+      <div class="small">Лекций: <b>${c.lectures_total}</b> · экзаменов: <b>${c.exams.length}</b></div><div class="bar"><i style="width:${pct}%"></i></div><div class="row between small" style="margin-top:8px"><span class="mut">${pct}%</span>${exState(c.exams) || '<span class="badge">без экзамена</span>'}</div></a>`;
+  };
+  const list = withT.filter(c => (c.track || 'rank') === track);
+  const tinfo = TRACKS.find(t => t[0] === track) || TRACKS[0];
   setView(`<h1>Учебный отдел</h1>
-    <p class="mut small">Каждый курс — это лекции по порядку и экзамен в конце. Экзамен открывается, когда просмотрены обязательные лекции курса. Перематывать лекции вперёд нельзя.</p>
-    ${courses.length ? `<div class="course-grid">${courses.map(card).join('')}</div>` : '<div class="alert info">Курсы пока не опубликованы.</div>'}`);
-}, { cap: 'vp' });
+    <div class="tracktabs" role="tablist">${TRACKS.map(t => `<a role="tab" aria-selected="${t[0] === track}" class="${t[0] === track ? 'on' : ''}" href="#/study?track=${t[0]}">${t[1]}</a>`).join('')}</div>
+    <p class="mut small">${esc(tinfo[2])} Курс состоит из тем: выберите тему — в ней короткие лекции по порядку${track === 'rank' ? ', после них открываются полная выгрузка материалов и видео' : ''}; экзамен открывается, когда пройдены лекции его тем.</p>
+    ${list.length ? `<div class="course-grid">${list.map(card).join('')}</div>` : '<div class="alert info">Курсы этой системы пока не опубликованы.</div>'}
+    ${track === 'rank' && legacy.length ? `<h2 style="margin-top:22px">Другие курсы</h2><div class="course-grid">${legacy.map(oldCard).join('')}</div>` : ''}`);
+}
+
+const lecStep = (l, i) => {
+  const pct = l.duration_sec ? Math.min(100, Math.round((l.progress ? l.progress.max_pos : 0) / l.duration_sec * 100)) : 0;
+  const st = l.status === 'in_progress' ? `<span class="badge info">${pct}%</span>` : badge(l.status);
+  return `<li class="step ${l.status} ${l.locked ? 'locked' : ''}"><span class="dot">${l.status === 'watched' ? '✔' : l.locked ? '🔒' : i + 1}</span>
+    <a class="step-body" href="#/lecture/${l.id}" ${l.locked ? 'tabindex="-1" aria-disabled="true"' : ''}><div class="row between"><b>${esc(l.title)}</b>${st}</div>
+      <div class="small mut">${l.kind === 'text' ? '📖 Текст · чтение ~' + Math.max(1, Math.round(l.duration_sec / 60)) + ' мин' : '🎬 Видео · ' + fmtTime(l.duration_sec)}${l.required ? '' : ' · необязательная'}${l.description ? ' · ' + esc(l.description.slice(0, 120)) : ''}</div>
+      ${l.status === 'in_progress' ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}</a></li>`;
+};
+const exStep = (e) => {
+  const last = e.attempts[0];
+  const st = last ? badge(last.status) : e.can_start ? '<span class="badge ok">открыт</span>' : '<span class="badge lock">закрыт</span>';
+  return `<li class="step exam ${e.attempts.some(a => a.status === 'passed') ? 'watched' : ''} ${!e.can_start && !e.active_attempt_id && !last ? 'locked' : ''}"><span class="dot">🎯</span>
+    <div class="step-body"><div class="row between"><b>${/^Экзамен/.test(e.title) ? '' : 'Экзамен: '}${esc(e.title)}</b>${st}</div>
+      <div class="small mut">${examMeta(e)}</div>
+      ${e.topic_titles && e.topic_titles.length > 1 ? `<div class="small mut">Темы экзамена: ${e.topic_titles.map(esc).join(', ')}</div>` : ''}
+      ${e.lectures_left ? `<div class="small warn-t">Осталось пройти лекций: ${e.lectures_left}</div>` : ''}
+      ${!e.can_start && e.reason && !e.active_attempt_id ? `<div class="small mut">${esc(e.reason)}${e.next_at ? ' — ' + fmtDate(e.next_at) : ''}</div>` : ''}
+      <div class="row" style="margin-top:8px">${e.active_attempt_id ? `<a class="btn primary sm" href="#/attempt/${e.active_attempt_id}">Продолжить попытку</a>` : e.can_start ? `<a class="btn primary sm" href="#/exam/${e.id}">Перейти к экзамену</a>` : `<a class="btn sm" href="#/exam/${e.id}">Подробнее</a>`}</div></div></li>`;
+};
 
 route('/course/:id', async (id) => {
   const { courses } = await api('GET', '/api/courses');
   const c = courses.find(x => String(x.id) === String(id));
   if (!c) throw new Error('Курс не найден или ещё не опубликован');
+  const back = `<p><a href="#/study?track=${c.track || 'rank'}">← ${c.topics.length ? (c.track === 'position' ? 'Система должностей' : 'Система званий') : 'Обучение'}</a></p>`;
+  if (c.topics.length) {
+    const tcard = (t, i) => `<a class="topic-card ${t.done ? 'done' : ''} ${t.status === 'placeholder' ? 'ph' : ''}" href="#/topic/${t.id}">
+      <div class="row between"><span class="tnum">Тема ${i + 1}</span>${t.done ? '<span class="badge ok">✔ пройдена</span>' : t.required_done ? `<span class="badge info">${t.required_done} из ${t.required_total}</span>` : TOPIC_ST[t.status] && t.status === 'placeholder' ? '<span class="badge">готовится</span>' : ''}</div>
+      <h3>${esc(t.title)}</h3>${t.description ? `<p class="small mut">${esc(t.description)}</p>` : ''}
+      ${t.linked ? '<p class="small linked">↔ Общая тема с системой званий — пройденная там засчитывается здесь</p>' : ''}
+      <div class="small mut">${t.lectures_total ? `Лекций: ${t.lectures_total}` : 'Лекции готовятся'}${t.has_material ? ' · 📄 полная выгрузка' : ''}${t.has_video && c.track !== 'position' ? ' · 🎬 видео' : ''}</div>
+      <div class="bar"><i style="width:${t.required_total ? Math.round(t.required_done / t.required_total * 100) : 0}%"></i></div></a>`;
+    setView(`${back}
+      <div class="card"><div class="row between"><h1 style="margin:0">${esc(c.title)}</h1>${c.complete ? '<span class="badge ok">✔ курс пройден</span>' : ''}</div>
+        ${c.description ? `<div class="welcome" style="margin-top:8px">${esc(c.description)}</div>` : ''}
+        <div class="small mut" style="margin-top:8px">Тем: ${c.topics_total} · пройдено ${c.topics_done} · экзаменов: ${c.exams.length}</div>
+        <div class="bar"><i style="width:${c.topics_total ? Math.round(c.topics_done / c.topics_total * 100) : 0}%"></i></div></div>
+      <h2>Выберите тему</h2>
+      <div class="topic-grid">${c.topics.map(tcard).join('')}</div>
+      ${c.exams.length ? `<h2 style="margin-top:22px">Экзамены курса</h2><ol class="steps">${c.exams.map(e => exStep({ ...e, topic_titles: e.topic_ids.map(x => (c.topics.find(t => t.id === x) || {}).title).filter(Boolean) })).join('')}</ol>` : ''}`);
+    return;
+  }
   const lecDone = c.required_done >= c.required_total;
-  const step = (l, i) => {
-    const pct = l.duration_sec ? Math.min(100, Math.round((l.progress ? l.progress.max_pos : 0) / l.duration_sec * 100)) : 0;
-    const st = l.status === 'in_progress' ? `<span class="badge info">${pct}%</span>` : badge(l.status);
-    return `<li class="step ${l.status} ${l.locked ? 'locked' : ''}"><span class="dot">${l.status === 'watched' ? '✔' : l.locked ? '🔒' : i + 1}</span>
-      <a class="step-body" href="#/lecture/${l.id}" ${l.locked ? 'tabindex="-1" aria-disabled="true"' : ''}><div class="row between"><b>${esc(l.title)}</b>${st}</div>
-        <div class="small mut">${l.kind === 'text' ? '📖 Текст · чтение ~' + Math.max(1, Math.round(l.duration_sec / 60)) + ' мин' : '🎬 Видео · ' + fmtTime(l.duration_sec)}${l.required ? '' : ' · необязательная'}${l.description ? ' · ' + esc(l.description.slice(0, 120)) : ''}</div>
-        ${l.status === 'in_progress' ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}</a></li>`;
-  };
-  const exStep = (e) => {
-    const last = e.attempts[0];
-    const st = last ? badge(last.status) : e.can_start ? '<span class="badge ok">открыт</span>' : '<span class="badge lock">закрыт</span>';
-    return `<li class="step exam ${e.attempts.some(a => a.status === 'passed') ? 'watched' : ''} ${!e.can_start && !e.active_attempt_id && !last ? 'locked' : ''}"><span class="dot">🎯</span>
-      <div class="step-body"><div class="row between"><b>Экзамен: ${esc(e.title)}</b>${st}</div>
-        <div class="small mut">${examMeta(e)}</div>
-        ${e.lectures_left ? `<div class="small warn-t">Осталось посмотреть лекций: ${e.lectures_left}</div>` : ''}
-        ${!e.can_start && e.reason && !e.active_attempt_id ? `<div class="small mut">${esc(e.reason)}${e.next_at ? ' — ' + fmtDate(e.next_at) : ''}</div>` : ''}
-        <div class="row" style="margin-top:8px">${e.active_attempt_id ? `<a class="btn primary sm" href="#/attempt/${e.active_attempt_id}">Продолжить попытку</a>` : e.can_start ? `<a class="btn primary sm" href="#/exam/${e.id}">Перейти к экзамену</a>` : `<a class="btn sm" href="#/exam/${e.id}">Подробнее</a>`}</div></div></li>`;
-  };
-  setView(`<p><a href="#/study">← Учебный отдел</a></p>
+  setView(`${back}
     <div class="card"><div class="row between"><h1 style="margin:0">${esc(c.title)}</h1>${c.complete ? '<span class="badge ok">✔ курс пройден</span>' : ''}</div>
       ${c.description ? `<div class="welcome" style="margin-top:8px">${esc(c.description)}</div>` : ''}
       <div class="small mut" style="margin-top:8px">Лекций: ${c.lectures_total}${c.required_total ? ` · обязательных просмотрено ${c.required_done} из ${c.required_total}` : ''} · экзаменов: ${c.exams.length}</div>
       <div class="bar"><i style="width:${c.required_total ? Math.round(c.required_done / c.required_total * 100) : 100}%"></i></div></div>
-    <ol class="steps">${c.lectures.map(step).join('')}${c.exams.map(exStep).join('')}</ol>
+    <ol class="steps">${c.lectures.map(lecStep).join('')}${c.exams.map(exStep).join('')}</ol>
     ${!c.lectures.length && !c.exams.length ? '<div class="alert info">В курсе пока нет лекций и экзаменов.</div>' : ''}
     ${c.lectures.length && !lecDone ? `<p class="small mut">${'Лекции идут по порядку: следующая открывается после полного просмотра предыдущей обязательной.'}</p>` : ''}`);
+}, { cap: 'vp' });
+
+route('/topic/:id', async (id) => {
+  const d = await api('GET', '/api/topics/' + encodeURIComponent(id));
+  const t = d.topic, pr = d.progress, pos = d.course.track === 'position';
+  sessionStorage.setItem('vp_topic_ctx', JSON.stringify({ id: t.id, root: t.linked ? t.linked.id : t.id }));
+  const mat = d.material ? (d.material.locked
+      ? `<li class="step locked"><span class="dot">📄</span><div class="step-body"><div class="row between"><b>Полная выгрузка: ${esc(d.material.title)}</b><span class="badge lock">🔒 после лекций</span></div><div class="small mut">Все материалы темы целиком — откроются, когда пройдены все лекции темы.</div></div></li>`
+      : `<li class="step watched"><span class="dot">📄</span><a class="step-body" href="#/doc/${d.material.doc_id}"><div class="row between"><b>Полная выгрузка: ${esc(d.material.title)}</b><span class="badge ok">открыта</span></div><div class="small mut">Все материалы темы целиком в Базе данных.</div></a></li>`) : '';
+  const yt = d.video && d.video.type === 'youtube' ? `<div class="vwrap"><iframe src="https://www.youtube-nocookie.com/embed/${esc(d.video.youtube_id)}" title="Видео темы" allowfullscreen loading="lazy"></iframe></div>` : d.video && d.video.url ? `<video controls preload="metadata" src="${esc(d.video.url)}" style="width:100%"></video>` : '';
+  const vid = pos || !d.video ? '' : d.video.locked
+      ? `<li class="step locked"><span class="dot">🎬</span><div class="step-body"><div class="row between"><b>Видео по теме</b><span class="badge lock">🔒 после лекций</span></div></div></li>`
+      : d.video.planned ? `<li class="step"><span class="dot">🎬</span><div class="step-body"><div class="row between"><b>Видео по теме</b><span class="badge">готовится</span></div><div class="small mut">Ролик с разбором примеров появится здесь.</div></div></li>`
+      : `<li class="step watched"><span class="dot">🎬</span><div class="step-body"><b>Видео по теме</b>${yt}</div></li>`;
+  setView(`<p><a href="#/course/${d.course.id}">← ${esc(d.course.title)}</a></p>
+    ${d.siblings.length > 1 ? `<div class="tracktabs topics">${d.siblings.map((x, i) => `<a class="${x.id === t.id ? 'on' : ''}" href="#/topic/${x.id}">${i + 1}. ${esc(x.title)}</a>`).join('')}</div>` : ''}
+    <div class="card"><div class="row between"><h1 style="margin:0">${esc(t.title)}</h1>${pr.done ? '<span class="badge ok">✔ тема пройдена</span>' : can('admin') && TOPIC_ST[t.status] ? `<span class="badge ${TOPIC_ST[t.status][1]}">${TOPIC_ST[t.status][0]}</span>` : ''}</div>
+      ${t.description ? `<div class="welcome" style="margin-top:8px">${esc(t.description)}</div>` : ''}
+      ${t.linked ? `<div class="alert info small" style="margin-top:10px">↔ Это общая тема с курсом системы званий. Если вы её уже прошли там, она засчитана здесь — и наоборот.</div>` : ''}
+      <div class="small mut" style="margin-top:8px">Лекций: ${pr.total}${pr.required_total ? ` · пройдено ${pr.required_done} из ${pr.required_total}` : ''}</div>
+      <div class="bar"><i style="width:${pr.required_total ? Math.round(pr.required_done / pr.required_total * 100) : 0}%"></i></div>
+      ${can('admin') ? `<div class="row" style="margin-top:10px"><a class="btn sm" href="#/admin/topic/${t.linked ? t.linked.id : t.id}">✎ Редактировать тему</a></div>` : ''}</div>
+    ${!pr.total ? `<div class="alert info">${t.status === 'placeholder' ? 'Материал этой темы готовит руководство ГУ ВП.' : 'Лекции темы пока не опубликованы.'}</div>` : ''}
+    <ol class="steps">${d.lectures.map(lecStep).join('')}${mat}${vid}${d.exams.map(exStep).join('')}</ol>
+    ${pr.total && !pr.done ? '<p class="small mut">Лекции идут по порядку: следующая открывается после полного прохождения предыдущей.</p>' : ''}
+    ${t.video_plan ? `<details class="card flat"><summary>План ролика (видят только администраторы)</summary><div class="md">${md(t.video_plan)}</div></details>` : ''}`);
 }, { cap: 'vp' });
 
 // ---------- отчёты (сотрудник) ----------
@@ -228,7 +293,7 @@ async function docsPage() {
   setView(`<div class="row between"><h1 style="margin:0">База данных</h1>${can('admin') ? '<a class="btn gold" href="#/doc-edit/new">+ Статья</a>' : ''}</div>
     <p class="mut small">Документация ГУ ВП: инструкции, порядок работы, правила. ${can('admin') ? 'Вы можете добавлять и править статьи.' : 'Статьи добавляют администраторы.'}</p>
     <form class="row" id="dq" style="margin-bottom:14px"><input name="q" value="${esc(q)}" placeholder="Поиск по статьям" style="max-width:420px"><button class="btn">Найти</button>${q ? '<a class="btn" href="#/docs">Сбросить</a>' : ''}</form>
-    ${cats.length ? cats.map(c => `<div class="doccat"><h2>${esc(c)}</h2><div class="docgrid">${d.docs.filter(x => x.category === c).map(x => `<a class="doccard" href="#/doc/${x.id}"><b>${esc(x.title)}</b>
+    ${cats.length ? cats.map(c => `<div class="doccat"><h2>${esc(c)}</h2><div class="docgrid">${d.docs.filter(x => x.category === c).map(x => x.locked ? `<div class="doccard locked"><b>🔒 ${esc(x.title)}</b><span class="small mut">Полная выгрузка темы «${esc(x.locked_topic)}» — откроется после всех лекций темы.</span></div>` : `<a class="doccard" href="#/doc/${x.id}"><b>${esc(x.title)}</b>
       <span class="small mut">${esc(x.snippet.replace(/[#*`>\[\]]/g, '').replace(/\s+/g, ' ').slice(0, 160))}${x.len > 160 ? '…' : ''}</span><span class="small mut">обновлено ${fmtDate(x.updated_at)}</span></a>`).join('')}</div></div>`).join('')
       : `<div class="alert info">${q ? 'Ничего не найдено.' : 'Статей пока нет.'}</div>`}`);
   $('#dq').onsubmit = (ev) => { ev.preventDefault(); const v = ev.target.q.value.trim(); location.hash = v ? '#/docs?q=' + encodeURIComponent(v) : '#/docs'; };
@@ -236,7 +301,7 @@ async function docsPage() {
 route('/doc/:id', async (id) => {
   const { doc } = await api('GET', '/api/docs/' + encodeURIComponent(id));
   setView(`<p><a href="#/docs">← База данных</a></p>
-    <article class="card doc"><div class="small mut">${esc(doc.category)}</div><h1>${esc(doc.title)}</h1><div class="md">${md(doc.body)}</div>
+    <article class="doc lec-page"><div class="lec-kicker">${esc(doc.category)}</div><h1 class="lec-title">${esc(doc.title)}</h1><div class="lecture-text md" style="margin-top:14px">${md(doc.body)}</div>
       <p class="small mut" style="margin-top:18px">Обновлено ${fmtDate(doc.updated_at)}${doc.author ? ' · ' + esc(doc.author) : ''}</p>
       ${can('admin') ? `<div class="row"><a class="btn" href="#/doc-edit/${doc.id}">Изменить</a><button class="btn danger sm" id="delDoc">Удалить</button></div>` : ''}</article>`);
   const del = $('#delDoc'); if (del) del.onclick = async () => { if (!confirm(`Удалить статью «${doc.title}»?`)) return; try { await api('DELETE', '/api/docs/' + doc.id); toast('Статья удалена'); location.hash = '#/docs'; } catch (e) { toast(e.message, true); } };

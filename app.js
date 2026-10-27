@@ -78,7 +78,7 @@ const MENU = [
   ['/admin', 'Админка', '⚙', 'examiner'],
   ['/profile', 'Профиль', '👤', null],
 ];
-const MENU_ALIAS = { '/lectures': '/study', '/lecture': '/study', '/exams': '/study', '/exam': '/study', '/course': '/study', '/attempt': '/study', '/doc': '/docs', '/doc-edit': '/docs', '/person': '/people' };
+const MENU_ALIAS = { '/lectures': '/study', '/lecture': '/study', '/exams': '/study', '/exam': '/study', '/course': '/study', '/topic': '/study', '/attempt': '/study', '/doc': '/docs', '/doc-edit': '/docs', '/person': '/people' };
 function menuActive(path) {
   const top = '/' + (path.split('/')[1] || '').split('?')[0];
   const t = MENU_ALIAS[top] || top;
@@ -209,16 +209,17 @@ route('/lectures', async () => {
 
 route('/lecture/:id', async (id) => {
   const { lecture: l } = await api('GET', '/api/lectures/' + encodeURIComponent(id));
-  const back = l.course_id ? `#/course/${l.course_id}` : '#/study';
+  let ctx = null; try { ctx = JSON.parse(sessionStorage.getItem('vp_topic_ctx') || 'null'); } catch (_) {}
+  const back = l.topic_id ? `#/topic/${ctx && ctx.root === l.topic_id ? ctx.id : l.topic_id}` : l.course_id ? `#/course/${l.course_id}` : '#/study';
   const fs = Number(localStorage.getItem('vp_lec_fs')) || 18;
-  setView(`<p><a href="${back}">← К курсу</a></p>
+  setView(`<p><a href="${back}">← ${l.topic_id ? 'К теме' : 'К курсу'}</a></p>
     ${l.kind === 'text' ? `<div class="lec-page"><header class="lec-head"><div class="lec-kicker">📖 Лекция · чтение ~${Math.max(1, Math.round((l.duration_sec || 60) / 60))} мин</div><h1 class="lec-title">${esc(l.title)}</h1>
       <div class="lec-tools" role="group" aria-label="Размер шрифта"><button type="button" class="btn sm" id="fsDn" title="Мельче">A−</button><button type="button" class="btn sm" id="fsUp" title="Крупнее">A+</button></div></header>
       <div class="reader-bar" id="rbar"><div class="row between small"><span id="rtxt">Чтение…</span><span id="rtime"></span></div><div class="bar"><i id="rfill" style="width:0%"></i></div></div>
       <article class="lecture-text md" id="lecText"${localStorage.getItem('vp_lec_fs') ? ` style="--lec-fs:${fs}px"` : ''}>${md(l.body)}</article></div>` : `<h1>${esc(l.title)}</h1><div id="playerBox"></div>`}
     <div class="pmsg" id="pmsg"></div>
     ${l.description ? `<div class="card flat" style="margin-top:14px"><div class="welcome">${esc(l.description)}</div></div>` : ''}
-    ${l.kind === 'text' ? `<p><a class="btn" href="${back}">← К курсу</a></p>` : ''}`);
+    ${l.kind === 'text' ? `<p><a class="btn" href="${back}">← ${l.topic_id ? 'К теме' : 'К курсу'}</a></p>` : ''}`);
   if (l.kind === 'text') {
     const setFs = (n) => { n = Math.max(15, Math.min(22, n)); localStorage.setItem('vp_lec_fs', n); $('#lecText').style.setProperty('--lec-fs', n + 'px'); };
     $('#fsDn').onclick = () => setFs((Number(localStorage.getItem('vp_lec_fs')) || 18) - 1);

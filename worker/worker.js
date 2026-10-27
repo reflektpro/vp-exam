@@ -311,15 +311,17 @@ async function authExchange(request, env) {
 async function lectureStates(env, userId) {
   const settings = await getSettings(env);
   // лекции скрытых (неопубликованных) курсов кандидатам не показываются; лекции без курса — общий раздел
-  const { results: lectures } = await env.DB.prepare(`SELECT l.id, l.title, l.description, l.video_url, l.duration_sec, l.position, l.required, l.published, l.course_id, l.created_at, l.updated_at, (l.body != '') AS has_body FROM lectures l LEFT JOIN courses c ON c.id = l.course_id
-    WHERE l.published = 1 AND (l.course_id IS NULL OR c.id IS NULL OR c.published = 1) ORDER BY l.position, l.id`).all();
+  const { results: lectures } = await env.DB.prepare(`SELECT l.id, l.title, l.description, l.video_url, l.duration_sec, l.position, l.required, l.published, l.course_id, l.created_at, l.updated_at, (l.body != '') AS has_body, l.topic_id FROM lectures l LEFT JOIN courses c ON c.id = l.course_id LEFT JOIN topics t ON t.id = l.topic_id
+    WHERE l.published = 1 AND (l.course_id IS NULL OR c.id IS NULL OR c.published = 1) AND (l.topic_id IS NULL OR t.id IS NULL OR t.published = 1) ORDER BY l.position, l.id`).all();
+  const { results: trows } = await env.DB.prepare('SELECT * FROM topics ORDER BY position, id').all();
+  const topics = new Map(trows.map(t => [t.id, t]));
   const { results: prog } = await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(userId).all();
   const pm = new Map(prog.map(p => [p.lecture_id, p]));
-  const blocked = new Set(); // «строго по порядку» — внутри каждого курса
+  const blocked = new Set(); // «строго по порядку» — внутри каждой темы (лекции без темы — внутри курса)
   const out = [];
   for (const l of lectures) {
     const p = pm.get(l.id);
-    const ck = l.course_id || 0;
+    const ck = l.topic_id && topics.has(l.topic_id) ? 't' + l.topic_id : 'c' + (l.course_id || 0);
     let status = 'not_started';
     if (p && p.completed_at) status = 'watched';
     else if (p && (p.max_pos > 0 || p.watched_sec > 0)) status = 'in_progress';
@@ -329,13 +331,22 @@ async function lectureStates(env, userId) {
     if (l.required && !(p && p.completed_at)) blocked.add(ck);
   }
   const allRequiredDone = lectures.filter(l => l.required).every(l => { const p = pm.get(l.id); return p && p.completed_at; });
-  return { items: out, allRequiredDone, sequential: settings.sequential_lectures };
+  return { items: out, allRequiredDone, sequential: settings.sequential_lectures, topics };
+}
+// Темы: «связанная» тема (link_topic_id) показывает лекции, выгрузку и видео исходной темы — прохождение общее (напр. «Основы ГУ ВП» в «Стажёр ВП»).
+function topicRoot(tmap, id) { const t = tmap.get(id); return t && t.link_topic_id && tmap.has(t.link_topic_id) ? t.link_topic_id : id; }
+function examTopicIds(e) { const v = parseJ(e.topic_ids, []); return Array.isArray(v) ? v.filter(x => Number.isInteger(x)) : []; }
+function topicProgress(st, rootId) {
+  const items = st.items.filter(i => i.lecture.topic_id === rootId);
+  const req = items.filter(i => i.lecture.required);
+  const done = req.filter(i => i.progress && i.progress.completed_at).length;
+  return { items, total: items.length, required_total: req.length, required_done: done, done: items.length > 0 && done === req.length };
 }
 // Какие лекции нужны для допуска к конкретному экзамену.
 //   mode: 'none' — лекции не нужны; 'all' — все опубликованные обязательные (как раньше); 'selected' — выбранные админом.
 // Неопубликованные и удалённые лекции из выбранных не учитываются.
 // Порядок «строго по порядку» на допуск к экзамену не влияет — он ограничивает только очерёдность просмотра лекций.
-function examMode(e) { return !e.requires_lectures ? 'none' : (e.lecture_mode === 'selected' ? 'selected' : 'all'); }
+function examMode(e) { return !e.requires_lectures ? 'none' : (e.lecture_mode === 'selected' ? 'selected' : e.lecture_mode === 'topics' ? 'topics' : 'all'); }
 async function examLinks(env, examId) {
   const { results } = examId
     ? await env.DB.prepare('SELECT exam_id, lecture_id FROM exam_lectures WHERE exam_id = ?1').bind(examId).all()
@@ -349,6 +360,7 @@ function examRequirement(exam, st, links) {
   let items = [];
   if (mode === 'all') items = st.items.filter(i => i.lecture.required && (!exam.course_id || i.lecture.course_id === exam.course_id)); // экзамен курса — обязательные лекции своего курса
   else if (mode === 'selected') { const ids = new Set(links.get(exam.id) || []); items = st.items.filter(i => ids.has(i.lecture.id)); }
+  else if (mode === 'topics') { const tids = new Set(examTopicIds(exam).map(id => topicRoot(st.topics, id))); items = st.items.filter(i => i.lecture.required && tids.has(i.lecture.topic_id)); }
   const lectures = items.map(i => ({ id: i.lecture.id, title: i.lecture.title, watched: !!(i.progress && i.progress.completed_at), locked: !!i.locked }));
   const left = lectures.filter(l => !l.watched);
   return { mode, lectures, left, done: left.length === 0 };
@@ -361,7 +373,7 @@ function lectureOut(it, withVideo) {
   const l = it.lecture, p = it.progress;
   const o = {
     id: l.id, title: l.title, description: l.description, duration_sec: l.duration_sec, required: !!l.required,
-    position: l.position, status: it.status, locked: it.locked, course_id: l.course_id || null,
+    position: l.position, status: it.status, locked: it.locked, course_id: l.course_id || null, topic_id: l.topic_id || null,
     progress: p ? { max_pos: p.max_pos, last_pos: p.last_pos, watched_sec: Math.round(p.watched_sec), completed_at: p.completed_at } : null,
   };
   o.kind = !l.video_url && (l.has_body || l.body) ? 'text' : 'video';
@@ -438,7 +450,7 @@ async function examAvailability(env, user, exam, req) {
     attempts: atts.map(a => ({ id: a.id, status: a.status, started_at: a.started_at, submitted_at: a.submitted_at, score_pct: a.status === 'pending_review' ? null : a.score_pct })) };
 }
 function examPublic(e) {
-  return { id: e.id, course_id: e.course_id || null, title: e.title, description: e.description, time_limit_min: e.time_limit_min, max_attempts: e.max_attempts,
+  return { id: e.id, course_id: e.course_id || null, topic_ids: examTopicIds(e), title: e.title, description: e.description, time_limit_min: e.time_limit_min, max_attempts: e.max_attempts,
     cooldown_min: e.cooldown_min, pass_pct: e.pass_pct, requires_lectures: !!e.requires_lectures, from_bank: e.bank_count > 0 && !!e.bank_category };
 }
 // Сколько вопросов будет в попытке: для экзамена из банка — bank_count (не больше, чем позволяют topic), иначе — вопросы экзамена.
@@ -478,21 +490,74 @@ async function listCourses(env, user) {
   const { results: qc } = await env.DB.prepare('SELECT exam_id, COUNT(*) AS c FROM questions WHERE exam_id > 0 GROUP BY exam_id').all();
   const qm = new Map(qc.map(r => [r.exam_id, r.c]));
   const known = new Set(courses.map(c => c.id));
-  const groups = courses.map(c => ({ id: c.id, title: c.title, description: c.description || '', lectures: [], exams: [] }));
-  const other = { id: 0, title: 'Без курса', description: '', lectures: [], exams: [] };
+  const groups = courses.map(c => ({ id: c.id, title: c.title, description: c.description || '', subtitle: c.subtitle || '', track: c.track || 'rank', position: c.position, lectures: [], exams: [], topics: [] }));
+  const other = { id: 0, title: 'Без курса', description: '', subtitle: '', track: 'rank', lectures: [], exams: [], topics: [] };
   const gm = new Map(groups.map(g => [g.id, g]));
   for (const it of st.items) (known.has(it.lecture.course_id) ? gm.get(it.lecture.course_id) : other).lectures.push(lectureOut(it, false));
   for (const e of exams) {
     const x = { ...examPublic(e), question_count: await examQCount(env, e, qm.get(e.id) || 0), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) };
     (known.has(e.course_id) ? gm.get(e.course_id) : other).exams.push(x);
   }
+  const allEx = groups.flatMap(g => g.exams);
+  for (const t of st.topics.values()) {
+    if (!t.published || !gm.has(t.course_id)) continue;
+    const root = topicRoot(st.topics, t.id), rt = st.topics.get(root), tp = topicProgress(st, root);
+    const ex = allEx.filter(e => e.topic_ids.includes(t.id) || e.topic_ids.includes(root));
+    gm.get(t.course_id).topics.push({ id: t.id, title: t.title, description: t.description || '', status: t.status, position: t.position, linked: root !== t.id ? { id: root, title: rt.title } : null,
+      lectures_total: tp.total, required_total: tp.required_total, required_done: tp.required_done, done: tp.done, has_material: !!rt.doc_id, has_video: !!(rt.video_url || rt.video_plan),
+      exam_ids: ex.map(e => e.id), exam_passed: ex.length > 0 && ex.every(e => e.attempts.some(a => a.status === 'passed')) });
+  }
   const out = [...groups, other].filter(g => g.id || g.lectures.length || g.exams.length).map(g => {
     const req = g.lectures.filter(l => l.required);
     const done = req.filter(l => l.status === 'watched').length;
+    const topicsDone = g.topics.filter(t => t.status !== 'placeholder').every(t => t.done || !t.required_total);
     return { ...g, lectures_total: g.lectures.length, required_total: req.length, required_done: done, watched: g.lectures.filter(l => l.status === 'watched').length,
-      exam_passed: g.exams.some(e => e.attempts.some(a => a.status === 'passed')), complete: done === req.length && g.exams.every(e => e.attempts.some(a => a.status === 'passed')) };
+      topics_total: g.topics.length, topics_done: g.topics.filter(t => t.done).length,
+      exam_passed: g.exams.some(e => e.attempts.some(a => a.status === 'passed')),
+      complete: (g.topics.length ? topicsDone && g.topics.some(t => t.done) : done === req.length) && g.exams.every(e => e.attempts.some(a => a.status === 'passed')) };
   });
   return json({ courses: out, sequential_lectures: st.sequential });
+}
+// Тема: лекции по порядку → полная выгрузка (статья Базы данных, открывается после всех лекций) → видео (тоже после лекций) → экзамены темы.
+async function getTopic(env, user, id) {
+  const admin = caps(user).admin;
+  const st = await lectureStates(env, user.id);
+  const t = st.topics.get(id);
+  if (!t || (!t.published && !admin)) throw new HttpError(404, 'Тема не найдена');
+  const c = await env.DB.prepare('SELECT * FROM courses WHERE id = ?1').bind(t.course_id).first();
+  if (!c || (!c.published && !admin)) throw new HttpError(404, 'Тема не найдена');
+  const root = topicRoot(st.topics, id), rt = st.topics.get(root), tp = topicProgress(st, root);
+  const open = tp.done || admin;
+  let material = null;
+  if (rt.doc_id) { const d = await env.DB.prepare('SELECT id, title FROM docs WHERE id = ?1 AND deleted_at IS NULL').bind(rt.doc_id).first(); if (d) material = open ? { doc_id: d.id, title: d.title } : { locked: true, title: d.title }; }
+  let video = null;
+  if (rt.video_url) video = open ? { url: rt.video_url, ...videoInfo(rt.video_url) } : { locked: true };
+  else if (rt.video_plan) video = { planned: true };
+  const links = await examLinks(env);
+  const exams = [];
+  for (const e of await visibleExams(env)) {
+    const ids = examTopicIds(e); if (!ids.includes(id) && !ids.includes(root)) continue;
+    const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(e.id).first();
+    exams.push({ ...examPublic(e), topic_titles: ids.map(x => st.topics.get(x)).filter(Boolean).map(x => x.title), question_count: await examQCount(env, e, qc.c), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
+  }
+  const siblings = [...st.topics.values()].filter(x => x.course_id === t.course_id && (x.published || admin)).map(x => ({ id: x.id, title: x.title, status: x.status }));
+  return json({ topic: { id: t.id, title: t.title, description: t.description || '', status: t.status, published: !!t.published, linked: root !== id ? { id: root, title: rt.title, course_id: rt.course_id } : null,
+      video_plan: admin ? rt.video_plan || '' : undefined },
+    course: { id: c.id, title: c.title, track: c.track || 'rank' }, siblings,
+    lectures: tp.items.map(i => lectureOut(i, false)), progress: { total: tp.total, required_total: tp.required_total, required_done: tp.required_done, done: tp.done },
+    material, video, exams });
+}
+// Статья-«выгрузка» темы открывается после всех лекций темы (админам — всегда).
+async function docGate(env, user, docId) {
+  if (caps(user).admin) return null;
+  const { results: ts } = await env.DB.prepare('SELECT id, title FROM topics WHERE doc_id = ?1 AND published = 1').bind(docId).all();
+  if (!ts.length) return null;
+  for (const t of ts) {
+    const r = await env.DB.prepare(`SELECT COUNT(*) AS n, SUM(CASE WHEN p.completed_at IS NOT NULL THEN 1 ELSE 0 END) AS d FROM lectures l LEFT JOIN lecture_progress p ON p.lecture_id = l.id AND p.user_id = ?2
+      WHERE l.topic_id = ?1 AND l.published = 1 AND l.required = 1`).bind(t.id, user.id).first();
+    if (r.n > 0 && r.d === r.n) return null;
+  }
+  return ts[0].title;
 }
 async function getExam(env, user, id) {
   const e = (await visibleExams(env)).find(x => x.id === id);
@@ -1672,6 +1737,7 @@ function lectureInput(b, partial) {
   if (!partial || b.required !== undefined) o.required = bool(b.required, true);
   if (!partial || b.published !== undefined) o.published = bool(b.published, false);
   if (!partial || b.course_id !== undefined) o.course_id = b.course_id ? idParam(b.course_id) : null;
+  if (!partial || b.topic_id !== undefined) o.topic_id = b.topic_id ? idParam(b.topic_id) : null;
   if (o.published && ('video_url' in o || 'duration_sec' in o)) {
     // проверка ниже, при публикации
   }
@@ -1685,6 +1751,12 @@ async function checkCourse(env, cid) { if (cid && !(await env.DB.prepare('SELECT
 async function saveLecture(request, env, user, id) {
   const b = await readJson(request);
   const o = lectureInput(b, !!id);
+  if (o.topic_id) { // лекция темы всегда в курсе этой темы
+    const t = await env.DB.prepare('SELECT id, course_id, link_topic_id FROM topics WHERE id = ?1').bind(o.topic_id).first();
+    if (!t) throw new HttpError(400, 'Тема не найдена (возможно, удалена). Обновите страницу.');
+    if (t.link_topic_id) throw new HttpError(400, 'Эта тема связана с другой — лекции добавляются в исходную тему');
+    o.course_id = t.course_id;
+  }
   await checkCourse(env, o.course_id);
   const now = Date.now();
   if (id) {
@@ -1703,8 +1775,8 @@ async function saveLecture(request, env, user, id) {
   }
   if (o.published && ((!o.video_url && !o.body) || !o.duration_sec)) throw new HttpError(400, LECTURE_PUB_MSG);
   if (b.position === undefined) { const mx = await env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM lectures').first(); o.position = mx.m + 10; }
-  const r = await env.DB.prepare('INSERT INTO lectures (title, description, video_url, duration_sec, position, required, published, course_id, created_at, updated_at, body) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, ?8, ?8, ?10) RETURNING *')
-    .bind(o.title, o.description, o.video_url, o.duration_sec, o.position, o.required, o.published, now, o.course_id ?? null, o.body || '').first();
+  const r = await env.DB.prepare('INSERT INTO lectures (title, description, video_url, duration_sec, position, required, published, course_id, created_at, updated_at, body, topic_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, ?8, ?8, ?10, ?11) RETURNING *')
+    .bind(o.title, o.description, o.video_url, o.duration_sec, o.position, o.required, o.published, now, o.course_id ?? null, o.body || '', o.topic_id ?? null).first();
   await audit(env, user, 'lecture.create', r.id, { title: o.title });
   return json({ lecture: { ...r, ...videoInfo(r.video_url) } });
 }
@@ -1745,38 +1817,45 @@ function examInput(b, partial) {
   f('course_id', v => v ? idParam(v) : null);
   f('bank_category', v => str(v, 300, { name: 'категория банка' }) || null);
   f('bank_count', v => int(v, 0, 500, 'вопросов из банка', 0));
+  if (b.topic_ids !== undefined) {
+    if (!Array.isArray(b.topic_ids) || b.topic_ids.length > 50) throw new HttpError(400, 'Темы экзамена: нужен список id тем');
+    o.topic_ids = JSON.stringify([...new Set(b.topic_ids.map(idParam))]);
+  }
   return o;
 }
 async function adminExams(env) {
   const { results } = await env.DB.prepare(`SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS question_count,
     (SELECT COUNT(*) FROM attempts a WHERE a.exam_id = e.id) AS attempt_count,
     (SELECT COUNT(*) FROM attempts a WHERE a.exam_id = e.id AND a.status = 'pending_review') AS pending_count FROM exams e ORDER BY position, id`).all();
-  const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, position, course_id FROM lectures ORDER BY position, id').all();
-  const links = await examLinks(env);
-  return json({ exams: results.map(e => ({ ...e, ...examLecturesAdmin(e, lec, links) })) });
+  const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, position, course_id, topic_id FROM lectures ORDER BY position, id').all();
+  const links = await examLinks(env); const tmap = await topicMap(env);
+  return json({ exams: results.map(e => ({ ...e, topic_ids: examTopicIds(e), ...examLecturesAdmin(e, lec, links, tmap) })) });
 }
 // Обязательные лекции экзамена для админки: что учитывается и что игнорируется (черновики / удалённые).
-function examLecturesAdmin(e, lec, links) {
+function examLecturesAdmin(e, lec, links, tmap) {
   const mode = examMode(e);
   const lm = new Map(lec.map(l => [l.id, l]));
   const ids = mode === 'selected' ? (links.get(e.id) || []).slice().sort((a, b) => {
     const la = lm.get(a), lb = lm.get(b); return (la ? la.position : 1e9) - (lb ? lb.position : 1e9) || a - b; }) : [];
   const required_lectures = ids.map(id => { const l = lm.get(id); return l ? { id, title: l.title, published: !!l.published, deleted: false } : { id, title: null, published: false, deleted: true }; });
-  const effective = mode === 'all' ? lec.filter(l => l.published && l.required && (!e.course_id || l.course_id === e.course_id)).length : required_lectures.filter(l => l.published).length;
+  const tids = mode === 'topics' && tmap ? new Set(examTopicIds(e).map(x => topicRoot(tmap, x))) : null;
+  const effective = mode === 'all' ? lec.filter(l => l.published && l.required && (!e.course_id || l.course_id === e.course_id)).length
+    : mode === 'topics' ? lec.filter(l => l.published && l.required && tids.has(l.topic_id)).length : required_lectures.filter(l => l.published).length;
   const warnings = [];
   for (const l of required_lectures) {
     if (l.deleted) warnings.push(`Лекция #${l.id} удалена — не учитывается`);
     else if (!l.published) warnings.push(`«${l.title}» — черновик, не учитывается, пока не опубликована`);
   }
   if (mode === 'selected' && required_lectures.length && !effective) warnings.push('Ни одна выбранная лекция не опубликована — экзамен сейчас открыт без лекций');
+  if (mode === 'topics' && !effective) warnings.push('В темах экзамена нет опубликованных обязательных лекций — экзамен сейчас открыт без лекций');
   return { lecture_mode: mode, required_lecture_ids: ids, required_lectures, effective_lecture_count: effective, lecture_warnings: warnings };
 }
 async function adminExam(env, id) {
   const e = await env.DB.prepare('SELECT * FROM exams WHERE id = ?1').bind(id).first();
   if (!e) throw new HttpError(404, 'Экзамен не найден');
   const { results } = await env.DB.prepare('SELECT * FROM questions WHERE exam_id = ?1 ORDER BY position, id').bind(id).all();
-  const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, position, course_id FROM lectures ORDER BY position, id').all();
-  return json({ exam: { ...e, ...examLecturesAdmin(e, lec, await examLinks(env, id)) }, questions: results.map(qOut) });
+  const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, position, course_id, topic_id FROM lectures ORDER BY position, id').all();
+  return json({ exam: { ...e, topic_ids: examTopicIds(e), ...examLecturesAdmin(e, lec, await examLinks(env, id), await topicMap(env)) }, questions: results.map(qOut) });
 }
 // required_lectures: 'all' — все опубликованные обязательные (по умолчанию); массив id — только выбранные; [] — лекции не нужны.
 async function parseRequiredLectures(env, v) {
@@ -1804,6 +1883,14 @@ async function saveExam(request, env, user, id) {
   const rl = await parseRequiredLectures(env, b.required_lectures);
   if (rl) { o.requires_lectures = rl.requires_lectures; o.lecture_mode = rl.lecture_mode; }
   else if (!id) o.lecture_mode = 'all';
+  if (o.topic_ids !== undefined) { // экзамен темы / группы тем: допуск — после всех обязательных лекций этих тем
+    const ids = JSON.parse(o.topic_ids);
+    if (ids.length) {
+      const { results } = await env.DB.prepare(`SELECT id FROM topics WHERE id IN (${ids.map((_, i) => '?' + (i + 1)).join(', ')})`).bind(...ids).all();
+      if (results.length !== ids.length) throw new HttpError(400, 'Тема экзамена не найдена (возможно, удалена). Обновите страницу.');
+      o.requires_lectures = 1; o.lecture_mode = 'topics'; // темы важнее списка лекций
+    } else if (!rl) { const cur = id ? await env.DB.prepare('SELECT lecture_mode FROM exams WHERE id = ?1').bind(id).first() : null; if (!id || (cur && cur.lecture_mode === 'topics')) o.lecture_mode = 'all'; }
+  }
   const now = Date.now();
   if (id) {
     const cur = await env.DB.prepare('SELECT id FROM exams WHERE id = ?1').bind(id).first();
@@ -1895,14 +1982,18 @@ function courseInput(b, partial) {
   if (!partial || b.description !== undefined) o.description = str(b.description, 10000, { name: 'описание курса' });
   if (!partial || b.published !== undefined) o.published = bool(b.published, true);
   if (b.position !== undefined) o.position = int(b.position, 0, 100000, 'порядок', 0);
+  if (!partial || b.track !== undefined) { o.track = b.track === undefined || b.track === null || b.track === '' ? 'rank' : String(b.track); if (!['rank', 'position'].includes(o.track)) throw new HttpError(400, 'Система курса: «rank» (звания) или «position» (должности)'); }
+  if (!partial || b.subtitle !== undefined) o.subtitle = str(b.subtitle, 200, { name: 'подзаголовок' });
   return o;
 }
+async function topicMap(env) { const { results } = await env.DB.prepare('SELECT * FROM topics').all(); return new Map(results.map(t => [t.id, t])); }
 async function adminCourses(env) {
   const { results } = await env.DB.prepare(`SELECT c.*, (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS lecture_count,
     (SELECT COUNT(*) FROM exams e WHERE e.course_id = c.id) AS exam_count FROM courses c ORDER BY c.position, c.id`).all();
   const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, course_id, position FROM lectures ORDER BY position, id').all();
   const { results: ex } = await env.DB.prepare('SELECT id, title, published, course_id, requires_lectures, lecture_mode FROM exams ORDER BY position, id').all();
-  return json({ courses: results, lectures: lec, exams: ex });
+  const { results: tp } = await env.DB.prepare('SELECT t.id, t.course_id, t.title, t.status, t.published, t.position, t.link_topic_id, t.doc_id, (t.video_url != \'\') AS has_video, (t.video_plan != \'\') AS has_plan, (SELECT COUNT(*) FROM lectures l WHERE l.topic_id = t.id) AS lecture_count FROM topics t ORDER BY t.position, t.id').all();
+  return json({ courses: results, lectures: lec, exams: ex, topics: tp });
 }
 async function saveCourse(request, env, user, id) {
   const b = await readJson(request); const o = courseInput(b, !!id); const now = Date.now();
@@ -1913,7 +2004,7 @@ async function saveCourse(request, env, user, id) {
     await audit(env, user, 'course.update', id, o);
   } else {
     if (o.position === undefined) { const mx = await env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM courses').first(); o.position = mx.m + 10; }
-    const r = await env.DB.prepare('INSERT INTO courses (title, description, published, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5) RETURNING id').bind(o.title, o.description, o.published, o.position, now).first();
+    const r = await env.DB.prepare('INSERT INTO courses (title, description, published, position, created_at, updated_at, track, subtitle) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7) RETURNING id').bind(o.title, o.description, o.published, o.position, now, o.track, o.subtitle).first();
     id = r.id; await audit(env, user, 'course.create', id, { title: o.title });
   }
   // состав курса: лекции и экзамены (по списку id; остальные из этого курса — «без курса»)
@@ -1935,9 +2026,73 @@ async function saveCourse(request, env, user, id) {
 }
 async function deleteCourse(env, user, id) {
   const c = await env.DB.prepare('SELECT * FROM courses WHERE id = ?1').bind(id).first(); if (!c) throw new HttpError(404, 'Курс не найден');
-  await env.DB.batch([env.DB.prepare('UPDATE lectures SET course_id = NULL WHERE course_id = ?1').bind(id), env.DB.prepare('UPDATE exams SET course_id = NULL WHERE course_id = ?1').bind(id),
-    env.DB.prepare('DELETE FROM courses WHERE id = ?1').bind(id)]);
+  await env.DB.batch([env.DB.prepare('UPDATE lectures SET course_id = NULL, topic_id = NULL WHERE course_id = ?1').bind(id), env.DB.prepare('UPDATE exams SET course_id = NULL WHERE course_id = ?1').bind(id),
+    env.DB.prepare('UPDATE topics SET link_topic_id = NULL WHERE link_topic_id IN (SELECT id FROM topics WHERE course_id = ?1)').bind(id),
+    env.DB.prepare('DELETE FROM topics WHERE course_id = ?1').bind(id), env.DB.prepare('DELETE FROM courses WHERE id = ?1').bind(id)]);
   await audit(env, user, 'course.delete', id, { title: c.title });
+  return json({ ok: true });
+}
+
+// --- темы курсов (админ) ---
+const TOPIC_STATUS = ['ready', 'draft', 'placeholder'];
+async function adminTopics(env) {
+  const { results } = await env.DB.prepare(`SELECT t.*, c.title AS course_title, c.track, (SELECT COUNT(*) FROM lectures l WHERE l.topic_id = t.id) AS lecture_count
+    FROM topics t LEFT JOIN courses c ON c.id = t.course_id ORDER BY c.track, c.position, t.position, t.id`).all();
+  const { results: docs } = await env.DB.prepare('SELECT id, category, title FROM docs WHERE deleted_at IS NULL ORDER BY category, position, id').all();
+  const { results: courses } = await env.DB.prepare('SELECT id, title, track FROM courses ORDER BY position, id').all();
+  return json({ topics: results.map(t => ({ ...t, video_plan: undefined, has_plan: !!t.video_plan })), docs, courses });
+}
+async function adminTopic(env, id) {
+  const t = await env.DB.prepare('SELECT * FROM topics WHERE id = ?1').bind(id).first(); if (!t) throw new HttpError(404, 'Тема не найдена');
+  const { results: lectures } = await env.DB.prepare('SELECT id, title, published, required, position, duration_sec, (body != \'\') AS has_body, video_url FROM lectures WHERE topic_id = ?1 ORDER BY position, id').bind(id).all();
+  const { results: exams } = await env.DB.prepare("SELECT id, title, published, topic_ids FROM exams ORDER BY position, id").all();
+  return json({ topic: { ...t, ...videoInfo(t.video_url) }, lectures, exams: exams.filter(e => examTopicIds(e).includes(id)).map(e => ({ id: e.id, title: e.title, published: !!e.published })) });
+}
+async function saveTopic(request, env, user, id) {
+  const b = await readJson(request, 120000); const now = Date.now(); const o = {}; const part = !!id;
+  const f = (k, fn) => { if (!part || b[k] !== undefined) o[k] = fn(b[k]); };
+  f('course_id', v => idParam(v));
+  f('title', v => str(v, 200, { required: true, name: 'название темы' }));
+  f('description', v => str(v, 5000, { name: 'описание темы' }));
+  f('status', v => { const x = v || 'ready'; if (!TOPIC_STATUS.includes(x)) throw new HttpError(400, 'Статус темы: ready, draft или placeholder'); return x; });
+  f('published', v => bool(v, true));
+  f('link_topic_id', v => v ? idParam(v) : null);
+  f('doc_id', v => v ? idParam(v) : null);
+  f('video_url', v => validVideoUrl(str(v, 1000, { name: 'ссылка на видео' })));
+  f('video_plan', v => str(v, 50000, { name: 'план ролика' }));
+  if (b.position !== undefined) o.position = int(b.position, 0, 100000, 'порядок', 0);
+  if (o.course_id) await checkCourse(env, o.course_id);
+  if (o.doc_id && !(await env.DB.prepare('SELECT id FROM docs WHERE id = ?1 AND deleted_at IS NULL').bind(o.doc_id).first())) throw new HttpError(400, 'Статья Базы данных не найдена');
+  if (o.link_topic_id) {
+    if (o.link_topic_id === id) throw new HttpError(400, 'Тема не может ссылаться сама на себя');
+    const lt = await env.DB.prepare('SELECT id, link_topic_id FROM topics WHERE id = ?1').bind(o.link_topic_id).first();
+    if (!lt) throw new HttpError(400, 'Связанная тема не найдена'); if (lt.link_topic_id) throw new HttpError(400, 'Связывать можно только с исходной темой (не со связанной)');
+    if (id && (await env.DB.prepare('SELECT COUNT(*) AS c FROM lectures WHERE topic_id = ?1').bind(id).first()).c) throw new HttpError(400, 'В теме есть свои лекции — перенесите их, прежде чем связывать тему с другой');
+    if (id && (await env.DB.prepare('SELECT COUNT(*) AS c FROM topics WHERE link_topic_id = ?1').bind(id).first()).c) throw new HttpError(400, 'На эту тему ссылаются другие — её нельзя сделать связанной');
+  }
+  if (id) {
+    const cur = await env.DB.prepare('SELECT * FROM topics WHERE id = ?1').bind(id).first(); if (!cur) throw new HttpError(404, 'Тема не найдена');
+    const keys = Object.keys(o);
+    const stmts = [];
+    if (keys.length) stmts.push(env.DB.prepare(`UPDATE topics SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`).bind(...keys.map(k => o[k]), now, id));
+    if (o.course_id && o.course_id !== cur.course_id) stmts.push(env.DB.prepare('UPDATE lectures SET course_id = ?1 WHERE topic_id = ?2').bind(o.course_id, id));
+    if (stmts.length) await env.DB.batch(stmts);
+    await audit(env, user, 'topic.update', id, { ...o, video_plan: o.video_plan !== undefined ? '(план ролика)' : undefined });
+  } else {
+    if (o.position === undefined) { const mx = await env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM topics WHERE course_id = ?1').bind(o.course_id).first(); o.position = mx.m + 10; }
+    const keys = Object.keys(o);
+    const r = await env.DB.prepare(`INSERT INTO topics (${keys.join(', ')}, created_at, updated_at) VALUES (${keys.map((_, i) => '?' + (i + 1)).join(', ')}, ?${keys.length + 1}, ?${keys.length + 1}) RETURNING id`).bind(...keys.map(k => o[k]), now).first();
+    id = r.id; await audit(env, user, 'topic.create', id, { title: o.title, course_id: o.course_id });
+  }
+  return adminTopic(env, id);
+}
+async function deleteTopic(env, user, id) {
+  const t = await env.DB.prepare('SELECT * FROM topics WHERE id = ?1').bind(id).first(); if (!t) throw new HttpError(404, 'Тема не найдена');
+  const { results: ex } = await env.DB.prepare('SELECT id, topic_ids FROM exams').all();
+  const stmts = [env.DB.prepare('UPDATE lectures SET topic_id = NULL WHERE topic_id = ?1').bind(id), env.DB.prepare('UPDATE topics SET link_topic_id = NULL WHERE link_topic_id = ?1').bind(id), env.DB.prepare('DELETE FROM topics WHERE id = ?1').bind(id)];
+  for (const e of ex) { const ids = examTopicIds(e); if (ids.includes(id)) stmts.push(env.DB.prepare('UPDATE exams SET topic_ids = ?1 WHERE id = ?2').bind(JSON.stringify(ids.filter(x => x !== id)), e.id)); }
+  await env.DB.batch(stmts);
+  await audit(env, user, 'topic.delete', id, { title: t.title });
   return json({ ok: true });
 }
 
@@ -3158,15 +3313,21 @@ function docInput(b) {
   return { category: str(b.category, 80, { name: 'раздел' }) || 'Общее', title: str(b.title, 200, { required: true, name: 'заголовок' }),
     body: str(b.body, 100000, { name: 'текст статьи' }), position: int(b.position, 0, 100000, 'порядок', 0) };
 }
-async function listDocs(env, url) {
+async function listDocs(env, url, user) {
   const q = (url.searchParams.get('q') || '').trim().slice(0, 100).toLowerCase();
   const { results } = await env.DB.prepare(`SELECT d.id, d.category, d.title, d.position, d.updated_at, substr(d.body, 1, 400) AS snippet, length(d.body) AS len, ${q ? 'd.body' : "'' AS body"},
     u.ic_name, u.global_name, u.username FROM docs d LEFT JOIN users u ON u.id = COALESCE(d.updated_by, d.created_by) WHERE d.deleted_at IS NULL ORDER BY d.category, d.position, d.id`).all();
-  const rows = results.filter(r => !q || (r.title + ' ' + r.category + ' ' + r.body).toLowerCase().includes(q));
-  return json({ docs: rows.map(r => ({ id: r.id, category: r.category, title: r.title, position: r.position, updated_at: r.updated_at, snippet: r.snippet, len: r.len, author: r.ic_name || r.global_name || r.username || '' })),
+  const locked = new Map();
+  if (!caps(user).admin) { const { results: gd } = await env.DB.prepare('SELECT DISTINCT doc_id FROM topics WHERE doc_id IS NOT NULL AND published = 1').all();
+    for (const g of gd) { const tt = await docGate(env, user, g.doc_id); if (tt) locked.set(g.doc_id, tt); } }
+  const rows = results.filter(r => !q || (r.title + ' ' + r.category + ' ' + (locked.has(r.id) ? '' : r.body)).toLowerCase().includes(q));
+  return json({ docs: rows.map(r => ({ id: r.id, category: r.category, title: r.title, position: r.position, updated_at: r.updated_at, snippet: locked.has(r.id) ? '' : r.snippet, len: r.len, author: r.ic_name || r.global_name || r.username || '',
+      ...(locked.has(r.id) ? { locked: true, locked_topic: locked.get(r.id) } : {}) })),
     categories: [...new Set(results.map(r => r.category))] });
 }
-async function getDoc(env, id) {
+async function getDoc(env, id, user) {
+  const gate = user ? await docGate(env, user, id) : null;
+  if (gate) throw new HttpError(403, `Полная выгрузка откроется после прохождения всех лекций темы «${gate}»`);
   const d = await env.DB.prepare(`SELECT d.*, u.ic_name, u.global_name, u.username FROM docs d LEFT JOIN users u ON u.id = COALESCE(d.updated_by, d.created_by) WHERE d.id = ?1 AND d.deleted_at IS NULL`).bind(id).first();
   if (!d) throw new HttpError(404, 'Статья не найдена');
   return json({ doc: { id: d.id, category: d.category, title: d.title, body: d.body, position: d.position, created_at: d.created_at, updated_at: d.updated_at, author: d.ic_name || d.global_name || d.username || '' } });
@@ -3223,14 +3384,14 @@ async function route(request, env, ctx) {
   }
   // --- доступ по ролям (проверка на сервере) ---
   const C = caps(user);
-  if (/^\/api\/(lectures|exams|courses|reports|premiums|promo)(\/|$)/.test(p)) requireCap(user, 'vp');
+  if (/^\/api\/(lectures|exams|courses|topics|reports|premiums|promo)(\/|$)/.test(p)) requireCap(user, 'vp');
   if (/^\/api\/reatt(\/|$)/.test(p)) requireCap(user, 'reatt');
   if (/^\/api\/(attempts|uploads)\//.test(p) && !(C.vp || C.reatt)) throw new HttpError(403, CAP_MSG.vp);
 
   // общедоступное (всем, кто вошёл): база данных; личные дела — только старший состав (403 для всех остальных, в т. ч. самого сотрудника)
   if (/^\/api\/people(\/|$)/.test(p)) requireSS(user);
-  if (p === '/api/docs' && M === 'GET') return listDocs(env, url);
-  if ((m = /^\/api\/docs\/(\d+)$/.exec(p)) && M === 'GET') return getDoc(env, idParam(m[1]));
+  if (p === '/api/docs' && M === 'GET') return listDocs(env, url, user);
+  if ((m = /^\/api\/docs\/(\d+)$/.exec(p)) && M === 'GET') return getDoc(env, idParam(m[1]), user);
   if (p === '/api/docs' && M === 'POST') { requireCap(user, 'admin'); return saveDoc(request, env, user, null); }
   if ((m = /^\/api\/docs\/(\d+)$/.exec(p)) && M === 'PUT') { requireCap(user, 'admin'); return saveDoc(request, env, user, idParam(m[1])); }
   if ((m = /^\/api\/docs\/(\d+)$/.exec(p)) && M === 'DELETE') { requireCap(user, 'admin'); return deleteDoc(env, user, idParam(m[1])); }
@@ -3250,6 +3411,7 @@ async function route(request, env, ctx) {
 
   // роль «ВП»: учебный отдел (курсы), премирование, система повышения
   if (p === '/api/courses' && M === 'GET') return listCourses(env, user);
+  if ((m = /^\/api\/topics\/(\d+)$/.exec(p)) && M === 'GET') return getTopic(env, user, idParam(m[1]));
   if (p === '/api/premiums' && M === 'GET') return publicPremiums(env, user, url);
   if (p === '/api/promo' && M === 'GET') { const pc = await promoConfig(env); const cfg = await premConfig(env); return json({ ...pc, defaults: PROMO_DEFAULT, items: cfg.items.map(i => ({ key: i.key, name: i.name, group: i.group })), can_edit: C.admin }); }
   if (p === '/api/promo' && M === 'PUT') {
@@ -3315,6 +3477,10 @@ async function route(request, env, ctx) {
     if (p === '/api/admin/courses' && M === 'GET') { A(); return adminCourses(env); }
     if (p === '/api/admin/courses' && M === 'POST') { A(); return saveCourse(request, env, user, null); }
     if (p === '/api/admin/courses/reorder' && M === 'POST') { A(); return reorder(request, env, user, 'courses'); }
+    // темы курсов
+    if (p === '/api/admin/topics' && M === 'GET') { A(); return adminTopics(env); }
+    if (p === '/api/admin/topics' && M === 'POST') { A(); return saveTopic(request, env, user, null); }
+    if ((m = /^\/api\/admin\/topics\/(\d+)$/.exec(p))) { A(); const tid = idParam(m[1]); if (M === 'GET') return adminTopic(env, tid); if (M === 'PUT') return saveTopic(request, env, user, tid); if (M === 'DELETE') return deleteTopic(env, user, tid); }
     if ((m = /^\/api\/admin\/courses\/(\d+)$/.exec(p))) { A(); const cid = idParam(m[1]); if (M === 'PUT') return saveCourse(request, env, user, cid); if (M === 'DELETE') return deleteCourse(env, user, cid); }
     if ((m = /^\/api\/admin\/lectures\/(\d+)$/.exec(p))) {
       A(); const id = idParam(m[1]);
