@@ -146,7 +146,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check('кнопка входа неактивна без OAuth', await page.isDisabled('#loginBtn'));
   await page.screenshot({ path: SHOTS + '01_login.png', fullPage: true });
   await page.evaluate(t => localStorage.setItem('vpexam_token', t), C);
-  await page.goto(SITE + '#/'); await page.reload(); await page.waitForSelector('#logoutBtn'); await page.waitForSelector('.welcome');
+  await page.goto(SITE + '#/'); await page.reload(); await page.waitForSelector('#logoutBtn'); await page.waitForSelector('#app h1'); // приветствие с 0012 пустое — блок .welcome скрыт
   await page.screenshot({ path: SHOTS + '02_dashboard.png', fullPage: true });
   await page.goto(SITE + '#/lectures'); await page.waitForSelector('.lec');
   await page.screenshot({ path: SHOTS + '03_lectures.png', fullPage: true });

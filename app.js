@@ -1,4 +1,4 @@
-/* ГУ ВП — Учебный центр. Клиентская часть (без сборки). */
+/* ГУ ВП — портал. Клиентская часть (без сборки). */
 'use strict';
 const CFG = window.VP_CONFIG;
 const TOKEN_KEY = 'vpexam_token';
@@ -170,8 +170,9 @@ function loginPage() {
   if (App.authError) msg += `<div class="alert err">Не удалось войти: ${esc(App.authError)}</div>`;
   setView(`<div class="login card">
       <img src="assets/emblem.png" alt="">
-      <h1>${esc(s ? s.site_title : 'ГУ ВП — Учебный центр')}</h1>
-      <p class="welcome mut">${esc(s ? s.welcome_text : '')}</p>
+      <h1>${esc(s ? s.site_title : 'ГУ ВП — портал')}</h1>
+      <p class="mut">Главное управление Военной полиции</p>
+      ${s && s.welcome_text ? `<p class="welcome mut">${esc(s.welcome_text)}</p>` : ''}
       ${msg}
       <p><button class="btn discord" id="loginBtn" ${oauthOk ? '' : 'disabled'}>Войти через Discord</button></p>
       <p class="login-note small mut"><svg class="login-note-ic" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 11V8a6 6 0 0 1 12 0v3M5 11h14v10H5z"/></svg><span>Вход идёт через официальную авторизацию Discord. Сайт получает только ваш ник, аватар и Discord ID — пароль, почта, серверы и сообщения нам недоступны.</span></p>
@@ -209,14 +210,21 @@ route('/lectures', async () => {
 route('/lecture/:id', async (id) => {
   const { lecture: l } = await api('GET', '/api/lectures/' + encodeURIComponent(id));
   const back = l.course_id ? `#/course/${l.course_id}` : '#/study';
+  const fs = Number(localStorage.getItem('vp_lec_fs')) || 18;
   setView(`<p><a href="${back}">← К курсу</a></p>
-    <h1>${esc(l.title)}</h1>
-    ${l.kind === 'text' ? `<div class="reader-bar" id="rbar"><div class="row between small"><span id="rtxt">Чтение…</span><span id="rtime"></span></div><div class="bar"><i id="rfill" style="width:0%"></i></div></div>
-      <article class="card lecture-text md">${md(l.body)}</article>` : '<div id="playerBox"></div>'}
+    ${l.kind === 'text' ? `<div class="lec-page"><header class="lec-head"><div class="lec-kicker">📖 Лекция · чтение ~${Math.max(1, Math.round((l.duration_sec || 60) / 60))} мин</div><h1 class="lec-title">${esc(l.title)}</h1>
+      <div class="lec-tools" role="group" aria-label="Размер шрифта"><button type="button" class="btn sm" id="fsDn" title="Мельче">A−</button><button type="button" class="btn sm" id="fsUp" title="Крупнее">A+</button></div></header>
+      <div class="reader-bar" id="rbar"><div class="row between small"><span id="rtxt">Чтение…</span><span id="rtime"></span></div><div class="bar"><i id="rfill" style="width:0%"></i></div></div>
+      <article class="lecture-text md" id="lecText"${localStorage.getItem('vp_lec_fs') ? ` style="--lec-fs:${fs}px"` : ''}>${md(l.body)}</article></div>` : `<h1>${esc(l.title)}</h1><div id="playerBox"></div>`}
     <div class="pmsg" id="pmsg"></div>
     ${l.description ? `<div class="card flat" style="margin-top:14px"><div class="welcome">${esc(l.description)}</div></div>` : ''}
     ${l.kind === 'text' ? `<p><a class="btn" href="${back}">← К курсу</a></p>` : ''}`);
-  if (l.kind === 'text') textReader(l); else window.VPPlayer.mount($('#playerBox'), l, $('#pmsg'));
+  if (l.kind === 'text') {
+    const setFs = (n) => { n = Math.max(15, Math.min(22, n)); localStorage.setItem('vp_lec_fs', n); $('#lecText').style.setProperty('--lec-fs', n + 'px'); };
+    $('#fsDn').onclick = () => setFs((Number(localStorage.getItem('vp_lec_fs')) || 18) - 1);
+    $('#fsUp').onclick = () => setFs((Number(localStorage.getItem('vp_lec_fs')) || 18) + 1);
+    textReader(l);
+  } else window.VPPlayer.mount($('#playerBox'), l, $('#pmsg'));
 }, { cap: 'vp' });
 // Текстовая лекция: засчитывается по времени чтения (длительность лекции). Время идёт, только пока вкладка открыта и активна;
 // сервер проверяет прирост по реальному времени (тот же heartbeat, что у видео), поэтому «пролистать» лекцию нельзя.
@@ -390,11 +398,12 @@ route('/reatt', async () => {
       <div class="row between"><h2 style="margin:0">${esc(v.title)}</h2>${v.attempts[0] ? badge(v.attempts[0].status) : v.enabled ? '<span class="badge ok">Доступна</span>' : '<span class="badge lock">Выключена</span>'}</div>
       ${v.description ? `<p class="welcome small">${esc(v.description)}</p>` : ''}
       <p class="small mut">Всего: ${[v.total_questions ? v.total_questions + ' вопросов' : '', v.total_cases ? v.total_cases + ' кейсов' : ''].filter(Boolean).join(' + ') || '—'} · ${v.total_cases ? 'кейсы проверяет экзаменатор' : 'автопроверка'} · ${v.time_limit_min ? 'время ' + v.time_limit_min + ' мин' : 'без ограничения времени'} · проходной ${v.pass_pct}%${v.max_attempts ? ' · попыток: ' + v.max_attempts : ''}${v.cooldown_min ? ' · пауза ' + v.cooldown_min + ' мин' : ''}</p>
+      ${v.access ? `<p class="small access-note">🔑 Доступ ${v.access.expires_at ? 'до <b>' + fmtDate(v.access.expires_at) + '</b> МСК' : 'бессрочный'}${v.access.attempts != null ? ' · осталось попыток: <b>' + v.access.left + '</b> из ' + v.access.attempts : ''}</p>` : ''}
       ${v.active_attempt_id ? `<a class="btn primary" href="#/attempt/${v.active_attempt_id}">Продолжить попытку</a>`
         : v.can_start ? `<button class="btn primary startR" data-v="${v.key}" data-t="${v.time_limit_min}">Начать</button>`
         : `<div class="alert warn">${esc(v.reason || 'Недоступно')}${v.next_at ? ' — ' + fmtDate(v.next_at) : ''}</div>`}
       ${v.attempts.length ? `<table style="margin-top:12px"><tr><th>№</th><th>Дата</th><th>Статус</th><th>Результат</th></tr>${v.attempts.map(x => `<tr class="click" data-href="#/attempt/${x.id}"><td>#${x.id}</td><td>${fmtDate(x.submitted_at || x.started_at)}</td><td>${badge(x.status)}</td><td>${x.score_pct != null ? x.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : ''}
-    </div>`).join('') || '<p class="mut">Сейчас нет доступных переаттестаций.</p>'}</div>`);
+    </div>`).join('') || '<div class="alert info">Сейчас нет открытых переаттестаций. Доступ к конкретной переаттестации выдаёт администратор — на время и на определённое число попыток.</div>'}</div>`);
   $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; });
   $$('.startR').forEach(b => b.onclick = async () => {
     if (!confirm(Number(b.dataset.t) ? `После начала пойдёт таймер (${b.dataset.t} мин). Начать?` : 'Начать переаттестацию?')) return;

@@ -440,7 +440,7 @@ const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 &
 route('/admin/reatt', async () => {
   const r = await api('GET', '/api/admin/reatt');
   setView(`<h1>Переаттестация</h1>${adminNav('/admin/reatt')}
-    <p class="small mut">Каждая переаттестация — свой набор квот по категориям банка. Кандидаты видят включённые переаттестации с отметкой «Показывать кандидатам».
+    <p class="small mut">Каждая переаттестация — свой набор квот по категориям банка. Кандидат видит переаттестацию, только если она включена, отмечена «Показывать кандидатам» <b>и ему выдан доступ</b> (кнопка «🔑 Доступ»: кому, до какого времени, сколько попыток).
       Результаты и проверка кейсов — в <a href="#/admin/attempts?status=pending_review&kind=reatt">«Проверка» → Переаттестация</a>.</p>
     <div class="row" style="margin-bottom:14px"><a class="btn gold" id="newR" href="#/admin/reatt/new">+ Создать переаттестацию</a></div>
     <div class="reatt-admin-list">${r.items.map(v => { const q = v.groups.reduce((s, g) => s + g.questions, 0), c = v.groups.reduce((s, g) => s + g.cases, 0);
@@ -450,7 +450,9 @@ route('/admin/reatt', async () => {
         <p class="small mut">${q} ${plural(q, 'вопрос', 'вопроса', 'вопросов')} + ${c} ${plural(c, 'кейс', 'кейса', 'кейсов')} · ${v.groups.length} ${plural(v.groups.length, 'блок', 'блока', 'блоков')} · ${v.time_limit_min ? v.time_limit_min + ' мин' : 'без лимита времени'} · проходной ${v.pass_pct}%${v.q_points != null ? ' · вопрос = ' + v.q_points + ' б.' : ''}${v.c_points != null ? ' · кейс = ' + v.c_points + ' б.' : ''} · попыток: ${at}${v.attempts.pending_review ? ` (на проверке ${v.attempts.pending_review})` : ''}</p>
         ${bad.length ? `<div class="alert warn small">В банке не хватает вопросов: ${bad.map(a => esc(a.label)).join(', ')}</div>` : ''}
         <div class="row"><a class="btn sm" href="#/admin/reatt/${v.id}">Редактировать</a><button class="btn sm r-tog">${v.enabled ? 'Выключить' : 'Включить'}</button>
-          <a class="btn sm" href="#/admin/attempts?kind=${encodeURIComponent(v.key)}">Попытки</a><button class="btn sm danger r-del">Удалить</button></div></div>`; }).join('') || '<p class="mut">Переаттестаций пока нет.</p>'}</div>`);
+          <a class="btn sm gold" href="#/admin/reatt/${v.id}/access">🔑 Доступ${v.access.active ? ' (' + v.access.active + ')' : ''}</a>
+          <a class="btn sm" href="#/admin/attempts?kind=${encodeURIComponent(v.key)}">Попытки</a><button class="btn sm danger r-del">Удалить</button></div>
+        <p class="small ${v.access.active ? 'mut' : 'neg'}">${v.access.active ? `Действующих выдач доступа: ${v.access.active}${v.access.global ? ' (в т. ч. всем с ролью)' : ''}` : 'Доступ никому не выдан — кандидаты эту переаттестацию не видят.'}</p></div>`; }).join('') || '<p class="mut">Переаттестаций пока нет.</p>'}</div>`);
   $$('.ritem').forEach(el => {
     const id = el.dataset.id, v = r.items.find(x => String(x.id) === id);
     el.querySelector('.r-tog').onclick = async () => { try { await api('PUT', '/api/admin/reatt/' + id, { enabled: !v.enabled }); toast(v.enabled ? 'Выключена' : 'Включена'); render(); } catch (e) { toast(e.message, true); } };
@@ -645,7 +647,7 @@ route('/admin/settings', async () => {
 const ACTION_RU = { 'lecture.create': 'Создана лекция', 'lecture.update': 'Изменена лекция', 'lecture.delete': 'Удалена лекция', 'lectures.reorder': 'Порядок лекций',
   'exam.create': 'Создан экзамен', 'exam.update': 'Изменён экзамен', 'exam.delete': 'Удалён экзамен', 'question.create': 'Добавлен вопрос', 'question.update': 'Изменён вопрос',
   'question.delete': 'Удалён вопрос', 'questions.reorder': 'Порядок вопросов', 'user.update': 'Изменён пользователь', 'user.reset_progress': 'Сброс прогресса лекций',
-  'user.reset_attempts': 'Сброс попыток', 'attempt.review': 'Проверка попытки', 'attempt.delete': 'Удалена попытка', 'settings.update': 'Настройки сайта', 'reatt.config': 'Квоты переаттестации', 'reatt.create': 'Создана переаттестация', 'reatt.update': 'Изменена переаттестация', 'reatt.delete': 'Удалена переаттестация', 'question.import': 'Импорт вопросов', 'question.delete_examples': 'Удалены ПРИМЕРЫ' };
+  'user.reset_attempts': 'Сброс попыток', 'attempt.review': 'Проверка попытки', 'attempt.delete': 'Удалена попытка', 'settings.update': 'Настройки сайта', 'reatt.config': 'Квоты переаттестации', 'reatt.create': 'Создана переаттестация', 'reatt.update': 'Изменена переаттестация', 'reatt.delete': 'Удалена переаттестация', 'reatt.grant': 'Выдан доступ к переаттестации', 'reatt.revoke': 'Отозван доступ к переаттестации', 'question.import': 'Импорт вопросов', 'question.delete_examples': 'Удалены ПРИМЕРЫ' };
 route('/admin/audit', async () => {
   const { log } = await api('GET', '/api/admin/audit');
   setView(`<h1>Журнал действий</h1>${adminNav('/admin/audit')}
@@ -706,4 +708,35 @@ route('/admin/course/:id', async (id) => {
     } catch (e) { $('#ferr').innerHTML = `<div class="alert err">${esc(e.message)}</div>`; toast(e.message, true); }
   };
   const del = $('#delC'); if (del) del.onclick = async () => { if (!confirm(`Удалить курс «${c.title}»? Лекции и экзамены останутся (без курса).`)) return; try { await api('DELETE', '/api/admin/courses/' + c.id); location.hash = '#/admin/courses'; } catch (e) { toast(e.message, true); } };
+}, { role: 'admin' });
+
+// ---------- доступ к переаттестации (кому, до какого момента, сколько попыток) ----------
+const mskInput = (ms) => new Date(ms + 3 * 3600000).toISOString().slice(0, 16);
+const mskParse = (v) => v ? Date.parse(v + ':00+03:00') : null;
+const mskEndOfDay = () => { const d = new Date(Date.now() + 3 * 3600000); return Date.parse(d.toISOString().slice(0, 10) + 'T23:59:00+03:00'); };
+route('/admin/reatt/:id/access', async (id) => {
+  const d = await api('GET', `/api/admin/reatt/${id}/access`);
+  const act = d.grants.filter(g => g.active), old = d.grants.filter(g => !g.active);
+  const row = (g) => `<tr><td data-l="Кому">${g.user_id ? esc(g.user_name) : '<b>Все с ролью «Переаттестация»</b>'}</td><td data-l="До">${g.expires_at ? fmtDate(g.expires_at) : 'бессрочно'}</td>
+    <td data-l="Попытки" class="num">${g.attempts != null ? (g.user_id ? `${g.used} из ${g.attempts}` : `${g.attempts} на человека · всего начато ${g.used}`) : `без ограничения · начато ${g.used}`}</td>
+    <td data-l="Выдал" class="small">${esc(g.granted_by || '')}<div class="mut">${fmtDate(g.granted_at)}</div>${g.note ? `<div>${esc(g.note)}</div>` : ''}</td>
+    <td>${g.revoked_at ? '<span class="badge">отозван</span>' : g.active ? `<button class="btn sm danger g-rev" data-g="${g.id}">Отозвать</button>` : '<span class="badge">истёк / исчерпан</span>'}</td></tr>`;
+  setView(`<h1>Доступ: ${esc(d.title)}</h1>${adminNav('/admin/reatt')}<p><a href="#/admin/reatt">← Все переаттестации</a></p>
+    <p class="small mut">Пока доступ не выдан, пользователи с ролью «Переаттестация» эту переаттестацию не видят. Начатую попытку можно завершить и после окончания срока (до её собственного лимита времени). Время — московское.</p>
+    <form class="card" id="gf"><h3>Выдать доступ</h3><div class="fgrid">
+      <label class="f"><span>Кому</span><select name="user_id"><option value="">Всем с ролью «Переаттестация»</option>${d.users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select></label>
+      <label class="f"><span>До (МСК)</span><input type="datetime-local" name="until" value="${mskInput(mskEndOfDay())}"></label>
+      <label class="f"><span>Попыток (пусто — без ограничения)</span><input type="number" name="attempts" min="1" max="100" value="1"></label>
+      <label class="f"><span>Примечание</span><input name="note" maxlength="300" placeholder="например: пересдача после отпуска"></label></div>
+      <div class="row quick"><span class="small mut">Срок:</span><button type="button" class="btn sm" data-q="eod">до конца дня</button><button type="button" class="btn sm" data-q="1">+1 час</button><button type="button" class="btn sm" data-q="3">+3 часа</button><button type="button" class="btn sm" data-q="24">+24 часа</button><button type="button" class="btn sm" data-q="none">бессрочно</button></div>
+      <button class="btn gold">Выдать доступ</button></form>
+    <div class="card flat"><h3>Действующие (${act.length})</h3>${act.length ? `<div class="tscroll"><table class="dzt"><tr><th>Кому</th><th>До</th><th>Попытки</th><th>Выдал</th><th></th></tr>${act.map(row).join('')}</table></div>` : '<p class="mut">Нет — переаттестация никому не видна.</p>'}</div>
+    ${old.length ? `<details class="card flat"><summary>История выдач (${old.length})</summary><div class="tscroll"><table class="dzt">${old.map(row).join('')}</table></div></details>` : ''}`);
+  const f = $('#gf');
+  $$('[data-q]', f).forEach(b => b.onclick = () => { const q = b.dataset.q; f.until.value = q === 'none' ? '' : mskInput(q === 'eod' ? mskEndOfDay() : Date.now() + Number(q) * 3600000); });
+  f.onsubmit = async (ev) => { ev.preventDefault();
+    const body = { user_id: f.user_id.value || null, expires_at: mskParse(f.until.value), attempts: f.attempts.value || null, note: f.note.value };
+    if (!body.user_id && !confirm('Выдать доступ ВСЕМ пользователям с ролью «Переаттестация»?')) return;
+    try { await api('POST', `/api/admin/reatt/${id}/access`, body); toast('Доступ выдан'); render(); } catch (e) { toast(e.message, true); } };
+  $$('.g-rev').forEach(b => b.onclick = async () => { if (!confirm('Отозвать доступ?')) return; try { await api('DELETE', '/api/admin/reatt/access/' + b.dataset.g); toast('Доступ отозван'); render(); } catch (e) { toast(e.message, true); } });
 }, { role: 'admin' });

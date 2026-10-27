@@ -207,11 +207,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   r = await call('GET', '/api/admin/bank/export?category=ПК', A); check('экспорт ПК', r.d.questions.length > 0 && r.d.questions.every(q => q.category === 'ПК'));
 
   // ---------- 6. переаттестация ----------
+  const grantAll = () => fetch(API + '/__test/sql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sql: "INSERT INTO reatt_access (reatt_key, user_id, granted_by, granted_at) SELECT key, NULL, 'test', ?1 FROM reattestations WHERE key NOT IN (SELECT reatt_key FROM reatt_access)", args: [Date.now()] }) }).then(x => x.json());
+  await grantAll(); // с 0012 переаттестация видна только по выданному доступу
   r = await call('GET', '/api/admin/reatt', A);
   const byKey = (d, k) => d.items.find(x => x.key === k);
   check('стандартные записи: полная, упрощённая, кейсы', !!byKey(r.d, 'full') && !!byKey(r.d, 'simple') && !!byKey(r.d, 'cases'), r.d.items.map(x => x.key));
-  check('квоты: полная — 42 вопроса, без кейсов, доп. слоты — предпочтительные типы', byKey(r.d, 'full').groups.map(g => `${g.label}:${g.questions}+${g.cases}/${g.pref_count}`).join(' ') === 'ПК:5+0/1 УК:5+0/1 ВУ:10+0/2 СУ:3+0/1 КПС:3+0/1 ДУ:3+0/1 ФЗ / ФКЗ / КоАП:8+0/2 ТК:5+0/1' && byKey(r.d, 'full').groups.every(g => g.pref_types.join() === 'match,order,number,multi'), byKey(r.d, 'full').groups);
-  check('квоты: упрощённая 15 вопросов, без кейсов', byKey(r.d, 'simple').groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ВУ:9+0 СУ:2+0 ДУ:2+0 КПС:2+0');
+  check('квоты: полная — 28 вопросов, без кейсов, только одиночный выбор', byKey(r.d, 'full').groups.map(g => `${g.label}:${g.questions}+${g.cases}/${g.pref_count}`).join(' ') === 'ПК:4+0/4 УК:3+0/3 ВУ:6+0/6 СУ:2+0/2 КПС:2+0/2 ДУ:2+0/2 ФЗ / ФКЗ / КоАП:6+0/6 ТК:3+0/3' && byKey(r.d, 'full').groups.every(g => g.pref_types.join() === 'single'), byKey(r.d, 'full').groups);
+  check('квоты: упрощённая 12 вопросов, без кейсов', byKey(r.d, 'simple').groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ВУ:6+0 СУ:2+0 ДУ:2+0 КПС:2+0');
   check('квоты: кейсы — 10 кейсов', byKey(r.d, 'cases').groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(' ') === 'ПК:0+1 УК:0+1 ВУ:0+2 СУ:0+1 КПС:0+1 ДУ:0+1 ФЗ / ФКЗ / КоАП:0+2 ТК:0+1' && byKey(r.d, 'cases').enabled && byKey(r.d, 'cases').visible);
   check('банк закрывает все квоты', r.d.items.every(v => v.availability.every(g => g.ok)), r.d.items.map(v => v.availability));
   check('нет признака «не душный» в ответах API', !/"easy"|prefer_easy|не душн/i.test(JSON.stringify(r.d)));
@@ -277,6 +279,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   r = await call('POST', '/api/admin/reatt', C, { title: 'x', groups: [{ label: 'a', categories: ['ВУ'], questions: 1 }] }); check('кандидат не создаёт (403)', r.status === 403);
   r = await call('POST', `/api/admin/reatt/${NR.id}/preview`, A); check('пробная выборка сохранённой: 3+1, баллы 3×2+4=10', r.d.total === 4 && r.d.max_score === 10, r.d);
   r = await call('POST', '/api/admin/reatt/preview', A, { groups: [{ label: 'СУ', categories: ['СУ'], questions: 2, cases: 0 }] }); check('пробная выборка по форме (без сохранения): 2', r.d.total === 2, r.d);
+  await grantAll();
   const tokN = await login('330000000000000001', 'Новая');
   r = await call('GET', '/api/reatt', tokN); check('кандидат видит новую', r.d.versions.some(v => v.key === NR.key) && r.d.versions.every(v => !('composition' in v)), r.d.versions.map(v => v.key));
   r = await call('POST', `/api/reatt/${NR.key}/start`, tokN); const NA = r.d.attempt_id; check('старт новой', !!NA, r.d);
@@ -304,7 +307,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   check('UI кандидата: нет перечисления блоков/типов', (await page.$$('.reatt-card .lchip')).length === 0 && !/не душн/i.test(await page.textContent('main')));
   await page.screenshot({ path: SHOTS + '44_reatt_candidate.png', fullPage: true });
   await page.click('.reatt-card[data-v="simple"] .startR'); await page.waitForSelector('#examForm');
-  check('UI: упрощённая — 15 заданий', (await page.$$('#examForm .q')).length === 15);
+  check('UI: упрощённая — 12 заданий', (await page.$$('#examForm .q')).length === 12);
   await page.screenshot({ path: SHOTS + '45_reatt_attempt.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: SHOTS + '46_reatt_attempt_mobile.png', fullPage: false });
@@ -333,7 +336,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   r = await call('GET', '/api/admin/reatt', A); const uiR = r.d.items.find(x => x.title === 'Переаттестация по ДУ (UI)');
   check('UI: создана через форму', uiR && uiR.groups.length === 2 && uiR.groups[0].questions === 3 && uiR.groups[0].cases === 1, uiR);
   await page.goto(SITE + '#/admin/reatt/' + cfgFull.id); await page.waitForFunction(() => /полная/.test((document.querySelector('h1') || {}).textContent || ''));
-  check('UI: редактор стандартной полной — 8 блоков, предпочтительные типы отмечены', (await page.$$('#rf .grow')).length === 8 && (await page.$$('#rf .g-pt input:checked')).length === 32);
+  check('UI: редактор стандартной полной — 8 блоков, предпочтительные типы отмечены', (await page.$$('#rf .grow')).length === 8 && (await page.$$('#rf .g-pt input:checked')).length === 8);
   await page.click('#rf .g-prev'); await page.waitForSelector('#rf .g-out .card');
   await page.screenshot({ path: SHOTS + '47_admin_reatt_quotas.png', fullPage: true });
   await page.goto(SITE + '#/admin/bank'); await page.waitForSelector('#bf');

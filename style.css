@@ -349,3 +349,32 @@ ol.tl li.err .tl-ic{border-color:#a04040}ol.tl li.ok .tl-ic{border-color:var(--o
   .dzhead .row{flex-wrap:wrap}
 }
 @media(max-width:700px){.brand{min-width:0;flex:1 1 auto}.brand>div{min-width:0}.t1{font-size:15px;letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+/* лекции: читаемая типографика (Golos Text, ~18px, строка ~70 знаков) */
+.lec-page{max-width:780px;margin:0 auto}
+.lec-head{display:grid;grid-template-columns:1fr auto;gap:6px 14px;align-items:end;margin-bottom:14px}
+.lec-kicker{grid-column:1/-1;font:500 13px "Golos Text",system-ui,sans-serif;color:var(--gold2);letter-spacing:.3px}
+.lec-title{font:600 28px/1.25 "Golos Text",system-ui,sans-serif;letter-spacing:0;text-transform:none;color:#f3efe3;margin:0}
+.lec-tools{display:flex;gap:6px}.lec-tools .btn{font-family:"Golos Text",system-ui,sans-serif;text-transform:none;letter-spacing:0;padding:6px 10px}
+.lecture-text{--lec-fs:18px;font-family:"Golos Text",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:var(--lec-fs);line-height:1.7;color:#ebe7dc;
+  background:#1b2022;border:1px solid var(--line);border-radius:10px;padding:34px 44px;max-width:72ch;margin:0 auto;font-feature-settings:"kern","liga"}
+.lecture-text p{margin:0 0 1em}
+.lecture-text h2,.lecture-text h3,.lecture-text h4{font-family:"Golos Text",system-ui,sans-serif;text-transform:none;letter-spacing:0;color:#f0d77a;line-height:1.3}
+.lecture-text h2{font-size:1.45em;font-weight:700;margin:1.6em 0 .6em;padding-bottom:.3em;border-bottom:1px solid #3a4440}
+.lecture-text h3{font-size:1.2em;font-weight:600;margin:1.5em 0 .5em}
+.lecture-text h3:first-child,.lecture-text h2:first-child{margin-top:0}
+.lecture-text h4{font-size:1.05em;font-weight:600;margin:1.2em 0 .4em}
+.lecture-text ul,.lecture-text ol{padding-left:1.4em;margin:0 0 1em}.lecture-text li{margin:.35em 0}.lecture-text li::marker{color:var(--gold)}
+.lecture-text a{color:#f0cf62;text-decoration:underline;text-decoration-color:rgba(240,207,98,.45);text-underline-offset:3px}.lecture-text a:hover{text-decoration-color:currentColor}
+.lecture-text b,.lecture-text strong{color:#fff;font-weight:600}
+.lecture-text i,.lecture-text em{color:#d9d4c6}
+.lecture-text blockquote{margin:1.2em 0;padding:.8em 1.1em;border:0;border-left:4px solid var(--gold);border-radius:0 8px 8px 0;background:#262619;color:#ece6cf;font-size:.96em}
+.lecture-text blockquote p:last-child{margin-bottom:0}
+.lecture-text table.mdt{width:100%;border-collapse:collapse;font-size:.88em;margin:1em 0}
+.lecture-text table.mdt th{background:#232b2e;color:var(--gold2);text-align:left;font:600 .85em "Golos Text",sans-serif;text-transform:none;letter-spacing:0}
+.lecture-text table.mdt td,.lecture-text table.mdt th{padding:8px 10px;border-bottom:1px solid #333d39;vertical-align:top}
+.lecture-text table.mdt tr:nth-child(even) td{background:#1f2527}
+.lecture-text hr{border:0;height:1px;background:linear-gradient(90deg,transparent,#4a5550,transparent);margin:2em 0}
+.lecture-text code{font-size:.9em}
+.lec-page .reader-bar{max-width:72ch;margin:0 auto 14px;font-family:"Golos Text",system-ui,sans-serif}
+@media(max-width:700px){.lecture-text{padding:18px 16px;border-radius:8px;--lec-fs:17px}.lec-title{font-size:22px}.lec-head{grid-template-columns:1fr}}
+.access-note{background:#1f2a22;border:1px solid #3c5a44;border-radius:6px;padding:6px 10px}

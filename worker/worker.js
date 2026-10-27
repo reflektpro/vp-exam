@@ -1,4 +1,4 @@
-// ГУ ВП — Учебный центр. API (Cloudflare Worker + D1).
+// ГУ ВП — портал. API (Cloudflare Worker + D1).
 // Без внешних зависимостей, один ES-модуль. См. README.md.
 
 const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
@@ -169,7 +169,7 @@ async function audit(env, actor, action, target, details) {
 
 async function getSettings(env) {
   const { results } = await env.DB.prepare('SELECT k, v FROM settings').all();
-  const s = { site_title: 'ГУ ВП — Учебный центр', welcome_text: '', sequential_lectures: '1' };
+  const s = { site_title: 'ГУ ВП — портал', welcome_text: '', sequential_lectures: '1' };
   for (const r of results) s[r.k] = r.v;
   return { site_title: s.site_title, welcome_text: s.welcome_text, sequential_lectures: s.sequential_lectures === '1' };
 }
@@ -1371,13 +1371,32 @@ function applyWeights(qs, attempt) {
   });
 }
 async function loadAttemptQs(env, attempt, ids) { return applyWeights(await loadQs(env, ids), attempt); }
-async function reattState(env, user, v) {
+// ---------- доступ к переаттестации ----------
+// Переаттестация видна и запускается, только если администратор выдал доступ (reatt_access): конкретному пользователю
+// или всем с ролью «Переаттестация» (user_id NULL), до момента expires_at (NULL — бессрочно), на attempts попыток (NULL — без ограничения).
+// Попытки считаются по каждой выдаче отдельно (attempts.meta.grant). Администраторы видят всё без выдачи (для проверки).
+async function reattGrants(env, user, key) {
+  const now = Date.now();
+  const { results } = await env.DB.prepare(`SELECT g.*, (SELECT COUNT(*) FROM attempts a WHERE a.user_id = ?1 AND a.reatt = g.reatt_key AND json_extract(a.meta, '$.grant') = g.id) AS used
+    FROM reatt_access g WHERE g.revoked_at IS NULL AND (g.user_id = ?1 OR g.user_id IS NULL) AND (g.expires_at IS NULL OR g.expires_at > ?2)${key ? ' AND g.reatt_key = ?3' : ''}
+    ORDER BY g.id`).bind(...(key ? [user.id, now, key] : [user.id, now])).all();
+  return results.map(g => ({ id: g.id, key: g.reatt_key, personal: !!g.user_id, expires_at: g.expires_at, attempts: g.attempts, used: g.used, left: g.attempts == null ? null : Math.max(0, g.attempts - g.used) }));
+}
+// лучшая действующая выдача: с оставшимися попытками, затем — с самым поздним сроком
+function bestGrant(gs) {
+  const ok = gs.filter(g => g.left === null || g.left > 0);
+  const list = ok.length ? ok : gs;
+  return list.sort((a, b) => ((b.left === null) - (a.left === null)) || ((b.left || 0) - (a.left || 0)) || ((b.expires_at || 9e15) - (a.expires_at || 9e15)))[0] || null;
+}
+async function reattState(env, user, v, grant) {
   const { results: atts } = await env.DB.prepare('SELECT id, status, started_at, submitted_at, score_pct, deadline_at FROM attempts WHERE user_id = ?1 AND reatt = ?2 ORDER BY id DESC').bind(user.id, v.key).all();
   const now = Date.now();
   let can = true, reason = null, nextAt = null;
   const active = atts.find(a => a.status === 'in_progress');
   if (!v.enabled || v.deleted) { can = false; reason = 'Эта переаттестация сейчас выключена'; }
   else if (active) { can = true; }
+  else if (grant !== undefined && !grant) { can = false; reason = 'Доступ к переаттестации не выдан'; }
+  else if (grant && grant.left === 0) { can = false; reason = 'Попытки по выданному доступу закончились'; }
   else if (atts.some(a => a.status === 'pending_review')) { can = false; reason = 'Предыдущая попытка ожидает проверки'; }
   else if (v.max_attempts && atts.length >= v.max_attempts) { can = false; reason = 'Попытки закончились'; }
   else if (v.cooldown_min && atts.length) {
@@ -1385,17 +1404,27 @@ async function reattState(env, user, v) {
     if (t > now) { can = false; reason = 'Следующая попытка будет доступна позже'; nextAt = t; }
   }
   return { can_start: can, reason, next_at: nextAt, active_attempt_id: active ? active.id : null,
+    access: grant ? { expires_at: grant.expires_at, attempts: grant.attempts, left: grant.left } : null,
     attempts: atts.map(a => ({ id: a.id, status: a.status, started_at: a.started_at, submitted_at: a.submitted_at, score_pct: a.status === 'pending_review' ? null : a.score_pct })) };
 }
 async function listReatt(env, user) {
   const { results } = await env.DB.prepare('SELECT * FROM reattestations WHERE deleted_at IS NULL AND enabled = 1 AND visible = 1 ORDER BY position, id').all();
+  const admin = caps(user).admin;
+  const grants = admin ? [] : await reattGrants(env, user, null);
   const out = [];
   for (const r of results) {
     const v = reattRow(r);
+    let grant;
+    if (!admin) {
+      const gs = grants.filter(g => g.key === v.key);
+      const act = await env.DB.prepare("SELECT id FROM attempts WHERE user_id = ?1 AND reatt = ?2 AND status = 'in_progress' LIMIT 1").bind(user.id, v.key).first();
+      if (!gs.length && !act) continue; // без выданного доступа переаттестация не видна
+      grant = bestGrant(gs);
+    }
     out.push({ key: v.key, title: v.title, description: v.description, enabled: v.enabled, time_limit_min: v.time_limit_min, pass_pct: v.pass_pct,
       cooldown_min: v.cooldown_min, max_attempts: v.max_attempts,
       total_questions: v.groups.reduce((s, g) => s + g.questions, 0), total_cases: v.groups.reduce((s, g) => s + g.cases, 0),
-      ...(await reattState(env, user, v)) });
+      ...(await reattState(env, user, v, grant)) });
   }
   return json({ versions: out });
 }
@@ -1403,7 +1432,9 @@ async function startReatt(env, user, key) {
   const v = await getReatt(env, key);
   if (!v) throw new HttpError(404, 'Нет такой переаттестации');
   await rateLimit(env, 'start:' + user.id, 10, 60);
-  const st = await reattState(env, user, v);
+  const admin = caps(user).admin;
+  const grant = admin ? undefined : bestGrant(await reattGrants(env, user, key));
+  const st = await reattState(env, user, v, grant);
   if (st.active_attempt_id) {
     const a = await env.DB.prepare('SELECT * FROM attempts WHERE id = ?1').bind(st.active_attempt_id).first();
     if (!(await finalizeIfExpired(env, a))) return json({ attempt_id: a.id });
@@ -1416,7 +1447,7 @@ async function startReatt(env, user, key) {
   const raw = await loadQs(env, ids);
   const points = {};
   for (const q of raw) { const w = q.kind === 'case' ? v.c_points : v.q_points; if (w !== null && w !== undefined) points[q.id] = w; }
-  const meta = { version: key, title: v.title, pass_pct: v.pass_pct, points: Object.keys(points).length ? points : undefined,
+  const meta = { version: key, grant: grant ? grant.id : undefined, title: v.title, pass_pct: v.pass_pct, points: Object.keys(points).length ? points : undefined,
     groups: groups.map(g => ({ label: g.label, q: g.q, c: g.c, short_q: g.short_q, short_c: g.short_c })) };
   const qs = applyWeights(raw, { reatt: key, meta: JSON.stringify(meta) });
   const order = shuffle(ids);
@@ -1434,7 +1465,8 @@ async function adminReatt(env) {
   const cats = {};
   for (const q of bank) { const c = q.category || '(без категории)'; cats[c] = cats[c] || { category: c, questions: 0, cases: 0 }; if (q.kind === 'case') cats[c].cases++; else cats[c].questions++; }
   const { results: stats } = await env.DB.prepare("SELECT reatt, status, COUNT(*) AS c FROM attempts WHERE reatt IS NOT NULL GROUP BY reatt, status").all();
-  const items = results.map(reattRow).map(v => ({ ...v, availability: availability(bank, v.groups),
+  const { results: ga } = await env.DB.prepare('SELECT reatt_key, COUNT(*) AS c, SUM(user_id IS NULL) AS g FROM reatt_access WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?1) GROUP BY reatt_key').bind(Date.now()).all();
+  const items = results.map(reattRow).map(v => ({ ...v, availability: availability(bank, v.groups), access: (() => { const x = ga.find(a => a.reatt_key === v.key); return { active: x ? x.c : 0, global: x ? x.g : 0 }; })(),
     attempts: stats.filter(s => s.reatt === v.key).reduce((o, s) => (o[s.status] = s.c, o), {}) }));
   return json({ items, categories: Object.values(cats).sort((a, b) => a.category.localeCompare(b.category, 'ru')) });
 }
@@ -1485,6 +1517,42 @@ async function previewReatt(request, env, id) {
   const brief = (id) => { const q = qm.get(id); return { id, type: q.type, kind: q.kind, category: q.category, points: pts(q), text: q.text.slice(0, 200) }; };
   return json({ groups: sg.map(g => ({ ...g, q: g.q.map(brief), c: g.c.map(brief) })),
     total: sg.reduce((s, g) => s + g.q.length + g.c.length, 0), max_score: qs.reduce((s, q) => s + pts(q), 0) });
+}
+
+async function adminReattAccess(env, id, grantId) {
+  const v = await adminReattOne(env, id);
+  const { results } = await env.DB.prepare(`SELECT g.*, u.ic_name, u.global_name, u.username, b.ic_name AS b_ic, b.global_name AS b_gn, b.username AS b_un,
+      (SELECT COUNT(*) FROM attempts a WHERE a.reatt = g.reatt_key AND json_extract(a.meta, '$.grant') = g.id) AS used
+    FROM reatt_access g LEFT JOIN users u ON u.id = g.user_id LEFT JOIN users b ON b.id = g.granted_by WHERE g.reatt_key = ?1 ORDER BY g.revoked_at IS NOT NULL, g.id DESC LIMIT 300`).bind(v.key).all();
+  const now = Date.now();
+  const { results: users } = await env.DB.prepare("SELECT id, ic_name, global_name, username, reatt FROM users WHERE blocked = 0 AND reatt = 1 ORDER BY COALESCE(ic_name, global_name, username)").all();
+  const grants = results.map(g => ({ id: g.id, user_id: g.user_id, user_name: g.user_id ? (g.ic_name || g.global_name || g.username || g.user_id) : null, expires_at: g.expires_at, attempts: g.attempts, used: g.used, note: g.note,
+      granted_by: g.b_ic || g.b_gn || g.b_un || g.granted_by, granted_at: g.granted_at, revoked_at: g.revoked_at,
+      active: !g.revoked_at && (g.expires_at == null || g.expires_at > now) && (g.attempts == null || g.user_id == null || g.used < g.attempts) }));
+  return json({ key: v.key, title: v.title, now, users: users.map(u => ({ id: u.id, name: u.ic_name || u.global_name || u.username })), grants,
+    ...(grantId ? { grant: grants.find(g => g.id === grantId) || null } : {}) }, grantId ? 201 : 200);
+}
+async function adminReattGrant(request, env, actor, id) {
+  const v = await adminReattOne(env, id);
+  const b = await readJson(request);
+  const uid = b.user_id ? str(b.user_id, 25, { name: 'пользователь' }) : null;
+  if (uid) { const u = await env.DB.prepare('SELECT id, reatt FROM users WHERE id = ?1').bind(uid).first(); if (!u) throw new HttpError(404, 'Пользователь не найден'); if (!u.reatt) throw new HttpError(400, 'У пользователя нет роли «Переаттестация» — сначала выдайте роль'); }
+  let exp = null;
+  if (b.expires_at !== undefined && b.expires_at !== null && b.expires_at !== '') { exp = Number(b.expires_at); if (!Number.isFinite(exp) || exp <= Date.now() || exp > Date.now() + 366 * 86400000) throw new HttpError(400, 'Срок доступа: момент в будущем (не дальше года)'); exp = Math.floor(exp); }
+  const att = b.attempts === undefined || b.attempts === null || b.attempts === '' ? null : int(b.attempts, 1, 100, 'количество попыток');
+  const note = str(b.note, 300, { name: 'примечание' });
+  const r = await env.DB.prepare('INSERT INTO reatt_access (reatt_key, user_id, expires_at, attempts, note, granted_by, granted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id')
+    .bind(v.key, uid, exp, att, note, actor.id, Date.now()).first();
+  await audit(env, actor, 'reatt.grant', String(id), { grant: r.id, key: v.key, user_id: uid || 'все с ролью', expires_at: exp, attempts: att });
+  return adminReattAccess(env, id, r.id);
+}
+async function adminReattRevoke(env, actor, gid) {
+  const g = await env.DB.prepare('SELECT * FROM reatt_access WHERE id = ?1').bind(gid).first();
+  if (!g) throw new HttpError(404, 'Выдача не найдена');
+  if (!g.revoked_at) await env.DB.prepare('UPDATE reatt_access SET revoked_at = ?1, revoked_by = ?2 WHERE id = ?3').bind(Date.now(), actor.id, gid).run();
+  const v = await env.DB.prepare('SELECT id FROM reattestations WHERE key = ?1').bind(g.reatt_key).first();
+  await audit(env, actor, 'reatt.revoke', v ? String(v.id) : g.reatt_key, { grant: gid, user_id: g.user_id || 'все с ролью' });
+  return v ? adminReattAccess(env, v.id) : json({ ok: true });
 }
 
 // ---------- банк вопросов и импорт ----------
@@ -3280,6 +3348,8 @@ async function route(request, env, ctx) {
     if ((m = /^\/api\/admin\/reatt\/(\d+)$/.exec(p))) { A(); const rid = idParam(m[1]);
       if (M === 'GET') return json({ item: await adminReattOne(env, rid) }); if (M === 'PUT') return updateReatt(request, env, user, rid); if (M === 'DELETE') return deleteReatt(env, user, rid); }
     if ((m = /^\/api\/admin\/reatt\/(\d+)\/preview$/.exec(p)) && M === 'POST') { A(); return previewReatt(request, env, idParam(m[1])); }
+    if ((m = /^\/api\/admin\/reatt\/(\d+)\/access$/.exec(p))) { A(); if (M === 'GET') return adminReattAccess(env, idParam(m[1])); if (M === 'POST') return adminReattGrant(request, env, user, idParam(m[1])); }
+    if ((m = /^\/api\/admin\/reatt\/access\/(\d+)$/.exec(p)) && M === 'DELETE') { A(); return adminReattRevoke(env, user, idParam(m[1])); }
     if ((m = /^\/api\/admin\/questions\/(\d+)$/.exec(p))) {
       A(); const id = idParam(m[1]);
       if (M === 'PUT') return saveQuestion(request, env, user, null, id);
