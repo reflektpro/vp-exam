@@ -62,6 +62,7 @@ const U = { r1: '820000000000000001', r2: '820000000000000002', r3: '82000000000
   for (let k = 1; k <= 2; k++) {
     r = await call('POST', '/api/reatt/full/start', T.r1); const id = r.d.attempt_id; check(`попытка ${k}: старт`, !!id, r.d);
     r = await call('GET', '/api/attempts/' + id, T.r1); check(`попытка ${k}: 28 вопросов`, r.d.attempt.questions.length === 28, r.d.attempt && r.d.attempt.questions.length);
+    if (k === 1) { const qc = await sql(`SELECT DISTINCT category c FROM questions WHERE id IN (${r.d.attempt.questions.map(q => +q.id).join(',')})`); check('полная (0014): вопросы только из простого пула «Общая переаттестация — …»', qc.length && qc.every(x => x.c.startsWith('Общая переаттестация — ')), qc); }
     if (k === 1) {
       const qs = r.d.attempt.questions; let expS = 0;
       for (const gr of full.groups) { const cond = gr.categories.map(c => c.endsWith('*') ? `category LIKE '${c.slice(0, -1)}%'` : `category = '${c}'`).join(' OR ');

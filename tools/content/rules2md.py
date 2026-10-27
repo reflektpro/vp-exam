@@ -11,12 +11,12 @@ lines = [l.rstrip() for l in body.split('\n') if l.strip() and l.strip() != '---
 points, order, cur, chapters = {}, [], None, {}
 for l in lines:
     m = re.match(r'^(\d+\.\d+)\.?\s', l)
-    if re.match(r'^Глава \d+', l): cur = None; chapters[l] = len(order); continue
+    if re.match(r'^(Глава|ГЛАВА) [\dIVXLC]+', l): cur = None; chapters[l] = len(order); continue
     if m: cur = m.group(1); points[cur] = [l]; order.append(cur); continue
     if cur: points[cur].append(l)
 def fmt(p):
     ls = points[p]; out = ['**' + ls[0].split(' ', 1)[0] + '** ' + ls[0].split(' ', 1)[1]]
-    for x in ls[1:]: out.append('> ' + x if re.match(r'^(Примечание|Исключение|Пояснение)', x) else ('- ' + x.lstrip('• ') if x.startswith('•') else x))
+    for x in ls[1:]: out.append('> ' + x if re.match(r'^(Примечание|Исключение|Пояснение)', x) else ('- ' + x.lstrip('•▸ ') if x[:1] in '•▸' else x))
     return '\n\n'.join(out)
 used = set()
 md = [f"> **Полная выгрузка темы «{spec['title']}».** Официальный текст правил проекта (дословно, по форуму RMRP: {url}{'; редакция от ' + edited.group(1) if edited else ''}) и методические пояснения для сотрудников ГУ ВП. Наказания в квадратных скобках — как в источнике.\n"]

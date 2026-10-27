@@ -24,7 +24,7 @@ const B = JSON.parse(fs.readFileSync(__dirname + '/../content/build/content.json
   let r = await call('GET', '/api/courses', T); const topics = r.d.courses.flatMap(c => c.topics.map(t => ({ ...t, course: c })));
   const items = Array.isArray(B) ? B : B.topics;
   for (const b of items) {
-    const t = topics.find(x => x.slug === b.slug) || topics.find(x => x.title && b.doc && b.doc.title.startsWith(x.title));
+    const tid = ((await sql('SELECT id FROM topics WHERE slug = ?1', [b.slug]))[0] || {}).id; const t = topics.find(x => x.id === tid);
     let tp = (await call('GET', '/api/topics/' + (t && t.id), T)).d;
     check(`${b.slug}: тема найдена`, !!(t && tp), b.slug); if (!t || !tp) continue;
     const lecs = (tp.lectures || tp.topic && tp.topic.lectures || []);
@@ -43,6 +43,8 @@ const B = JSON.parse(fs.readFileSync(__dirname + '/../content/build/content.json
   // экзамен ФТ + КрАЗ: опубликован, после лекций обеих тем стартует, 15 вопросов только из двух категорий
   r = await call('GET', '/api/courses', T); const ex = r.d.courses.flatMap(c => c.exams).find(e => /федеральная тюрьма/.test(e.title));
   check('экзамен ФТ + КрАЗ виден курсанту', !!ex);
+  const pubT = (await sql('SELECT title FROM exams WHERE published = 1')).map(x => x.title).join('|');
+  check('опубликованы экзамены УК + КоАП, ФЗ, ТК, Уставы', ['УК + КоАП', 'Федеральные законы', 'Трудовой кодекс', 'Уставы'].every(t => pubT.includes(t)), pubT);
   r = await call('POST', `/api/exams/${ex.id}/start`, T); check('экзамен ФТ + КрАЗ стартует после лекций', !!r.d.attempt_id, r.d);
   const qs = (await call('GET', '/api/attempts/' + r.d.attempt_id, T)).d.attempt.questions;
   const cats = await sql(`SELECT DISTINCT category FROM questions WHERE id IN (${qs.map(q => +q.id).join(',')})`);
