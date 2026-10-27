@@ -308,7 +308,7 @@ async function authExchange(request, env) {
 async function lectureStates(env, userId) {
   const settings = await getSettings(env);
   // лекции скрытых (неопубликованных) курсов кандидатам не показываются; лекции без курса — общий раздел
-  const { results: lectures } = await env.DB.prepare(`SELECT l.* FROM lectures l LEFT JOIN courses c ON c.id = l.course_id
+  const { results: lectures } = await env.DB.prepare(`SELECT l.id, l.title, l.description, l.video_url, l.duration_sec, l.position, l.required, l.published, l.course_id, l.created_at, l.updated_at, (l.body != '') AS has_body FROM lectures l LEFT JOIN courses c ON c.id = l.course_id
     WHERE l.published = 1 AND (l.course_id IS NULL OR c.id IS NULL OR c.published = 1) ORDER BY l.position, l.id`).all();
   const { results: prog } = await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(userId).all();
   const pm = new Map(prog.map(p => [p.lecture_id, p]));
@@ -361,6 +361,7 @@ function lectureOut(it, withVideo) {
     position: l.position, status: it.status, locked: it.locked, course_id: l.course_id || null,
     progress: p ? { max_pos: p.max_pos, last_pos: p.last_pos, watched_sec: Math.round(p.watched_sec), completed_at: p.completed_at } : null,
   };
+  o.kind = !l.video_url && (l.has_body || l.body) ? 'text' : 'video';
   if (withVideo) { o.video_url = l.video_url; Object.assign(o, videoInfo(l.video_url)); }
   return o;
 }
@@ -373,7 +374,9 @@ async function getLecture(env, user, id) {
   const it = st.items.find(i => i.lecture.id === id);
   if (!it) throw new HttpError(404, 'Лекция не найдена');
   if (it.locked) throw new HttpError(403, 'Лекция пока недоступна: сначала просмотрите предыдущие');
-  return json({ lecture: lectureOut(it, true) });
+  const o = lectureOut(it, true);
+  if (it.lecture.has_body) o.body = (await env.DB.prepare('SELECT body FROM lectures WHERE id = ?1').bind(id).first()).body;
+  return json({ lecture: o });
 }
 async function heartbeat(request, env, user, id) {
   await rateLimit(env, 'hb:' + user.id, 40, 60);
@@ -433,7 +436,14 @@ async function examAvailability(env, user, exam, req) {
 }
 function examPublic(e) {
   return { id: e.id, course_id: e.course_id || null, title: e.title, description: e.description, time_limit_min: e.time_limit_min, max_attempts: e.max_attempts,
-    cooldown_min: e.cooldown_min, pass_pct: e.pass_pct, requires_lectures: !!e.requires_lectures };
+    cooldown_min: e.cooldown_min, pass_pct: e.pass_pct, requires_lectures: !!e.requires_lectures, from_bank: e.bank_count > 0 && !!e.bank_category };
+}
+// Сколько вопросов будет в попытке: для экзамена из банка — bank_count (не больше, чем позволяют topic), иначе — вопросы экзамена.
+async function examQCount(env, e, own) {
+  if (!(e.bank_count > 0 && e.bank_category)) return own;
+  const cats = String(e.bank_category).split(',').map(x => x.trim()).filter(Boolean);
+  const pool = (await bankIndex(env)).filter(q => (q.kind || 'question') === 'question' && cats.some(p => catMatch(p, q.category)));
+  return Math.min(e.bank_count, distinctCapacity(pool));
 }
 async function listExams(env, user) {
   const st = await lectureStates(env, user.id);
@@ -442,7 +452,7 @@ async function listExams(env, user) {
   const out = [];
   for (const e of results) {
     const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(e.id).first();
-    out.push({ ...examPublic(e), question_count: qc.c, ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
+    out.push({ ...examPublic(e), question_count: await examQCount(env, e, qc.c), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
   }
   return json({ exams: out, all_required_done: st.allRequiredDone, sequential_lectures: st.sequential });
 }
@@ -470,7 +480,7 @@ async function listCourses(env, user) {
   const gm = new Map(groups.map(g => [g.id, g]));
   for (const it of st.items) (known.has(it.lecture.course_id) ? gm.get(it.lecture.course_id) : other).lectures.push(lectureOut(it, false));
   for (const e of exams) {
-    const x = { ...examPublic(e), question_count: qm.get(e.id) || 0, ...(await examAvailability(env, user, e, examRequirement(e, st, links))) };
+    const x = { ...examPublic(e), question_count: await examQCount(env, e, qm.get(e.id) || 0), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) };
     (known.has(e.course_id) ? gm.get(e.course_id) : other).exams.push(x);
   }
   const out = [...groups, other].filter(g => g.id || g.lectures.length || g.exams.length).map(g => {
@@ -486,7 +496,7 @@ async function getExam(env, user, id) {
   if (!e) throw new HttpError(404, 'Экзамен не найден');
   const req = await examReqFor(env, user, e);
   const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(id).first();
-  return json({ exam: { ...examPublic(e), question_count: qc.c, ...(await examAvailability(env, user, e, req)) } });
+  return json({ exam: { ...examPublic(e), question_count: await examQCount(env, e, qc.c), ...(await examAvailability(env, user, e, req)) } });
 }
 // ---------- движок вопросов (все типы) ----------
 // Хранение: questions.options/correct — варианты для single/multi/eliminate (как раньше);
@@ -788,6 +798,7 @@ function questionInput(b, prev) {
   o.active = bool(b.active, true);
   o.ext_id = b.ext_id !== undefined ? (str(b.ext_id, 100, { name: 'ext_id' }) || null) : (b.id !== undefined && typeof b.id === 'string' ? str(b.id, 100, { name: 'id' }) || null : undefined);
   if (b.position !== undefined) o.position = int(b.position, 0, 1000000, 'порядок', 0);
+  if (b.topic !== undefined) { const t = str(b.topic, 100, { name: 'topic (группа вариантов)' }); if (t && !/^[\p{L}\p{N}_.:-]+$/u.test(t)) throw new HttpError(400, 'topic: буквы, цифры, «-», «_», «.», «:» без пробелов'); o.topic = t || null; }
   return o;
 }
 
@@ -795,7 +806,7 @@ function questionInput(b, prev) {
 function toNative(q) {
   const d = parseJ(q.data, {}); const opts = parseJ(q.options, []); const corr = parseJ(q.correct, []);
   const o = { id: q.id, ext_id: q.ext_id || undefined, type: q.type, category: q.category || '', kind: q.kind || 'question', active: q.active === undefined ? true : !!q.active,
-    text: q.text, points: q.points, reference: q.reference || '' };
+    text: q.text, points: q.points, reference: q.reference || '', topic: q.topic || undefined };
   switch (q.type) {
     case 'single': case 'multi': case 'eliminate': o.options = opts.map(x => ({ id: x.id, text: x.text, correct: corr.includes(x.id) })); break;
     case 'number': Object.assign(o, { answer: d.answer, tolerance: d.tolerance || 0, unit: d.unit || '' }); break;
@@ -1047,9 +1058,21 @@ async function startExam(env, user, id) {
     throw new HttpError(409, 'Время предыдущей попытки истекло — она завершена автоматически. Обновите страницу.');
   }
   if (!av.can_start) throw new HttpError(403, av.reason || 'Экзамен недоступен');
-  const { results: qs } = await env.DB.prepare('SELECT * FROM questions WHERE exam_id = ?1 AND active = 1 ORDER BY position, id').bind(id).all();
-  if (!qs.length) throw new HttpError(409, 'В экзамене пока нет вопросов');
-  const order = e.shuffle_questions ? shuffle(qs.map(q => q.id)) : qs.map(q => q.id);
+  let qs, order;
+  if (e.bank_count > 0 && e.bank_category) {
+    // экзамен из банка: bank_count случайных вопросов категории, без повторов topic; порядок всегда случайный
+    const cats = String(e.bank_category).split(',').map(x => x.trim()).filter(Boolean);
+    const pool = (await bankIndex(env)).filter(q => (q.kind || 'question') === 'question' && cats.some(p => catMatch(p, q.category)));
+    const ids = takeDistinct(pool, e.bank_count, new Set(), new Set()).map(q => q.id);
+    if (!ids.length) throw new HttpError(409, 'В банке пока нет вопросов для этого экзамена');
+    qs = await loadQs(env, ids); order = ids;
+  } else {
+    ({ results: qs } = await env.DB.prepare('SELECT * FROM questions WHERE exam_id = ?1 AND active = 1 ORDER BY position, id').bind(id).all());
+    if (!qs.length) throw new HttpError(409, 'В экзамене пока нет вопросов');
+    // вопросы экзамена с одинаковым topic: в попытку попадает один случайный из группы
+    if (qs.some(q => q.topic)) { const keep = new Set(takeDistinct(qs, qs.length, new Set(), new Set()).map(q => q.id)); qs = qs.filter(q => keep.has(q.id)); }
+    order = e.shuffle_questions ? shuffle(qs.map(q => q.id)) : qs.map(q => q.id);
+  }
   const states = buildStates(qs, !!e.shuffle_options);
   const max = qs.reduce((s, q) => s + q.points, 0);
   const now = Date.now();
@@ -1288,15 +1311,30 @@ function reattInput(b, cur) {
   };
 }
 async function bankIndex(env) {
-  const { results } = await env.DB.prepare("SELECT id, category, kind, type FROM questions WHERE exam_id = 0 AND active = 1 AND type != 'info'").all();
+  const { results } = await env.DB.prepare("SELECT id, category, kind, type, topic FROM questions WHERE exam_id = 0 AND active = 1 AND type != 'info'").all();
   return results;
 }
-// Случайная выборка по квотам. Вопросы не повторяются между блоками.
+// Случайно n вопросов из списка так, чтобы в попытке не было двух вопросов с одинаковым topic (общий набор usedTopics на всю попытку).
+// Вопросы без topic ограничений не имеют. Возвращает выбранные строки.
+function takeDistinct(list, n, usedIds, usedTopics) {
+  const out = [];
+  for (const q of shuffle(list)) {
+    if (out.length >= n) break;
+    if (usedIds.has(q.id)) continue;
+    const t = q.topic ? String(q.topic).toLowerCase() : null;
+    if (t && usedTopics.has(t)) continue;
+    out.push(q); usedIds.add(q.id); if (t) usedTopics.add(t);
+  }
+  return out;
+}
+// Сколько вопросов максимум можно взять из списка без повторов topic.
+function distinctCapacity(list) { const t = new Set(); let n = 0; for (const q of list) { if (q.topic) t.add(String(q.topic).toLowerCase()); else n++; } return n + t.size; }
+// Случайная выборка по квотам. Вопросы не повторяются между блоками; вопросы одного topic — не больше одного на попытку.
 function sampleReatt(bank, groups) {
-  const used = new Set();
+  const used = new Set(), usedTopics = new Set();
   return groups.map(g => {
     const pool = (kind) => bank.filter(q => (q.kind || 'question') === kind && !used.has(q.id) && g.categories.some(p => catMatch(p, q.category)));
-    const take = (list, n) => { const chosen = shuffle(list).slice(0, n); chosen.forEach(q => used.add(q.id)); return chosen.map(q => q.id); };
+    const take = (list, n) => takeDistinct(list, n, used, usedTopics).map(q => q.id);
     // «Предпочтительные типы»: сначала pref_count вопросов этих типов (если их не хватает — добираются любые), остальные — случайно из всего блока
     const q = [];
     const pt = new Set(g.pref_types || []), pc = Math.min(g.pref_count || 0, g.questions);
@@ -1507,12 +1545,13 @@ async function importQuestions(request, env, user, examId) {
   return json({ report });
 }
 function insertQStmt(env, examId, o, now) {
-  return env.DB.prepare('INSERT INTO questions (exam_id, type, text, options, correct, reference, points, position, data, category, kind, easy, active, ext_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)')
-    .bind(examId, o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position || 0, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now);
+  return env.DB.prepare('INSERT INTO questions (exam_id, type, text, options, correct, reference, points, position, data, category, kind, easy, active, ext_id, created_at, updated_at, topic) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16)')
+    .bind(examId, o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position || 0, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now, o.topic || null);
 }
+// topic: undefined — не трогать (правка без поля), null/'' — снять.
 function updateQStmt(env, id, o, now) {
-  return env.DB.prepare('UPDATE questions SET type = ?1, text = ?2, options = ?3, correct = ?4, reference = ?5, points = ?6, position = COALESCE(?7, position), data = ?8, category = ?9, kind = ?10, easy = ?11, active = ?12, ext_id = COALESCE(?13, ext_id), updated_at = ?14 WHERE id = ?15')
-    .bind(o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position ?? null, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now, id);
+  return env.DB.prepare('UPDATE questions SET type = ?1, text = ?2, options = ?3, correct = ?4, reference = ?5, points = ?6, position = COALESCE(?7, position), data = ?8, category = ?9, kind = ?10, easy = ?11, active = ?12, ext_id = COALESCE(?13, ext_id), updated_at = ?14, topic = CASE WHEN ?16 = 1 THEN ?17 ELSE topic END WHERE id = ?15')
+    .bind(o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position ?? null, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now, id, o.topic !== undefined ? 1 : 0, o.topic || null);
 }
 async function adminBank(env, url) {
   const f = (k) => (url.searchParams.get(k) || '').trim();
@@ -1550,11 +1589,13 @@ async function deleteExamples(request, env, user) {
 }
 
 // ---------- admin ----------
+const LECTURE_PUB_MSG = 'Чтобы опубликовать лекцию, укажите ссылку на видео или текст лекции и длительность (больше 0; для текстовой — время чтения). Черновик можно сохранить и без них.';
 function lectureInput(b, partial) {
   const o = {};
   if (!partial || b.title !== undefined) o.title = str(b.title, 200, { required: true, name: 'название' });
   if (!partial || b.description !== undefined) o.description = str(b.description, 10000, { name: 'описание' });
   if (!partial || b.video_url !== undefined) o.video_url = validVideoUrl(str(b.video_url, 1000, { name: 'ссылка на видео' }));
+  if (!partial || b.body !== undefined) o.body = str(b.body, 200000, { name: 'текст лекции' });
   if (!partial || b.duration_sec !== undefined) o.duration_sec = parseDuration(b.duration_sec);
   if (!partial || b.position !== undefined) o.position = int(b.position, 0, 100000, 'порядок', 0);
   if (!partial || b.required !== undefined) o.required = bool(b.required, true);
@@ -1579,7 +1620,7 @@ async function saveLecture(request, env, user, id) {
     const cur = await env.DB.prepare('SELECT * FROM lectures WHERE id = ?1').bind(id).first();
     if (!cur) throw new HttpError(404, 'Лекция не найдена');
     const m = { ...cur, ...o };
-    if (m.published && (!m.video_url || !m.duration_sec)) throw new HttpError(400, 'Чтобы опубликовать лекцию, укажите ссылку на видео и длительность (больше 0). Черновик можно сохранить и без них.');
+    if (m.published && ((!m.video_url && !m.body) || !m.duration_sec)) throw new HttpError(400, LECTURE_PUB_MSG);
     const keys = Object.keys(o);
     if (keys.length) {
       await env.DB.prepare(`UPDATE lectures SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`)
@@ -1589,10 +1630,10 @@ async function saveLecture(request, env, user, id) {
     const lr = await env.DB.prepare('SELECT * FROM lectures WHERE id = ?1').bind(id).first();
     return json({ lecture: { ...lr, ...videoInfo(lr.video_url) } });
   }
-  if (o.published && (!o.video_url || !o.duration_sec)) throw new HttpError(400, 'Чтобы опубликовать лекцию, укажите ссылку на видео и длительность (больше 0). Черновик можно сохранить и без них.');
+  if (o.published && ((!o.video_url && !o.body) || !o.duration_sec)) throw new HttpError(400, LECTURE_PUB_MSG);
   if (b.position === undefined) { const mx = await env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM lectures').first(); o.position = mx.m + 10; }
-  const r = await env.DB.prepare('INSERT INTO lectures (title, description, video_url, duration_sec, position, required, published, course_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, ?8, ?8) RETURNING *')
-    .bind(o.title, o.description, o.video_url, o.duration_sec, o.position, o.required, o.published, now, o.course_id ?? null).first();
+  const r = await env.DB.prepare('INSERT INTO lectures (title, description, video_url, duration_sec, position, required, published, course_id, created_at, updated_at, body) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, ?8, ?8, ?10) RETURNING *')
+    .bind(o.title, o.description, o.video_url, o.duration_sec, o.position, o.required, o.published, now, o.course_id ?? null, o.body || '').first();
   await audit(env, user, 'lecture.create', r.id, { title: o.title });
   return json({ lecture: { ...r, ...videoInfo(r.video_url) } });
 }
@@ -1631,6 +1672,8 @@ function examInput(b, partial) {
   f('position', v => int(v, 0, 100000, 'порядок', 0));
   f('published', v => bool(v, false));
   f('course_id', v => v ? idParam(v) : null);
+  f('bank_category', v => str(v, 300, { name: 'категория банка' }) || null);
+  f('bank_count', v => int(v, 0, 500, 'вопросов из банка', 0));
   return o;
 }
 async function adminExams(env) {
@@ -1695,8 +1738,9 @@ async function saveExam(request, env, user, id) {
     const cur = await env.DB.prepare('SELECT id FROM exams WHERE id = ?1').bind(id).first();
     if (!cur) throw new HttpError(404, 'Экзамен не найден');
     if (o.published) {
+      const m = { ...(await env.DB.prepare('SELECT * FROM exams WHERE id = ?1').bind(id).first()), ...o };
       const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(id).first();
-      if (!qc.c) throw new HttpError(400, 'Чтобы опубликовать экзамен, добавьте хотя бы один вопрос. Черновик можно сохранить и без вопросов.');
+      if (!(await examQCount(env, m, qc.c))) throw new HttpError(400, 'Чтобы опубликовать экзамен, добавьте хотя бы один вопрос (или укажите категорию банка с вопросами). Черновик можно сохранить и без вопросов.');
     }
     const keys = Object.keys(o);
     const stmts = [];

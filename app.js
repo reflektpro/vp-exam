@@ -211,11 +211,48 @@ route('/lecture/:id', async (id) => {
   const back = l.course_id ? `#/course/${l.course_id}` : '#/study';
   setView(`<p><a href="${back}">← К курсу</a></p>
     <h1>${esc(l.title)}</h1>
-    <div id="playerBox"></div>
+    ${l.kind === 'text' ? `<div class="reader-bar" id="rbar"><div class="row between small"><span id="rtxt">Чтение…</span><span id="rtime"></span></div><div class="bar"><i id="rfill" style="width:0%"></i></div></div>
+      <article class="card lecture-text md">${md(l.body)}</article>` : '<div id="playerBox"></div>'}
     <div class="pmsg" id="pmsg"></div>
-    ${l.description ? `<div class="card flat" style="margin-top:14px"><div class="welcome">${esc(l.description)}</div></div>` : ''}`);
-  window.VPPlayer.mount($('#playerBox'), l, $('#pmsg'));
+    ${l.description ? `<div class="card flat" style="margin-top:14px"><div class="welcome">${esc(l.description)}</div></div>` : ''}
+    ${l.kind === 'text' ? `<p><a class="btn" href="${back}">← К курсу</a></p>` : ''}`);
+  if (l.kind === 'text') textReader(l); else window.VPPlayer.mount($('#playerBox'), l, $('#pmsg'));
 }, { cap: 'vp' });
+// Текстовая лекция: засчитывается по времени чтения (длительность лекции). Время идёт, только пока вкладка открыта и активна;
+// сервер проверяет прирост по реальному времени (тот же heartbeat, что у видео), поэтому «пролистать» лекцию нельзя.
+function textReader(l) {
+  const dur = l.duration_sec || 0, p = l.progress || {};
+  let pos = Math.min(p.last_pos || 0, dur), done = !!p.completed_at, lastTick = Date.now(), sending = false, stopped = false;
+  const fmt = (x) => { x = Math.max(0, Math.ceil(x)); return Math.floor(x / 60) + ':' + String(x % 60).padStart(2, '0'); };
+  const paint = (msg) => {
+    const pct = dur ? Math.min(100, Math.round(pos / dur * 100)) : 0;
+    $('#rfill').style.width = (done ? 100 : pct) + '%';
+    $('#rtxt').textContent = done ? '✔ Лекция прочитана и засчитана' : (msg || (document.hidden ? 'Пауза: вкладка неактивна' : 'Читайте лекцию — время чтения засчитывается'));
+    $('#rtime').textContent = done ? '' : `осталось ~${fmt(dur - pos)}`;
+    $('#rbar').classList.toggle('ok', done);
+  };
+  const send = async () => {
+    if (sending || stopped || !document.getElementById('rbar')) return;
+    sending = true;
+    try {
+      const r = await api('POST', `/api/lectures/${l.id}/heartbeat`, { position: Math.round(pos * 10) / 10, event: 'read' });
+      if (!r.accepted) pos = r.last_pos;
+      if (r.completed && !done) { done = true; toast('Лекция засчитана'); }
+    } catch (e) { paint('Нет связи с сервером — время не засчитывается'); }
+    finally { sending = false; if (document.getElementById('rbar')) paint(); }
+  };
+  const tick = () => {
+    const now = Date.now(), dt = (now - lastTick) / 1000; lastTick = now;
+    if (!document.hidden && !done) pos = Math.min(dur, pos + Math.min(dt, 6));
+    paint();
+  };
+  paint();
+  send();
+  const t1 = setInterval(tick, 1000), t2 = setInterval(() => { if (!done) send(); }, 5000);
+  const vis = () => { lastTick = Date.now(); paint(); };
+  document.addEventListener('visibilitychange', vis);
+  App.cleanup.push(() => { stopped = true; clearInterval(t1); clearInterval(t2); document.removeEventListener('visibilitychange', vis); if (!done && pos > 0) api('POST', `/api/lectures/${l.id}/heartbeat`, { position: Math.round(pos * 10) / 10, event: 'leave' }).catch(() => {}); });
+}
 
 route('/exams', async () => {
   const E = await api('GET', '/api/exams');

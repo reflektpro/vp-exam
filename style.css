@@ -306,3 +306,13 @@ ol.clist{padding-left:22px;margin:0 0 10px}ol.clist li{display:list-item;padding
   .tiles-grid,.course-grid,.people,.docgrid{grid-template-columns:1fr}
   h1{font-size:21px}
 }
+/* текстовые лекции */
+.reader-bar{position:sticky;top:64px;z-index:20;background:#101413;border:1px solid var(--gold);border-radius:6px;padding:8px 14px;margin-bottom:14px}
+.reader-bar.ok{border-color:var(--ok)}.reader-bar.ok #rtxt{color:var(--ok)}
+.lecture-text{font-size:16px;line-height:1.7}
+.lecture-text h2{margin-top:22px}.lecture-text h3{margin-top:16px}
+.md blockquote{border-left:3px solid var(--warn);background:#2b2616;border-radius:0 5px 5px 0;padding:8px 14px;color:var(--txt)}
+.md blockquote p{margin:4px 0}
+table.mdt{margin:10px 0;font-size:14px}table.mdt th{color:var(--gold2)}
+.md hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+@media(max-width:700px){.reader-bar{top:56px}.lecture-text{font-size:15px;padding:14px}}

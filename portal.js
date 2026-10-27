@@ -59,7 +59,7 @@ route('/course/:id', async (id) => {
     const st = l.status === 'in_progress' ? `<span class="badge info">${pct}%</span>` : badge(l.status);
     return `<li class="step ${l.status} ${l.locked ? 'locked' : ''}"><span class="dot">${l.status === 'watched' ? '✔' : l.locked ? '🔒' : i + 1}</span>
       <a class="step-body" href="#/lecture/${l.id}" ${l.locked ? 'tabindex="-1" aria-disabled="true"' : ''}><div class="row between"><b>${esc(l.title)}</b>${st}</div>
-        <div class="small mut">Лекция · ${fmtTime(l.duration_sec)}${l.required ? '' : ' · необязательная'}${l.description ? ' · ' + esc(l.description.slice(0, 120)) : ''}</div>
+        <div class="small mut">${l.kind === 'text' ? '📖 Текст · чтение ~' + Math.max(1, Math.round(l.duration_sec / 60)) + ' мин' : '🎬 Видео · ' + fmtTime(l.duration_sec)}${l.required ? '' : ' · необязательная'}${l.description ? ' · ' + esc(l.description.slice(0, 120)) : ''}</div>
         ${l.status === 'in_progress' ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}</a></li>`;
   };
   const exStep = (e) => {
@@ -194,22 +194,29 @@ route('/promo\\?.*', () => App.routes.find(r => r.p === '/promo').fn(), { cap: '
 // ---------- база данных (документация) ----------
 // Разметка статей: # заголовок, ## подзаголовок, - список, 1. нумерованный, **жирный**, `код`, [текст](https://ссылка), пустая строка — новый абзац.
 function mdInline(t) {
-  return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+  return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[\s(«])\*([^*\s][^*]*?)\*(?=[\s.,;:!?)»]|$)/g, '$1<i>$2</i>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|#\/[^\s)]*)\)/g, (m, a, h) => `<a href="${h}"${h[0] === '#' ? '' : ' target="_blank" rel="noopener noreferrer"'}>${a}</a>`);
 }
 function md(src) {
   const out = []; let list = null, para = [];
   const flushP = () => { if (para.length) { out.push(`<p>${para.map(mdInline).join('<br>')}</p>`); para = []; } };
   const flushL = () => { if (list) { out.push(`<${list.t}>${list.items.map(i => `<li>${mdInline(i)}</li>`).join('')}</${list.t}>`); list = null; } };
+  let quote = null, table = null;
+  const flushQ = () => { if (quote) { out.push(`<blockquote>${md(quote.join('\n'))}</blockquote>`); quote = null; } };
+  const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+  const flushT = () => { if (table) { const [h, ...rows] = table.filter(r => !/^\|?\s*:?-{2,}/.test(r.trim())); out.push(`<div class="tscroll"><table class="mdt"><tr>${cells(h).map(c => `<th>${mdInline(c)}</th>`).join('')}</tr>${rows.map(r => `<tr>${cells(r).map(c => `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('')}</table></div>`); table = null; } };
   for (const raw of String(src || '').split(/\r?\n/)) {
     const line = raw.trimEnd(); let m;
+    if ((m = /^\s*>\s?(.*)$/.exec(line))) { flushP(); flushL(); flushT(); (quote = quote || []).push(m[1]); continue; } else flushQ();
+    if (/^\s*\|.*\|\s*$/.test(line)) { flushP(); flushL(); (table = table || []).push(line); continue; } else flushT();
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { flushP(); flushL(); out.push('<hr>'); continue; }
     if (!line.trim()) { flushP(); flushL(); continue; }
     if ((m = /^(#{1,3})\s+(.*)$/.exec(line))) { flushP(); flushL(); const h = m[1].length + 1; out.push(`<h${h}>${mdInline(m[2])}</h${h}>`); continue; }
     if ((m = /^\s*[-*•]\s+(.*)$/.exec(line))) { flushP(); if (!list || list.t !== 'ul') { flushL(); list = { t: 'ul', items: [] }; } list.items.push(m[1]); continue; }
     if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { flushP(); if (!list || list.t !== 'ol') { flushL(); list = { t: 'ol', items: [] }; } list.items.push(m[1]); continue; }
     flushL(); para.push(line);
   }
-  flushP(); flushL();
+  flushP(); flushL(); flushQ(); flushT();
   return out.join('');
 }
 route('/docs', () => docsPage());

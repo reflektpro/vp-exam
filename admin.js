@@ -114,7 +114,8 @@ route('/admin/lecture/:id', async (id) => {
       <label class="f"><span>Ссылка на видео: YouTube (можно «По ссылке») или прямая ссылка на файл .mp4/.webm, либо путь на сайте videos/lecture1.mp4</span><input name="video_url" maxlength="1000" value="${esc(l.video_url)}" placeholder="https://www.youtube.com/watch?v=…"></label>
       <div class="small" id="vinfo" style="margin:-6px 0 12px"></div>
       <div class="row"><label class="f" style="width:220px"><span>Длительность (сек, мм:сс или чч:мм:сс)</span><input name="duration_sec" maxlength="10" value="${l.duration_sec ? fmtTime(l.duration_sec) : ''}" placeholder="например 12:34"></label>
-        <button type="button" class="btn" id="detect">Определить по видео</button><span class="small" id="dinfo"></span></div>
+        <button type="button" class="btn" id="detect">Определить по видео</button><button type="button" class="btn" id="readT">По тексту (200 слов/мин)</button><span class="small" id="dinfo"></span></div>
+      <label class="f"><span>Текст лекции (Markdown: # заголовки, - списки, **жирный**, *курсив*, &gt; цитата, таблицы |, [ссылки](https://…)). Лекция без видео, но с текстом — текстовая: засчитывается по времени чтения (длительность).</span><textarea name="body" maxlength="200000" style="min-height:220px;font-family:monospace;font-size:13px">${esc(l.body || '')}</textarea></label>
       <label class="chk"><input type="checkbox" name="required" ${l.required ? 'checked' : ''}> Обязательная (нужна для допуска к экзамену)</label>
       ${pubBlock(l.published, true)}
       ${isNew ? '' : '<p style="margin-top:14px"><button type="button" class="btn danger sm" id="del">Удалить лекцию</button></p>'}
@@ -157,6 +158,7 @@ route('/admin/lecture/:id', async (id) => {
     $('#detect').disabled = false;
   };
   refresh();
+  $('#readT').onclick = () => { const w = (f.body.value.match(/[\p{L}\p{N}]+/gu) || []).length; if (!w) { setD('Текст пустой', 'err'); return; } const sec = Math.max(60, Math.round(w / 200 * 60 / 10) * 10); f.duration_sec.value = fmtTime(sec); setD(`${w} слов → ~${fmtTime(sec)}`, 'ok'); };
   f.video_url.addEventListener('input', () => refresh());
   f.video_url.addEventListener('change', () => { refresh(); const dv = f.duration_sec.value.trim(); if (!dv || dv === '0' || dv === '0:00') detect(true); });
   $('#detect').onclick = () => detect(false);
@@ -220,6 +222,10 @@ route('/admin/exam/:id', async (id) => {
         <label class="f"><span>Пауза между попытками, мин</span><input type="number" name="cooldown_min" min="0" value="${e.cooldown_min}"></label>
         <label class="f"><span>Проходной балл, %</span><input type="number" name="pass_pct" min="0" max="100" value="${e.pass_pct}"></label>
       </div>
+      <fieldset class="reqbox"><legend>Вопросы из банка</legend>
+        <p class="small mut" style="margin-top:0">Если указать категорию банка и число вопросов, каждая попытка берёт случайные вопросы из банка (вопросы экзамена ниже не используются). В одной попытке не бывает двух вопросов с одинаковым topic (вариантов одного вопроса).</p>
+        <div class="fgrid"><label class="f"><span>Категория банка (можно несколько через запятую, * в конце — префикс)</span><input name="bank_category" maxlength="300" value="${esc(e.bank_category || '')}" placeholder="например: ПК — задержание (ВП)"></label>
+        <label class="f"><span>Вопросов в попытке (0 — не из банка)</span><input type="number" name="bank_count" min="0" max="500" value="${e.bank_count || 0}"></label></div></fieldset>
       <label class="chk"><input type="checkbox" name="shuffle_questions" ${e.shuffle_questions ? 'checked' : ''}> Перемешивать вопросы</label>
       <label class="chk"><input type="checkbox" name="shuffle_options" ${e.shuffle_options ? 'checked' : ''}> Перемешивать варианты ответов</label>
       ${reqLecturesBlock(e, allLec)}
