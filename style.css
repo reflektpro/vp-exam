@@ -316,3 +316,36 @@ ol.clist{padding-left:22px;margin:0 0 10px}ol.clist li{display:list-item;padding
 table.mdt{margin:10px 0;font-size:14px}table.mdt th{color:var(--gold2)}
 .md hr{border:0;border-top:1px solid var(--line);margin:18px 0}
 @media(max-width:700px){.reader-bar{top:56px}.lecture-text{font-size:15px;padding:14px}}
+/* личные дела (досье) */
+.dzfilter{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px}.dzfilter input[name=q]{flex:1 1 220px;max-width:none}.dzfilter select{flex:0 1 200px;width:auto}.dzfilter .chk{margin:0}
+.pcard.arch{opacity:.65}.chip.neg{border-color:#7a2a2a;color:#ff9c94}.chip.on{border-color:var(--gold);color:var(--gold2)}a.chip{text-decoration:none;color:var(--txt)}
+.clist2{max-height:360px;overflow:auto}.crow{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--line)}
+.dzhead .dzact{gap:8px;margin-top:12px;flex-wrap:wrap}
+.stats4{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:14px}.stats4 .stat b{font-size:26px}
+.dztabs{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}.dztabs a{white-space:nowrap}
+dl.dzkv{display:grid;grid-template-columns:minmax(120px,40%) 1fr;gap:6px 12px;margin:0 0 8px}dl.dzkv dt{color:var(--mut);font-size:14px}dl.dzkv dd{margin:0;word-break:break-word}
+.plate{font-family:Consolas,monospace;letter-spacing:1px;background:#f1efe6;color:#111;border-radius:3px;padding:0 6px;border:1px solid #888;white-space:nowrap}
+.stars{color:var(--gold2);letter-spacing:2px}
+ol.tl{list-style:none;padding:0;margin:0 0 10px;border-left:2px solid var(--line);margin-left:12px}
+ol.tl li{position:relative;display:flex;gap:10px;padding:8px 0 8px 18px}
+ol.tl .tl-ic{position:absolute;left:-13px;top:8px;width:24px;height:24px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:12px}
+ol.tl li.err .tl-ic{border-color:#a04040}ol.tl li.ok .tl-ic{border-color:var(--ok)}ol.tl li>div{min-width:0}
+.dzrows{display:flex;flex-direction:column}.dzrow{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--line);flex-wrap:wrap}
+.ev{border:1px solid var(--line);border-left:3px solid var(--line);border-radius:6px;padding:10px 12px;margin:8px 0;background:#1a201e}
+.ev-penalty{border-left-color:var(--err)}.ev-reward,.ev-promotion,.ev-restore{border-left-color:var(--ok)}.ev-demotion,.ev-archive{border-left-color:#a04040}.ev-transfer{border-left-color:var(--gold)}
+.ev.lifted{opacity:.7}.ev-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px}.ev-act{gap:6px;margin-top:8px}.ok-t{color:#9fe0a8}
+.dzform fieldset{margin-bottom:14px}.dzform legend{font-family:Oswald,sans-serif;color:var(--gold2);padding:0 6px}
+.vrow{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}.vrow input[name=model]{flex:2 1 180px}.vrow .plate-in{flex:1 1 110px;text-transform:uppercase}.vrow .chk{margin:0}
+.lawpick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.lp{display:flex;flex-direction:column;align-items:center;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;min-width:64px}
+.lp input{display:none}.lp span{font:600 20px Oswald,sans-serif}.lp small{font-size:11px;color:var(--mut)}.lp:has(input:checked){border-color:var(--gold);background:#2a2614}
+.seg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.seg label{cursor:pointer}.seg input{display:none}.seg span{display:inline-block;padding:6px 12px;border:1px solid var(--line);border-radius:4px;background:#1b2120}
+.seg input:checked+span{border-color:var(--gold);color:var(--gold2);background:#2a2614}
+.stickybar{position:sticky;bottom:0;background:#101413;padding:10px;border-top:1px solid var(--gold);gap:8px;z-index:5}
+@media(max-width:700px){
+  dl.dzkv{grid-template-columns:1fr}dl.dzkv dt{margin-top:4px}
+  table.dzt{display:block}table.dzt tr:first-child{display:none}table.dzt tr{display:block;border:1px solid var(--line);border-radius:6px;margin-bottom:8px;padding:6px 10px}
+  table.dzt td{display:flex;justify-content:space-between;gap:10px;border:0;padding:3px 0;text-align:right}table.dzt td[data-l]::before{content:attr(data-l);color:var(--mut);text-align:left}
+  .dzfilter select,.dzfilter button{flex:1 1 100%}.stats4{grid-template-columns:1fr 1fr}.stats4 .stat{padding:10px}
+  .dzhead .row{flex-wrap:wrap}
+}
+@media(max-width:700px){.brand{min-width:0;flex:1 1 auto}.brand>div{min-width:0}.t1{font-size:15px;letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}

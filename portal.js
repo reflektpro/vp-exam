@@ -19,7 +19,7 @@ async function homePage() {
   try { [rep, courses] = await Promise.all([can('vp') ? api('GET', '/api/reports/my') : null, can('vp') ? api('GET', '/api/courses') : null]); } catch (_) {}
   const TILE_TXT = { '/study': courses ? (() => { const c = courses.courses; const done = c.filter(x => x.complete).length; return c.length ? `Курсов: ${c.length}, пройдено: ${done}` : 'Курсы пока не опубликованы'; })() : 'Курсы, лекции и экзамены',
     '/reports': rep ? (rep.report ? `Отчёт за неделю: ${(REP_ST[rep.report.status] || ['—'])[0].toLowerCase()}` : `Отчёт за неделю не сдан · срок ${fmtDate(rep.deadline)}`) : 'Еженедельный отчёт',
-    '/premiums': 'Премии недели: кто, за что, сколько', '/promo': 'Ступени, баллы и требования', '/docs': 'Документация и инструкции', '/people': 'Карточки сотрудников',
+    '/premiums': 'Премии недели: кто, за что, сколько', '/promo': 'Ступени, баллы и требования', '/docs': 'Документация и инструкции', '/people': 'Досье сотрудников ГУ ВП',
     '/reatt': 'Тесты по законам и уставам', '/lead': 'Проверка отчётов, фонд, бюджет', '/admin': 'Лекции, экзамены, проверка, пользователи', '/profile': 'Имя, звание, статик, должность' };
   setView(`<div class="card hero"><div class="row"><div style="flex:1;min-width:240px"><h1>${esc(s.site_title || 'ГУ ВП')}</h1>
       <div class="mut">Здравствуйте, <b>${esc(userName(u))}</b>${u.rank ? ' · ' + esc(u.rank) : ''}</div>
@@ -260,37 +260,7 @@ route('/doc-edit/:id', async (id) => {
     catch (e) { toast(e.message, true); } };
 }, { cap: 'admin' });
 
-// ---------- личные дела ----------
-route('/people', () => peoplePage());
-route('/people\\?.*', () => peoplePage());
-async function peoplePage() {
-  const q = (hashQ().get('q') || '').toLowerCase();
-  const { people } = await api('GET', '/api/people');
-  const list = people.filter(p => !q || [p.name, p.rank, p.static_id, p.position, p.discord].some(x => String(x || '').toLowerCase().includes(q)));
-  setView(`<h1>Личные дела</h1>
-    <form class="row" id="pq" style="margin-bottom:14px"><input name="q" value="${esc(q)}" placeholder="Поиск: имя, звание, статик, должность" style="max-width:420px"><button class="btn">Найти</button></form>
-    <p class="small mut">${list.length} ${plural(list.length, 'сотрудник', 'сотрудника', 'сотрудников')}. Данные — из профилей сотрудников.</p>
-    <div class="people">${list.map(p => `<a class="pcard" href="#/person/${p.id}">${avatar(p)}<div><b>${esc(p.name)}</b>${p.has_ic ? '' : ' <span class="small mut">(профиль не заполнен)</span>'}
-      <div class="small">${esc(p.rank || '—')}${p.static_id ? ' · статик ' + esc(p.static_id) : ''}</div><div class="small mut">${esc(p.position || '')}</div>
-      <div class="chips">${p.roles.map(r => `<span class="chip">${esc(r)}</span>`).join('')}</div></div></a>`).join('') || '<div class="alert info">Никого не найдено.</div>'}</div>`);
-  $('#pq').onsubmit = (ev) => { ev.preventDefault(); const v = ev.target.q.value.trim(); location.hash = v ? '#/people?q=' + encodeURIComponent(v) : '#/people'; };
-}
-route('/person/:id', async (id) => {
-  const d = await api('GET', '/api/people/' + encodeURIComponent(id));
-  const p = d.person;
-  setView(`<p><a href="#/people">← Личные дела</a></p>
-    <div class="card pfile"><div class="row">${avatar(p, 'big')}<div style="flex:1"><h1 style="margin:0">${esc(p.name)}</h1>
-      <div>${esc(p.rank || 'звание не указано')}${p.static_id ? ' · статик <b>' + esc(p.static_id) + '</b>' : ''}</div><div class="mut">${esc(p.position || 'должность не указана')}</div>
-      <div class="chips">${p.roles.map(r => `<span class="chip">${esc(r)}</span>`).join('')}</div></div>
-      ${can('admin') ? `<a class="btn sm" href="#/admin/user/${p.id}">Изменить профиль</a>` : ''}</div>
-      <div class="grid stats3"><div class="stat"><b>${d.reports.length}</b>${plural(d.reports.length, 'отчёт', 'отчёта', 'отчётов')}</div><div class="stat"><b>${d.thanks_total}</b>${plural(d.thanks_total, 'благодарность', 'благодарности', 'благодарностей')}</div>
-        <div class="stat"><b class="${d.strikes ? 'neg' : ''}">${d.strikes}</b>${d.strikes ? 'нарушений · ' + esc(d.strike_label) : 'нарушений нет'}</div><div class="stat"><b>${d.exams.length}</b>сдано экзаменов</div></div></div>
-    <div class="grid two">
-      <div class="card flat"><h3>Отчёты</h3>${d.reports.length ? `<table><tr><th>Неделя</th><th>Статус</th><th>План</th><th>Баллы</th><th>Благ.</th></tr>${d.reports.map(r => `<tr><td>${weekLabel(r.week)}</td><td>${repBadge(r.status)}${r.late ? ' <span class="badge err">после срока</span>' : ''}</td>
-        <td>${r.plan ? `<span class="badge ${PLAN_RU[r.plan][1]}">${PLAN_RU[r.plan][0]}</span>` : '—'}</td><td class="num">${r.points}</td><td class="num">${r.thanks || ''}</td></tr>`).join('')}</table>` : '<p class="mut">Отчётов нет.</p>'}</div>
-      <div><div class="card flat"><h3>Взыскания</h3>${d.violations.length ? `<table>${d.violations.map(v => `<tr><td>${weekLabel(v.week)}</td><td>${v.kind === 'late' ? 'отчёт после срока' : 'отчёт не сдан'}</td><td><span class="badge ${v.measure === 'увольнение' ? 'err' : 'warn'}">${esc(v.measure)}</span></td></tr>`).join('')}</table>` : '<p class="mut">Взысканий нет.</p>'}</div>
-        <div class="card flat"><h3>Экзамены и аттестации</h3>${d.exams.length ? `<table>${d.exams.map(x => `<tr><td>${esc(x.title)}</td><td>${fmtDate(x.at)}</td><td class="num">${x.score_pct != null ? x.score_pct + '%' : ''}</td></tr>`).join('')}</table>` : '<p class="mut">Пока нет.</p>'}</div></div></div>`);
-});
+// ---------- личные дела — dossier.js ----------
 
 // ---------- профиль ----------
 route('/profile', async () => {
@@ -299,7 +269,7 @@ route('/profile', async () => {
   setView(`<h1>Профиль</h1>
     <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:64px;height:64px;border-radius:50%;border:2px solid var(--gold)">` : ''}
       <div><div><b>${esc(u.global_name || u.username)}</b> <span class="mut">@${esc(u.username)}</span></div><div class="small mut">Discord ID: ${esc(u.id)} · ${esc(rolesText(u))}${u.super ? ' (главный администратор)' : ''}</div></div></div>
-      <p class="small mut" style="margin-top:12px">Эти данные подставляются в еженедельный отчёт и документы на сайте бланков и видны в «Личных делах». Администраторы могут их исправить — изменения записываются в журнал.</p>
+      <p class="small mut" style="margin-top:12px">Эти данные подставляются в еженедельный отчёт и документы на сайте бланков и видны в «Личных делах». Администраторы и старший состав могут их исправить — изменения записываются в журнал. <a href="#/person/${esc(u.id)}">Моё личное дело →</a></p>
       <form id="pf"><div class="fgrid">
         <label class="f"><span>Имя Фамилия (игровые)</span><input name="ic_name" maxlength="100" value="${esc(u.ic_name)}" placeholder="Шерман Ассман"></label>
         <label class="f"><span>Звание</span><input name="rank" maxlength="60" list="rankList" value="${esc(u.rank)}" placeholder="Лейтенант"></label>

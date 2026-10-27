@@ -21,7 +21,7 @@ const STATUS_RU = {
 };
 function badge(st) { const x = STATUS_RU[st] || [st, '']; return `<span class="badge ${x[1]}">${esc(x[0])}</span>`; }
 const ROLE_RU = { candidate: 'Пользователь', examiner: 'Проверяющий', admin: 'Администратор' };
-// Роли доступа (сервер присылает caps): vp, reatt, examiner, admin, lead, super. Проверка — на сервере, здесь только меню.
+// Роли доступа (сервер присылает caps): vp, reatt, examiner, admin, lead, ss (старший состав), super. Проверка — на сервере, здесь только меню.
 function can(c) { return !!(App.me && App.me.caps && App.me.caps[c]); }
 function isLeadUser() { return can('lead'); }
 const CAP_RU = { vp: '«ВП»', reatt: '«Переаттестация»', examiner: '«Проверяющий» или «Администратор»', admin: '«Администратор»', lead: '«Руководство ГУ ВП»' };
@@ -117,7 +117,7 @@ function renderHeader() {
 function rolesText(u) {
   const r = [];
   if (u.super) r.push('Главный администратор'); else if (u.role === 'admin') r.push('Администратор'); else if (u.role === 'examiner') r.push('Проверяющий');
-  if (u.leader) r.push('Руководство ГУ ВП'); if (u.vp) r.push('ВП'); if (u.reatt) r.push('Переаттестация');
+  if (u.leader) r.push('Руководство ГУ ВП'); if (u.senior) r.push('Старший состав'); if (u.vp) r.push('ВП'); if (u.reatt) r.push('Переаттестация');
   return r.length ? 'Роли: ' + r.join(', ') : 'Ролей пока нет';
 }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) { openDrawer(false); $('#burger').focus(); } });

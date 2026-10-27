@@ -205,11 +205,12 @@ route('/lead/report/:id', async (id) => {
 leadRoute('/lead/violations', async () => {
   const d = await api('GET', '/api/lead/violations');
   setView(`<h1>Нарушения: отчёт не сдан в срок</h1>${leadNav('/lead/violations')}
-    <p class="small mut">Считаются недели с начала учёта сотрудника (раздел «Состав»), срок которых прошёл (последняя закрытая неделя — ${weekLabel(d.last_closed_week)}). 1 — предупреждение, 2 — выговор, 3 — увольнение. Сообщения в Discord автоматически не отправляются. Нарушение можно снять (уважительная причина).</p>
-    ${d.users.length ? `<table><tr><th>Сотрудник</th><th>Нарушений</th><th>Мера</th><th>Недели</th></tr>${d.users.map(u => `<tr><td><b>${esc(u.name)}</b><div class="small mut">${esc(u.static_id || u.user_id)} · учёт с ${u.staff_since ? weekLabel(u.staff_since).slice(0, 10) : '—'}</div></td>
+    <p class="small mut">Считаются недели с начала учёта сотрудника (раздел «Состав»), срок которых прошёл (последняя закрытая неделя — ${weekLabel(d.last_closed_week)}). 1 — предупреждение, 2 — выговор, 3 — увольнение. Сообщения в Discord автоматически не отправляются. Нарушение можно снять (уважительная причина). Ручные взыскания (выговоры и т. п.) ведёт старший состав в «Личных делах» — они показаны в последнем столбце и в лестницу 1–2–3 не входят.</p>
+    ${d.users.length ? `<table><tr><th>Сотрудник</th><th>Нарушений</th><th>Мера</th><th>Недели</th><th>Взыскания в личном деле</th></tr>${d.users.map(u => `<tr><td><b>${esc(u.name)}</b><div class="small mut">${esc(u.static_id || u.user_id)} · учёт с ${u.staff_since ? weekLabel(u.staff_since).slice(0, 10) : '—'}</div></td>
       <td class="num">${u.strikes}</td><td>${u.label ? `<span class="badge ${u.strikes >= 3 ? 'err' : 'warn'}">${esc(u.label)}</span>` : '<span class="badge ok">нет</span>'}</td>
       <td>${u.list.map(x => `<div class="row small"><span class="${x.excused ? 'mut strike' : ''}">${weekLabel(x.week)} — ${x.kind === 'late' ? 'после срока' : 'не сдан'}</span>${x.excused ? `<span class="mut">снято${x.note ? ': ' + esc(x.note) : ''}</span>` : ''}
-        <button class="btn sm" data-u="${esc(u.user_id)}" data-w="${x.week}" data-e="${x.excused ? 0 : 1}">${x.excused ? 'Вернуть' : 'Снять'}</button></div>`).join('') || '<span class="small mut">—</span>'}</td></tr>`).join('')}</table>` : '<div class="alert info">Состав ГУ ВП не отмечен — отметьте сотрудников в разделе «Состав».</div>'}`);
+        <button class="btn sm" data-u="${esc(u.user_id)}" data-w="${x.week}" data-e="${x.excused ? 0 : 1}">${x.excused ? 'Вернуть' : 'Снять'}</button></div>`).join('') || '<span class="small mut">—</span>'}</td>
+      <td><a href="#/person/${esc(u.user_id)}?tab=discipline">${u.dossier_penalties ? `<span class="badge err">${u.dossier_penalties} действ.</span>` : '<span class="small">нет</span>'}</a></td></tr>`).join('')}</table>` : '<div class="alert info">Состав ГУ ВП не отмечен — отметьте сотрудников в разделе «Состав».</div>'}`);
   $$('[data-u]').forEach(b => b.onclick = async () => {
     const excused = b.dataset.e === '1'; const note = excused ? prompt('Причина снятия нарушения:', '') : '';
     if (excused && note === null) return;
@@ -253,7 +254,7 @@ leadRoute('/lead/staff', async () => {
   const f = (hashQ().get('q') || '').toLowerCase();
   const list = d.users.filter(u => !f || [u.id, u.username, u.global_name, u.ic_name, u.static_id].some(x => String(x || '').toLowerCase().includes(f)));
   setView(`<h1>Состав ГУ ВП</h1>${leadNav('/lead/staff')}
-    <p class="small mut">«В составе» — обязан сдавать еженедельный отчёт: попадает в сводную таблицу (даже без отчёта) и в учёт нарушений с недели «учёт с». «СС» — старший состав: премия СС и еженедельный взнос в бюджет. Должность в премии берётся из отчёта; здесь — для сотрудников без отчёта. Роль «Руководство ГУ ВП» назначают администраторы на странице пользователя.</p>
+    <p class="small mut">«В составе» — обязан сдавать еженедельный отчёт: попадает в сводную таблицу (даже без отчёта) и в учёт нарушений с недели «учёт с». «СС» — старший состав: премия СС, еженедельный взнос в бюджет и право вести «Личные дела» (заполнять досье, выдавать взыскания и поощрения). Должность в премии берётся из отчёта; здесь — для сотрудников без отчёта. Роль «Руководство ГУ ВП» назначают администраторы на странице пользователя.</p>
     <form class="row" id="sf" style="margin-bottom:12px"><input name="q" value="${esc(f)}" placeholder="Поиск" style="max-width:320px"><button class="btn sm">Найти</button></form>
     <table><tr><th>Пользователь</th><th>В составе</th><th>СС</th><th>Должность</th><th>Учёт с недели</th><th>Отчётов</th></tr>
     ${list.map(u => `<tr data-uid="${esc(u.id)}"><td><b>${esc(u.ic_name || u.global_name || u.username)}</b>${u.leader ? ' <span class="badge gold">Руководство</span>' : ''}<div class="small mut">${esc(u.username)} · ${esc(u.id)}${u.static_id ? ' · ' + esc(u.static_id) : ''}</div></td>

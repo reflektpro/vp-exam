@@ -199,7 +199,9 @@ function requireRole(user, role) {
 // Администратор видит все разделы; главные администраторы (ADMIN_IDS) — всё. Без ролей — только База данных и Личные дела.
 function caps(u) {
   const admin = u.role === 'admin' || !!u.super;
-  return { vp: !!u.vp || admin, reatt: !!u.reatt || admin, examiner: admin || u.role === 'examiner', admin, lead: !!u.leader || admin, super: !!u.super };
+  const lead = !!u.leader || admin;
+  // ss — старший состав ГУ ВП: «Руководство ГУ ВП», администраторы и отметка «Старший состав» в составе (users.senior)
+  return { vp: !!u.vp || admin, reatt: !!u.reatt || admin, examiner: admin || u.role === 'examiner', admin, lead, ss: lead || !!u.senior, super: !!u.super };
 }
 const CAP_MSG = { vp: 'Раздел доступен роли «ВП». Роль назначает администратор.', reatt: 'Раздел доступен роли «Переаттестация». Роль назначает администратор.',
   examiner: 'Раздел доступен проверяющим и администраторам', admin: 'Только для администраторов', lead: 'Раздел доступен роли «Руководство ГУ ВП» и администраторам' };
@@ -2594,6 +2596,9 @@ async function violationsData(env, cfg) {
   const { results: exc } = await env.DB.prepare('SELECT user_id, week, note, by_id, at FROM violation_excuses').all();
   const rm = new Map(reps.map(r => [r.user_id + '|' + r.week, r]));
   const em = new Map(exc.map(e => [e.user_id + '|' + e.week, e]));
+  // ручные взыскания из личных дел — показываются рядом с нарушениями по отчётам (лестница 1–2–3 считается только по отчётам)
+  const { results: pen } = await env.DB.prepare("SELECT user_id, COUNT(*) AS n FROM dossier_events WHERE kind = 'penalty' AND deleted_at IS NULL AND lifted_at IS NULL GROUP BY user_id").all();
+  const pm = new Map(pen.map(r => [r.user_id, r.n]));
   const lastClosed = (() => { let w = weekOf(now); if (now <= weekDeadline(w, cfg.rules)) w = addDays(w, -7); return w; })();
   const out = [];
   for (const u of staff) {
@@ -2606,7 +2611,7 @@ async function violationsData(env, cfg) {
       list.push({ week: w, kind: r ? 'late' : 'missing', excused: !!e, note: e ? e.note : '' });
     }
     const n = list.filter(x => !x.excused).length;
-    out.push({ user_id: u.id, name: u.ic_name || u.global_name || u.username, static_id: u.static_id || '', staff_since: u.staff_since, strikes: n, label: strikeLabel(n), list });
+    out.push({ user_id: u.id, name: u.ic_name || u.global_name || u.username, static_id: u.static_id || '', staff_since: u.staff_since, strikes: n, label: strikeLabel(n), list, dossier_penalties: pm.get(u.id) || 0 });
   }
   out.sort((a, b) => b.strikes - a.strikes || String(a.name).localeCompare(String(b.name), 'ru'));
   return { last_closed_week: lastClosed, users: out };
@@ -2743,43 +2748,313 @@ async function publicPremiums(env, user, url) {
     totals: final ? { fund: rows.reduce((s, r) => s + r.total_fund, 0), award_budget: rows.reduce((s, r) => s + r.award_budget, 0) } : null });
 }
 
-// ---------- личные дела (доступно всем, кто вошёл) ----------
-async function peopleList(env) {
-  const ids = adminIds(env);
-  const { results } = await env.DB.prepare(`SELECT id, username, global_name, avatar, ic_name, static_id, rank, position, staff_position, vp, reatt, leader, role, staff, senior FROM users
-    WHERE blocked = 0 AND (vp = 1 OR staff = 1 OR leader = 1 OR role IN ('examiner', 'admin')${ids.length ? ` OR id IN (${ids.map((_, i) => '?' + (i + 1)).join(', ')})` : ''})`).bind(...ids).all();
-  const cfg = await premConfig(env);
-  const pos = (u) => u.position || ((cfg.positions.find(p => p.key === u.staff_position) || {}).name || '');
-  const people = results.map(u => personCard(env, u, pos(u)));
-  people.sort((a, b) => String(a.name).localeCompare(String(b.name), 'ru'));
-  return json({ people });
+// ---------- личные дела (досье сотрудников ГУ ВП) ----------
+// Просмотр — всем, кто вошёл. Заполняет и меняет только старший состав (caps.ss: «Руководство ГУ ВП», администраторы
+// и отметка «Старший состав» в составе ГУ ВП). Чувствительные поля (возраст, часовой пояс, оценка знаний СС,
+// характеристика/заметки, журнал изменений) отдаются только старшему составу и самому сотруднику — фильтр здесь, на сервере.
+const DZ_SENSITIVE = ['age', 'timezone', 'law_score', 'law_comment', 'notes'];
+const DZ_KINDS = { penalty: 'Взыскание', reward: 'Поощрение', promotion: 'Повышение', demotion: 'Понижение', transfer: 'Перевод', note: 'Заметка' };
+const DZ_PENALTIES = ['Устное замечание', 'Предупреждение', 'Выговор', 'Строгий выговор', 'Неполное служебное соответствие', 'Отстранение', 'Другое'];
+const DZ_REWARDS = ['Благодарность', 'Поощрение', 'Почётная грамота', 'Денежная премия', 'Досрочное повышение', 'Другое'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function requireSS(user) { if (!caps(user).ss) throw new HttpError(403, 'Личные дела заполняет только старший состав ГУ ВП'); }
+function dzDate(v, name, required) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) { if (required) throw new HttpError(400, 'Не заполнено: ' + name); return null; }
+  const d = new Date(s + 'T00:00:00Z');
+  if (!DATE_RE.test(s) || isNaN(d) || d.toISOString().slice(0, 10) !== s) throw new HttpError(400, `Некорректная дата: ${name} (ГГГГ-ММ-ДД)`);
+  if (s < '2000-01-01' || s > new Date(Date.now() + 86400000 * 2).toISOString().slice(0, 10)) throw new HttpError(400, `Дата вне допустимого диапазона: ${name}`);
+  return s;
+}
+function dzUrl(v, name) {
+  const s = str(v, 500, { name }); if (!s) return '';
+  let u; try { u = new URL(s); } catch (_) { throw new HttpError(400, `Нужна ссылка (https://…): ${name}`); }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new HttpError(400, `Нужна ссылка (https://…): ${name}`);
+  return u.toString();
+}
+function dzList(v, name, car) {
+  if (v == null || v === '') return [];
+  if (!Array.isArray(v) || v.length > 15) throw new HttpError(400, `${name}: список до 15 записей`);
+  return v.map((x, i) => {
+    const o = { model: str(x && x.model, 60, { name: `${name} ${i + 1}: модель` }), plate: str(x && x.plate, 20, { name: `${name} ${i + 1}: номер` }).toUpperCase() };
+    if (!o.model && !o.plate) return null;
+    if (!o.plate) throw new HttpError(400, `${name} ${i + 1}: укажите номер`);
+    if (car) o.main = !!(x.main === true || x.main === 1 || x.main === '1');
+    return o;
+  }).filter(Boolean);
+}
+function dossierInput(b) {
+  const o = {};
+  if (b.joined_on !== undefined) o.joined_on = dzDate(b.joined_on, 'дата вступления в ГУ ВП');
+  if (b.age !== undefined) o.age = b.age === '' || b.age == null ? null : int(b.age, 14, 99, 'возраст');
+  if (b.timezone !== undefined) o.timezone = str(b.timezone, 40, { name: 'часовой пояс' }) || null;
+  if (b.online_hours !== undefined) {
+    if (b.online_hours === '' || b.online_hours == null) o.online_hours = null;
+    else { const n = Number(String(b.online_hours).replace(',', '.')); if (!Number.isFinite(n) || n < 0 || n > 24) throw new HttpError(400, 'Средний онлайн: от 0 до 24 часов в день'); o.online_hours = Math.round(n * 10) / 10; }
+  }
+  if (b.online_time !== undefined) o.online_time = str(b.online_time, 80, { name: 'обычное время онлайна' }) || null;
+  if (b.discord !== undefined) o.discord = str(b.discord, 60, { name: 'Discord' }) || null;
+  if (b.vehicles !== undefined) o.vehicles = JSON.stringify(dzList(b.vehicles, 'Личное ТС', false));
+  if (b.service_cars !== undefined) o.service_cars = JSON.stringify(dzList(b.service_cars, 'Служебный автомобиль', true));
+  if (b.law_score !== undefined) o.law_score = b.law_score === '' || b.law_score == null ? null : int(b.law_score, 1, 5, 'оценка знания законодательства');
+  if (b.law_comment !== undefined) o.law_comment = str(b.law_comment, 1000, { name: 'комментарий к оценке' }) || null;
+  if (b.notes !== undefined) o.notes = str(b.notes, 5000, { name: 'характеристика / заметки' });
+  return o;
+}
+const dzName = (u) => u ? (u.ic_name || u.global_name || u.username || u.id) : '';
+function dzRoles(env, u) {
+  const su = isSuper(env, u.id);
+  return [u.vp && 'ВП', u.staff && 'Состав ГУ ВП', u.senior && 'Старший состав', u.leader && 'Руководство ГУ ВП', (u.role === 'admin' || su) && 'Администратор', u.role === 'examiner' && 'Проверяющий', u.reatt && 'Переаттестация'].filter(Boolean);
 }
 function personCard(env, u, position) {
-  const su = isSuper(env, u.id);
-  return { id: u.id, name: u.ic_name || u.global_name || u.username, has_ic: !!u.ic_name, discord: u.username, rank: u.rank || '', static_id: u.static_id || '', position: position || '',
-    avatar_url: u.avatar ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=128` : null,
-    roles: [u.vp && 'ВП', u.leader && 'Руководство ГУ ВП', (u.role === 'admin' || su) && 'Администратор', u.role === 'examiner' && 'Проверяющий', u.reatt && 'Переаттестация', u.senior && 'Старший состав'].filter(Boolean) };
+  return { id: u.id, name: dzName(u), has_ic: !!u.ic_name, discord: u.username, rank: u.rank || '', static_id: u.static_id || '', position: position || '',
+    avatar_url: u.avatar ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=128` : null, roles: dzRoles(env, u) };
 }
-async function personFile(env, id) {
-  const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1 AND blocked = 0').bind(id).first();
-  if (!u) throw new HttpError(404, 'Личное дело не найдено');
+const dzPos = (cfg, u) => u.position || ((cfg.positions.find(p => p.key === u.staff_position) || {}).name || '');
+async function peopleList(env, viewer) {
   const cfg = await premConfig(env);
-  const position = u.position || ((cfg.positions.find(p => p.key === u.staff_position) || {}).name || '');
-  const { results: reps } = await env.DB.prepare('SELECT id, week, position, status, late, points, data, item_review, first_submitted_at FROM reports WHERE user_id = ?1 ORDER BY week DESC LIMIT 60').bind(id).all();
+  const { results } = await env.DB.prepare(`SELECT u.id, u.username, u.global_name, u.avatar, u.ic_name, u.static_id, u.rank, u.position, u.staff_position, u.vp, u.reatt, u.leader, u.role, u.staff, u.senior,
+      d.status, d.joined_on, d.service_cars, d.archived_at, d.archive_reason,
+      (SELECT COUNT(*) FROM dossier_events e WHERE e.user_id = u.id AND e.kind = 'penalty' AND e.deleted_at IS NULL AND e.lifted_at IS NULL) AS pen_active,
+      (SELECT COUNT(*) FROM dossier_events e WHERE e.user_id = u.id AND e.kind = 'reward' AND e.deleted_at IS NULL) AS rewards
+    FROM dossiers d JOIN users u ON u.id = d.user_id`).all();
+  const strikes = await strikeMap(env, cfg);
+  const people = results.map(u => {
+    const cars = parseJ(u.service_cars, []); const main = cars.find(c => c.main) || cars[0];
+    return { ...personCard(env, u, dzPos(cfg, u)), status: u.status, archived: u.status === 'archived', archived_at: u.archived_at, archive_reason: u.status === 'archived' ? u.archive_reason || '' : '',
+      joined_on: u.joined_on, car: main ? main.model + ' · ' + main.plate : '', pen_active: u.pen_active, rewards: u.rewards, strikes: strikes.get(u.id) || 0 };
+  });
+  people.sort((a, b) => a.archived - b.archived || String(a.name).localeCompare(String(b.name), 'ru'));
+  let candidates = [];
+  if (caps(viewer).ss) {
+    const { results: c } = await env.DB.prepare(`SELECT id, username, global_name, avatar, ic_name, static_id, rank, position, staff_position, vp, reatt, leader, role, staff, senior FROM users
+      WHERE blocked = 0 AND id NOT IN (SELECT user_id FROM dossiers) ORDER BY COALESCE(ic_name, global_name, username)`).all();
+    candidates = c.map(u => ({ ...personCard(env, u, dzPos(cfg, u)), eligible: !!(u.vp || u.staff) }));
+  }
+  return json({ people, candidates, can_edit: !!caps(viewer).ss, positions: [...new Set(people.map(p => p.position).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru')) });
+}
+const dzAt = (date) => Date.parse(date + 'T12:00:00+03:00');
+async function personFile(env, viewer, id) {
+  const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(id).first();
+  if (!u || (u.blocked && !caps(viewer).ss)) throw new HttpError(404, 'Личное дело не найдено');
+  const C = caps(viewer); const self = viewer.id === id; const priv = C.ss || self; const money = C.ss || self || C.vp;
+  const cfg = await premConfig(env);
+  const dz = await env.DB.prepare('SELECT * FROM dossiers WHERE user_id = ?1').bind(id).first();
+  const position = dzPos(cfg, u);
+  const names = new Map();
+  const nameOf = async (uid) => { if (!uid || uid === 'migration') return uid === 'migration' ? 'система' : ''; if (!names.has(uid)) { const r = await env.DB.prepare('SELECT id, ic_name, global_name, username FROM users WHERE id = ?1').bind(uid).first(); names.set(uid, r ? dzName(r) : uid); } return names.get(uid); };
+  // ---- ручные поля
+  let dossier = null;
+  if (dz) {
+    dossier = { status: dz.status, joined_on: dz.joined_on, online_hours: dz.online_hours, online_time: dz.online_time || '', discord: dz.discord || u.username || '',
+      vehicles: parseJ(dz.vehicles, []), service_cars: parseJ(dz.service_cars, []), archived_at: dz.archived_at, archive_reason: dz.archive_reason || '',
+      created_at: dz.created_at, created_by: await nameOf(dz.created_by), updated_at: dz.updated_at, updated_by: await nameOf(dz.updated_by), sensitive_hidden: !priv };
+    if (priv) Object.assign(dossier, { age: dz.age, timezone: dz.timezone || '', law_score: dz.law_score, law_comment: dz.law_comment || '', notes: dz.notes || '' });
+  }
+  // ---- ручная история
+  const { results: ev0 } = await env.DB.prepare('SELECT * FROM dossier_events WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY on_date DESC, id DESC').bind(id).all();
+  const events = [];
+  for (const e of ev0) events.push({ id: e.id, kind: e.kind, subtype: e.subtype, on_date: e.on_date, reason: e.reason, evidence: e.evidence, issued_by: e.issued_by,
+    from_rank: e.from_rank, to_rank: e.to_rank, from_position: e.from_position, to_position: e.to_position, active: e.kind === 'penalty' && !e.lifted_at,
+    lifted_at: e.lifted_at, lifted_by: await nameOf(e.lifted_by), lift_reason: e.lift_reason || '', created_at: e.created_at, created_by: await nameOf(e.created_by) });
+  // ---- отчёты (авто)
+  const { results: reps } = await env.DB.prepare('SELECT id, week, position, status, late, points, data, item_review, first_submitted_at FROM reports WHERE user_id = ?1 ORDER BY week DESC LIMIT 104').bind(id).all();
   let thanks = 0;
-  const reports = reps.map(r => {
+  const reports = [];
+  const now = Date.now();
+  for (const [i, r] of reps.entries()) {
     const d = parseJ(r.data, {}); const c = premCounts(d.items, parseJ(r.item_review, {}));
     if (r.status === 'approved') thanks += c.thanks || 0;
-    return { week: r.week, status: r.status, late: !!r.late, points: r.points, position_name: (cfg.positions.find(p => p.key === r.position) || {}).name || '', thanks: r.status === 'approved' ? (c.thanks || 0) : 0,
-      plan: r.status === 'approved' ? premPlan(cfg, c).level : null };
-  });
+    const o = { week: r.week, status: r.status, late: !!r.late, points: r.points, submitted_at: r.first_submitted_at, position_name: (cfg.positions.find(p => p.key === r.position) || {}).name || '',
+      thanks: r.status === 'approved' ? (c.thanks || 0) : 0, plan: r.status === 'rejected' ? null : premPlan(cfg, c).level, plan_final: r.status === 'approved' };
+    // премия — только если её видно и в «Премировании»: в срок, принят, срок недели прошёл, все отчёты недели проверены
+    if (money && i < 26 && r.status === 'approved' && !r.late && now > weekDeadline(r.week, cfg.rules)) {
+      const w = await weekData(env, r.week);
+      const onTime = w.list.filter(p => p.report && !p.late);
+      const final = onTime.length > 0 && !onTime.some(p => p.status === 'submitted' || p.status === 'review');
+      const k = w.list.findIndex(p => p.user_id === id); const row = k >= 0 ? w.calc.rows[k] : null;
+      if (row) o.premium = final ? (row.eligible ? { total: row.total_fund, award_budget: row.award_budget } : { total: 0, reason: row.reason || '' }) : { pending: true };
+    }
+    reports.push(o);
+  }
+  // ---- авто-нарушения по отчётам (состав ГУ ВП)
   let violations = [];
-  if (u.staff) { const v = await violationsData(env, cfg); const x = v.users.find(z => z.user_id === id); if (x) violations = x.list.filter(l => !l.excused).map((l, i) => ({ week: l.week, kind: l.kind, measure: strikeLabel(i + 1) })); }
-  const { results: atts0 } = await env.DB.prepare("SELECT a.*, e.title AS exam_title FROM attempts a LEFT JOIN exams e ON e.id = a.exam_id WHERE a.user_id = ?1 AND a.status = 'passed' ORDER BY a.id DESC LIMIT 50").bind(id).all();
-  const atts = await attemptTitles(env, atts0);
-  return json({ person: personCard(env, u, position), since: u.created_at, staff: !!u.staff, staff_since: u.staff_since || null,
-    reports, thanks_total: thanks, violations, strikes: violations.length, strike_label: strikeLabel(violations.length),
-    exams: atts.map(a => ({ title: a.exam_title || (a.reatt ? 'Переаттестация' : 'Экзамен'), reatt: !!a.reatt, at: a.submitted_at || a.started_at, score_pct: a.score_pct })) });
+  if (u.staff) { const v = await violationsData(env, cfg); const x = v.users.find(z => z.user_id === id); if (x) { let n = 0; violations = x.list.map(l => ({ week: l.week, kind: l.kind, excused: l.excused, note: l.excused ? l.note : '', measure: l.excused ? 'снято' : strikeLabel(++n), at: weekDeadline(l.week, cfg.rules) })); } }
+  const strikes = violations.filter(v => !v.excused).length;
+  // ---- экзамены и переаттестации
+  const { results: at0 } = await env.DB.prepare("SELECT a.id, a.exam_id, a.reatt, a.status, a.started_at, a.submitted_at, a.score_pct, e.title AS exam_title FROM attempts a LEFT JOIN exams e ON e.id = a.exam_id WHERE a.user_id = ?1 AND a.status != 'in_progress' ORDER BY a.id DESC LIMIT 200").bind(id).all();
+  const attempts = (await attemptTitles(env, at0)).map(a => ({ id: a.id, title: a.exam_title || (a.reatt ? 'Переаттестация' : 'Экзамен'), reatt: !!a.reatt, at: a.submitted_at || a.started_at,
+    status: a.status, passed: a.status === 'passed', score_pct: a.status === 'pending_review' ? null : a.score_pct }));
+  const scored = attempts.filter(a => a.score_pct != null);
+  const stat = (l) => l.length ? { n: l.length, best: Math.max(...l.map(a => a.score_pct)), avg: Math.round(l.reduce((s, a) => s + a.score_pct, 0) / l.length), passed: l.filter(a => a.passed).length } : null;
+  const law_auto = { all: stat(scored), exams: stat(scored.filter(a => !a.reatt)), reatt: stat(scored.filter(a => a.reatt)) };
+  // ---- обучение: курсы и лекции
+  const { results: crs } = await env.DB.prepare('SELECT id, title FROM courses WHERE published = 1 ORDER BY position, id').all();
+  const { results: lecs } = await env.DB.prepare(`SELECT l.id, l.title, l.course_id, l.required, p.completed_at FROM lectures l LEFT JOIN lecture_progress p ON p.lecture_id = l.id AND p.user_id = ?1 WHERE l.published = 1 ORDER BY l.position, l.id`).bind(id).all();
+  const { results: exs } = await env.DB.prepare('SELECT id, course_id FROM exams WHERE published = 1').all();
+  const passedEx = new Set(attempts.filter(a => a.passed && !a.reatt).map(a => at0.find(x => x.id === a.id).exam_id));
+  const courses = crs.map(c => { const ls = lecs.filter(l => l.course_id === c.id); const ex = exs.filter(e => e.course_id === c.id);
+    return { id: c.id, title: c.title, lectures: ls.length, done: ls.filter(l => l.completed_at).length, exams: ex.length, exams_passed: ex.filter(e => passedEx.has(e.id)).length,
+      complete: ls.filter(l => l.required).every(l => l.completed_at) && ex.every(e => passedEx.has(e.id)) && (ls.length + ex.length > 0) }; }).filter(c => c.lectures || c.exams);
+  const lectures_done = lecs.filter(l => l.completed_at).map(l => ({ title: l.title, at: l.completed_at }));
+  // ---- журнал изменений (профиль, состав, досье) — только СС и сам сотрудник
+  let log = [];
+  if (priv) {
+    const { results: lg } = await env.DB.prepare(`SELECT a.action, a.actor_id, a.details, a.at FROM audit_log a WHERE a.target = ?1 AND (a.action IN ('profile.update', 'profile.self', 'staff.update', 'user.update') OR a.action LIKE 'dossier.%') ORDER BY a.id DESC LIMIT 200`).bind(id).all();
+    for (const r of lg) log.push({ action: r.action, at: r.at, by: await nameOf(r.actor_id), self: r.actor_id === id, details: parseJ(r.details, {}) });
+  }
+  // ---- единая хронология
+  const tl = [];
+  for (const e of events) tl.push({ at: dzAt(e.on_date), date: e.on_date, type: e.kind, title: (e.subtype || DZ_KINDS[e.kind] || e.kind) + (e.kind === 'penalty' && e.lifted_at ? ' (снято)' : ''),
+    text: [e.from_rank || e.to_rank ? `${e.from_rank || '—'} → ${e.to_rank || e.from_rank || '—'}` : '', e.from_position || e.to_position ? `${e.from_position || '—'} → ${e.to_position || e.from_position || '—'}` : '', e.reason].filter(Boolean).join(' · '), by: e.issued_by || e.created_by, link: e.evidence });
+  for (const r of reports) tl.push({ at: r.submitted_at || dzAt(r.week), type: 'report', title: 'Еженедельный отчёт · ' + r.week, text: [r.late ? 'после срока' : 'в срок', r.plan ? 'план: ' + ({ normal: 'нормальный', min: 'минимальный', none: 'не выполнен' })[r.plan] + (r.plan_final ? '' : ' (до проверки)') : '', r.points + ' б.'].filter(Boolean).join(' · '), status: r.status });
+  for (const v of violations) tl.push({ at: v.at, type: 'violation', title: (v.kind === 'late' ? 'Отчёт после срока' : 'Отчёт не сдан') + ' · ' + v.week, text: v.excused ? 'снято руководством' + (v.note ? ': ' + v.note : '') : v.measure });
+  for (const a of attempts) tl.push({ at: a.at, type: a.reatt ? 'reatt' : 'exam', title: a.title, text: (a.status === 'pending_review' ? 'на проверке' : a.passed ? 'сдан' : 'не сдан') + (a.score_pct != null ? ' · ' + a.score_pct + '%' : '') });
+  for (const l of lectures_done) tl.push({ at: l.at, type: 'lecture', title: 'Лекция пройдена', text: l.title });
+  if (dz && dz.created_by !== 'migration') tl.push({ at: dz.created_at, type: 'dossier', title: 'Заведено личное дело', text: '', by: await nameOf(dz.created_by) });
+  tl.sort((a, b) => (b.at || 0) - (a.at || 0));
+  const pen = events.filter(e => e.kind === 'penalty');
+  return json({ person: personCard(env, u, position), blocked: !!u.blocked, since: u.created_at, last_login_at: priv ? u.last_login_at : undefined,
+    staff: !!u.staff, senior: !!u.senior, staff_since: u.staff_since || null, eligible: !!(u.vp || u.staff),
+    dossier, events, can_edit: C.ss && (!self || C.admin), can_ss: C.ss, self, show_private: priv, show_money: money,
+    reports, thanks_total: thanks, violations, strikes, strike_label: strikeLabel(strikes),
+    penalties_active: pen.filter(e => e.active).length, rewards_total: events.filter(e => e.kind === 'reward').length,
+    attempts, law_auto, courses, lectures_done: lectures_done.length, log, timeline: tl.slice(0, 400),
+    exams: attempts.filter(a => a.passed).map(a => ({ title: a.title, reatt: a.reatt, at: a.at, score_pct: a.score_pct })),
+    lists: { penalties: DZ_PENALTIES, rewards: DZ_REWARDS, kinds: DZ_KINDS } });
+}
+// старший состав не правит собственное дело (кроме администраторов) — чтобы не снимать себе взыскания
+async function dzTarget(env, actor, id, needDossier = true) {
+  requireSS(actor);
+  if (actor.id === id && !caps(actor).admin) throw new HttpError(403, 'Своё личное дело правит другой сотрудник старшего состава');
+  const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(id).first();
+  if (!u) throw new HttpError(404, 'Пользователь не найден');
+  const dz = await env.DB.prepare('SELECT * FROM dossiers WHERE user_id = ?1').bind(id).first();
+  if (needDossier && !dz) throw new HttpError(404, 'Личное дело не заведено');
+  return { u, dz };
+}
+async function dzCreate(request, env, actor, id) {
+  const { u, dz } = await dzTarget(env, actor, id, false);
+  if (dz) throw new HttpError(409, 'Личное дело уже заведено');
+  if (!(u.vp || u.staff)) throw new HttpError(400, 'Личное дело заводится только на сотрудника ГУ ВП: сначала выдайте роль «ВП» или добавьте в состав');
+  const b = await readJson(request).catch(() => ({}));
+  const o = dossierInput(b || {}); const now = Date.now();
+  if (o.joined_on === undefined) o.joined_on = u.staff_since || new Date(now + 3 * 3600000).toISOString().slice(0, 10);
+  const keys = Object.keys(o);
+  await env.DB.prepare(`INSERT INTO dossiers (user_id, status, created_by, created_at, updated_by, updated_at${keys.map(k => ', ' + k).join('')}) VALUES (?1, 'active', ?2, ?3, ?2, ?3${keys.map((_, i) => ', ?' + (i + 4)).join('')})`)
+    .bind(id, actor.id, now, ...keys.map(k => o[k])).run();
+  await audit(env, actor, 'dossier.create', id, { fields: keys });
+  return personFile(env, actor, id);
+}
+async function dzUpdate(request, env, actor, id) {
+  const { u, dz } = await dzTarget(env, actor, id);
+  const b = await readJson(request, 100000);
+  const o = dossierInput(b); const prof = profileInput(b, true);
+  const ch = {}; for (const k of Object.keys(o)) if (String(dz[k] ?? '') !== String(o[k] ?? '')) ch[k] = DZ_SENSITIVE.includes(k) || k === 'vehicles' || k === 'service_cars' ? true : [dz[k] ?? '', o[k] ?? ''];
+  const pch = {}; for (const k of Object.keys(prof)) if (String(u[k] || '') !== String(prof[k] || '')) pch[k] = [u[k] || '', prof[k] || ''];
+  if (!Object.keys(ch).length && !Object.keys(pch).length) return personFile(env, actor, id);
+  const keys = Object.keys(o).filter(k => ch[k] !== undefined);
+  if (keys.length) await env.DB.prepare(`UPDATE dossiers SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_by = ?${keys.length + 1}, updated_at = ?${keys.length + 2} WHERE user_id = ?${keys.length + 3}`)
+    .bind(...keys.map(k => o[k]), actor.id, Date.now(), id).run();
+  if (Object.keys(pch).length) {
+    const pk = Object.keys(pch);
+    await env.DB.prepare(`UPDATE users SET ${pk.map((k, i) => `${k} = ?${i + 1}`).join(', ')} WHERE id = ?${pk.length + 1}`).bind(...pk.map(k => prof[k]), id).run();
+    await audit(env, actor, 'profile.update', id, pch);
+    if (!keys.length) await env.DB.prepare('UPDATE dossiers SET updated_by = ?1, updated_at = ?2 WHERE user_id = ?3').bind(actor.id, Date.now(), id).run();
+  }
+  // в журнал: что изменилось (значения чувствительных полей и списков ТС не пишем — только факт изменения)
+  if (keys.length) await audit(env, actor, 'dossier.update', id, ch);
+  return personFile(env, actor, id);
+}
+async function dzArchive(request, env, actor, id, archive) {
+  const { dz } = await dzTarget(env, actor, id);
+  const b = await readJson(request).catch(() => ({})) || {};
+  const reason = str(b.reason, 500, { required: archive, name: 'причина (увольнение и т. п.)' });
+  if (archive === (dz.status === 'archived')) throw new HttpError(400, archive ? 'Дело уже в архиве' : 'Дело не в архиве');
+  const now = Date.now(); const today = new Date(now + 3 * 3600000).toISOString().slice(0, 10);
+  await env.DB.prepare('UPDATE dossiers SET status = ?1, archived_at = ?2, archive_reason = ?3, updated_by = ?4, updated_at = ?5 WHERE user_id = ?6')
+    .bind(archive ? 'archived' : 'active', archive ? now : null, archive ? reason : null, actor.id, now, id).run();
+  await env.DB.prepare(`INSERT INTO dossier_events (user_id, kind, subtype, on_date, reason, issued_by, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`)
+    .bind(id, archive ? 'archive' : 'restore', archive ? 'Увольнение — дело в архиве' : 'Восстановлен — дело из архива', dzDate(b.on_date, 'дата') || today, reason, dzName(actor), actor.id, now).run();
+  await audit(env, actor, archive ? 'dossier.archive' : 'dossier.restore', id, { reason });
+  return personFile(env, actor, id);
+}
+function dzEventInput(b, cur, partial) {
+  const kind = partial ? cur.kind : String(b.kind || '');
+  if (!DZ_KINDS[kind]) throw new HttpError(400, 'Тип записи: взыскание, поощрение, повышение, понижение, перевод или заметка');
+  const o = { kind };
+  const has = (k) => !partial || b[k] !== undefined;
+  if (has('subtype')) o.subtype = str(b.subtype, 60, { name: 'вид' });
+  if (has('on_date')) o.on_date = dzDate(b.on_date, 'дата', true);
+  if (has('reason')) o.reason = str(b.reason, 2000, { name: kind === 'note' ? 'текст заметки' : 'причина / основание', required: kind === 'penalty' || kind === 'reward' || kind === 'note' });
+  if (has('evidence')) o.evidence = dzUrl(b.evidence, 'доказательство');
+  if (has('issued_by')) o.issued_by = str(b.issued_by, 100, { name: 'кем выдано' });
+  if (kind === 'penalty' && has('subtype') && !o.subtype) o.subtype = 'Выговор';
+  if (kind === 'reward' && has('subtype') && !o.subtype) o.subtype = 'Благодарность';
+  if (['promotion', 'demotion', 'transfer'].includes(kind)) {
+    for (const k of ['from_rank', 'to_rank']) if (has(k)) o[k] = str(b[k], 60, { name: k === 'to_rank' ? 'новое звание' : 'прежнее звание' }) || null;
+    for (const k of ['from_position', 'to_position']) if (has(k)) o[k] = str(b[k], 80, { name: k === 'to_position' ? 'новая должность' : 'прежняя должность' }) || null;
+    if (!partial && !o.to_rank && !o.to_position) throw new HttpError(400, 'Укажите новое звание и/или новую должность');
+  }
+  return o;
+}
+async function dzEventAdd(request, env, actor, id) {
+  const { u } = await dzTarget(env, actor, id);
+  const b = await readJson(request, 20000);
+  const o = dzEventInput(b, null, false); const now = Date.now();
+  if (!o.issued_by) o.issued_by = dzName(actor);
+  // повышение / понижение / перевод: «с» — по умолчанию из профиля; новое звание/должность записываются в профиль
+  const prof = {};
+  if (['promotion', 'demotion', 'transfer'].includes(o.kind)) {
+    if (o.to_rank && b.from_rank === undefined) o.from_rank = u.rank || null;
+    if (o.to_position && b.from_position === undefined) o.from_position = u.position || null;
+    if (b.apply_profile !== false) { if (o.to_rank && o.to_rank !== (u.rank || '')) prof.rank = [u.rank || '', o.to_rank]; if (o.to_position && o.to_position !== (u.position || '')) prof.position = [u.position || '', o.to_position]; }
+    if (!o.subtype) o.subtype = DZ_KINDS[o.kind];
+  }
+  const cols = Object.keys(o);
+  const r = await env.DB.prepare(`INSERT INTO dossier_events (user_id, ${cols.join(', ')}, created_by, created_at) VALUES (?1, ${cols.map((_, i) => '?' + (i + 2)).join(', ')}, ?${cols.length + 2}, ?${cols.length + 3}) RETURNING id`)
+    .bind(id, ...cols.map(k => o[k]), actor.id, now).first();
+  const pk = Object.keys(prof);
+  if (pk.length) {
+    await env.DB.prepare(`UPDATE users SET ${pk.map((k, i) => `${k} = ?${i + 1}`).join(', ')} WHERE id = ?${pk.length + 1}`).bind(...pk.map(k => prof[k][1]), id).run();
+    await audit(env, actor, 'profile.update', id, { ...prof, via: 'личное дело: ' + DZ_KINDS[o.kind].toLowerCase() });
+  }
+  await env.DB.prepare('UPDATE dossiers SET updated_by = ?1, updated_at = ?2 WHERE user_id = ?3').bind(actor.id, now, id).run();
+  await audit(env, actor, 'dossier.event.add', id, { event: r.id, kind: o.kind, subtype: o.subtype, on_date: o.on_date });
+  return personFile(env, actor, id);
+}
+async function dzEventGet(env, id, eid) {
+  const e = await env.DB.prepare('SELECT * FROM dossier_events WHERE id = ?1 AND user_id = ?2 AND deleted_at IS NULL').bind(eid, id).first();
+  if (!e) throw new HttpError(404, 'Запись не найдена');
+  if (e.kind === 'archive' || e.kind === 'restore') throw new HttpError(400, 'Запись об архиве меняется кнопками «В архив» / «Вернуть из архива»');
+  return e;
+}
+async function dzEventUpdate(request, env, actor, id, eid) {
+  await dzTarget(env, actor, id); const e = await dzEventGet(env, id, eid);
+  const o = dzEventInput(await readJson(request, 20000), e, true); delete o.kind;
+  const keys = Object.keys(o); if (!keys.length) throw new HttpError(400, 'Нечего изменять');
+  await env.DB.prepare(`UPDATE dossier_events SET ${keys.map((k, i) => `${k} = ?${i + 1}`).join(', ')}, updated_by = ?${keys.length + 1}, updated_at = ?${keys.length + 2} WHERE id = ?${keys.length + 3}`)
+    .bind(...keys.map(k => o[k]), actor.id, Date.now(), eid).run();
+  await audit(env, actor, 'dossier.event.update', id, { event: eid, fields: keys });
+  return personFile(env, actor, id);
+}
+async function dzEventLift(request, env, actor, id, eid, lift) {
+  await dzTarget(env, actor, id); const e = await dzEventGet(env, id, eid);
+  if (e.kind !== 'penalty') throw new HttpError(400, 'Снять можно только взыскание');
+  const b = await readJson(request).catch(() => ({})) || {};
+  if (lift) {
+    if (e.lifted_at) throw new HttpError(400, 'Взыскание уже снято');
+    const reason = str(b.reason, 500, { required: true, name: 'основание снятия' });
+    await env.DB.prepare('UPDATE dossier_events SET lifted_at = ?1, lifted_by = ?2, lift_reason = ?3 WHERE id = ?4').bind(Date.now(), actor.id, reason, eid).run();
+  } else await env.DB.prepare('UPDATE dossier_events SET lifted_at = NULL, lifted_by = NULL, lift_reason = NULL WHERE id = ?1').bind(eid).run();
+  await audit(env, actor, lift ? 'dossier.event.lift' : 'dossier.event.unlift', id, { event: eid });
+  return personFile(env, actor, id);
+}
+async function dzEventDelete(request, env, actor, id, eid) {
+  await dzTarget(env, actor, id); const e = await dzEventGet(env, id, eid);
+  await env.DB.prepare('UPDATE dossier_events SET deleted_at = ?1, updated_by = ?2, updated_at = ?1 WHERE id = ?3').bind(Date.now(), actor.id, eid).run();
+  await audit(env, actor, 'dossier.event.delete', id, { event: eid, kind: e.kind, subtype: e.subtype, on_date: e.on_date, reason: String(e.reason || '').slice(0, 300) });
+  return personFile(env, actor, id);
 }
 
 // ---------- система повышения ----------
@@ -2888,8 +3163,19 @@ async function route(request, env, ctx) {
   if (p === '/api/docs' && M === 'POST') { requireCap(user, 'admin'); return saveDoc(request, env, user, null); }
   if ((m = /^\/api\/docs\/(\d+)$/.exec(p)) && M === 'PUT') { requireCap(user, 'admin'); return saveDoc(request, env, user, idParam(m[1])); }
   if ((m = /^\/api\/docs\/(\d+)$/.exec(p)) && M === 'DELETE') { requireCap(user, 'admin'); return deleteDoc(env, user, idParam(m[1])); }
-  if (p === '/api/people' && M === 'GET') return peopleList(env);
-  if ((m = /^\/api\/people\/(\d{5,25})$/.exec(p)) && M === 'GET') return personFile(env, m[1]);
+  if (p === '/api/people' && M === 'GET') return peopleList(env, user);
+  if ((m = /^\/api\/people\/(\d{5,25})$/.exec(p))) {
+    if (M === 'GET') return personFile(env, user, m[1]);
+    if (M === 'POST') return dzCreate(request, env, user, m[1]);
+    if (M === 'PUT') return dzUpdate(request, env, user, m[1]);
+  }
+  if ((m = /^\/api\/people\/(\d{5,25})\/(archive|restore)$/.exec(p)) && M === 'POST') return dzArchive(request, env, user, m[1], m[2] === 'archive');
+  if ((m = /^\/api\/people\/(\d{5,25})\/events$/.exec(p)) && M === 'POST') return dzEventAdd(request, env, user, m[1]);
+  if ((m = /^\/api\/people\/(\d{5,25})\/events\/(\d+)$/.exec(p))) {
+    if (M === 'PUT') return dzEventUpdate(request, env, user, m[1], idParam(m[2]));
+    if (M === 'DELETE') return dzEventDelete(request, env, user, m[1], idParam(m[2]));
+  }
+  if ((m = /^\/api\/people\/(\d{5,25})\/events\/(\d+)\/(lift|unlift)$/.exec(p)) && M === 'POST') return dzEventLift(request, env, user, m[1], idParam(m[2]), m[3] === 'lift');
 
   // роль «ВП»: учебный отдел (курсы), премирование, система повышения
   if (p === '/api/courses' && M === 'GET') return listCourses(env, user);

@@ -113,6 +113,8 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   r = await call('GET', '/api/docs?q=наряд', T.none); check('статью видят все (поиск)', r.status === 200 && r.d.docs.some(d => d.id === docId), r.d);
   r = await call('PUT', '/api/docs/' + docId, T.vp, { category: 'Уставы', title: 'взлом', body: '' }); check('ВП не правит статью', r.status === 403);
   r = await call('PUT', '/api/docs/' + docId, T.admin, { category: 'Уставы', title: 'Порядок несения наряда (ред.)', body: 'текст' }); check('админ правит статью', r.status === 200);
+  // с миграции 0010 в списке — заведённые личные дела (заводит старший состав)
+  r = await call('POST', '/api/people/' + U.vp, T.lead, {}); check('руководство заводит личное дело ВП', r.status === 200, r.d);
   r = await call('GET', '/api/people', T.none); const pv = r.d.people.find(p => p.id === U.vp);
   check('личные дела: карточка ВП с ФИО, званием, статиком, должностью', pv && pv.name === 'Иван Петров' && pv.rank === 'Старший лейтенант' && pv.static_id === '4456' && pv.position === 'Инспектор ВП', pv);
   r = await call('GET', '/api/people/' + U.vp, T.none); check('личное дело: история отчётов', r.status === 200 && r.d.reports && r.d.reports.some(x => x.week === PREV), r.d);
