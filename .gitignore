@@ -12,3 +12,4 @@ tests/e2e-roles-results.json
 tests/e2e-course-pk-results.json
 tests/e2e-dossier-results.json
 tests/*-results.json
+content/build/
