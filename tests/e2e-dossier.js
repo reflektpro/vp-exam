@@ -1,4 +1,4 @@
-// E2E «Личные дела (досье сотрудников ГУ ВП)»: права (ВП не пишет, СС пишет), скрытие чувствительных полей, автоданные,
+// E2E «Личные дела (досье сотрудников ГУ ВП)»: видит и ведёт ТОЛЬКО старший состав (остальным и самому сотруднику — 403), автоданные,
 // повышение обновляет профиль, архив, журнал, вёрстка на телефоне. Headless, вход — /__test/login, без Discord.
 // Запуск: bash /tmp/reset.sh (миграции 0001–0010), node serve.js (:8080).
 const { chromium } = require('playwright');
@@ -24,7 +24,7 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
 
 (async () => {
   const T = { super: await login(SUPER, 'super-admin'), vp: await login(U.vp, 'vp_ivan', 'vp'), vp2: await login(U.vp2, 'vp_petr', 'vp'), none: await login(U.none, 'nobody', 'none'),
-    ss: await login(U.ss, 'ss_senior', 'vp'), lead: await login(U.lead, 'boss', 'leader'), vp3: await login(U.vp3, 'vp_new', 'vp') };
+    ss: await login(U.ss, 'ss_senior', 'vp'), lead: await login(U.lead, 'boss', 'leader'), vp3: await login(U.vp3, 'vp_new', 'vp'), exam: await login('810000000000000007', 'checker', 'examiner') };
   await sql('UPDATE users SET senior = 1, staff = 1 WHERE id = ?1', [U.ss]);
   await call('PUT', '/api/me', T.vp, { ic_name: 'Иван Петров', rank: 'Лейтенант', static_id: '4455', position: 'Инспектор ВП' });
 
@@ -35,7 +35,7 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   r = await call('GET', '/api/me', T.super); check('главный администратор — СС', r.d.user.caps.ss === true);
 
   // ---------- 2. заведение дела ----------
-  r = await call('GET', '/api/people', T.vp); check('ВП: дел на тестовых сотрудников нет, кандидатов не видит, править нельзя', r.status === 200 && !r.d.people.some(p => Object.values(U).includes(p.id)) && r.d.candidates.length === 0 && r.d.can_edit === false, r.d);
+  for (const [who, tok] of [['ВП', T.vp], ['без ролей', T.none], ['проверяющий', T.exam]]) { r = await call('GET', '/api/people', tok); check(`${who}: список личных дел — 403`, r.status === 403 && /старшему составу/.test(r.d.error), r.d); }
   r = await call('GET', '/api/people', T.ss); check('СС: видит кандидатов (с ролью ВП — можно завести)', r.d.can_edit && r.d.candidates.some(c => c.id === U.vp && c.eligible) && r.d.candidates.some(c => c.id === U.none && !c.eligible), r.d.candidates);
   r = await call('POST', '/api/people/' + U.vp, T.vp2, {}); check('ВП не может завести дело (403)', r.status === 403, r.d);
   r = await call('POST', '/api/people/' + U.vp, T.none, {}); check('без ролей — 403', r.status === 403);
@@ -61,16 +61,24 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   r = await call('PUT', '/api/people/' + U.vp, T.ss, { rank: 'Старший лейтенант' }); check('СС правит звание — обновляется профиль', r.status === 200 && r.d.person.rank === 'Старший лейтенант');
   r = await call('GET', '/api/me', T.vp); check('профиль сотрудника: звание из дела', r.d.user.rank === 'Старший лейтенант');
 
-  // ---------- 4. скрытие чувствительных полей (сервер) ----------
+  // ---------- 4. доступ: только старший состав ----------
   const SENS = ['age', 'timezone', 'law_score', 'law_comment', 'notes'];
-  for (const [who, tok, vis] of [['другой ВП', T.vp2, false], ['без ролей', T.none, false], ['сам сотрудник', T.vp, true], ['СС', T.ss, true], ['руководство', T.lead, true]]) {
+  for (const [who, tok] of [['другой ВП', T.vp2], ['без ролей', T.none], ['сам сотрудник (своё дело)', T.vp], ['проверяющий', T.exam]]) {
+    const bad = [];
+    for (const [m, path, body] of [['GET', '/api/people'], ['GET', '/api/people/' + U.vp], ['GET', '/api/people/' + U.ss], ['POST', '/api/people/' + U.vp3, {}], ['PUT', '/api/people/' + U.vp, { notes: 'x' }],
+      ['POST', `/api/people/${U.vp}/events`, { kind: 'note', on_date: today, reason: 'x' }], ['POST', `/api/people/${U.vp}/archive`, { reason: 'x' }], ['POST', `/api/people/${U.vp}/events/1/lift`, { reason: 'x' }], ['DELETE', `/api/people/${U.vp}/events/1`]]) {
+      const x = await call(m, path, tok, body); if (x.status !== 403 || x.raw.includes('СЕКРЕТНАЯ')) bad.push(`${m} ${path}: ${x.status}`);
+    }
+    check(`${who}: все API личных дел — 403`, !bad.length, bad);
+  }
+  for (const [who, tok] of [['СС (отметка)', T.ss], ['руководство', T.lead], ['главный администратор', T.super]]) {
     r = await call('GET', '/api/people/' + U.vp, tok);
-    const has = SENS.filter(k => r.d.dossier[k] !== undefined);
-    const leak = r.raw.includes('СЕКРЕТНАЯ_ХАРАКТЕРИСТИКА') || r.raw.includes('МСК+2') || r.raw.includes('путается');
-    check(`${who}: чувствительные поля ${vis ? 'видны' : 'скрыты на сервере'}`, r.status === 200 && (vis ? has.length === SENS.length && r.d.show_private : has.length === 0 && !leak && r.d.dossier.sensitive_hidden && r.d.log.length === 0), { has, leak });
-    if (!vis) check(`${who}: открытые поля видны (ТС, служебные авто, онлайн, дата вступления)`, r.d.dossier.service_cars.length === 2 && r.d.dossier.vehicles.length === 1 && r.d.dossier.online_hours === 4.5 && r.d.dossier.joined_on === '2026-03-15');
+    check(`${who}: дело видно целиком (все поля)`, r.status === 200 && SENS.every(k => r.d.dossier[k] !== undefined) && r.d.dossier.notes.includes('СЕКРЕТНАЯ') && r.d.dossier.service_cars.length === 2 && r.d.log.length > 0, r.d && r.d.dossier);
   }
 
+  r = await call('GET', '/api/docs', T.none); const dr = (r.d.docs || []).find(d => d.title === 'Роли и разделы сайта');
+  r = dr ? await call('GET', '/api/docs/' + dr.id, T.none) : { d: {} };
+  check('статья «Роли и разделы сайта»: Личные дела — только старший состав (миграция 0011)', r.d.doc && r.d.doc.body.includes('**Личные дела** (досье сотрудников ГУ ВП) — только старший состав') && !r.d.doc.body.includes('**Личные дела** — всем'), r.d.doc && r.d.doc.body.slice(0, 400));
   // ---------- 5. записи в историю ----------
   r = await call('POST', `/api/people/${U.vp}/events`, T.vp2, { kind: 'penalty', subtype: 'Выговор', on_date: today, reason: 'x' }); check('ВП не добавляет взыскание (403)', r.status === 403);
   r = await call('POST', `/api/people/${U.vp}/events`, T.ss, { kind: 'penalty', subtype: 'Выговор', on_date: today, reason: '' }); check('взыскание без причины — 400', r.status === 400);
@@ -109,11 +117,19 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   await sql("INSERT INTO attempts (exam_id, user_id, status, started_at, submitted_at, score_pct, max_score) VALUES (1, ?1, 'failed', ?2, ?2, 50, 10)", [U.vp, now - 86400000 * 4]);
   const lec = (await sql('SELECT id FROM lectures WHERE published = 1 ORDER BY id LIMIT 1'))[0];
   if (lec) await sql('INSERT OR REPLACE INTO lecture_progress (user_id, lecture_id, max_pos, last_pos, watched_sec, started_at, completed_at) VALUES (?1, ?2, 100, 100, 100, ?3, ?3)', [U.vp, lec.id, now - 86400000 * 5]);
-  r = await call('GET', '/api/people/' + U.vp, T.vp2);
+  r = await call('GET', '/api/people/' + U.vp, T.lead);
   const D = r.d; const rp = D.reports.find(x => x.week === PREV);
   check('отчёты: неделя, дата отправки, в срок, уровень плана, баллы, статус', rp && rp.submitted_at && rp.late === false && ['normal', 'min', 'none'].includes(rp.plan) && rp.plan_final && rp.status === 'approved' && typeof rp.points === 'number', rp);
-  check('отчёты: премия видна роли ВП (неделя проверена)', rp && rp.premium && !rp.premium.pending && typeof rp.premium.total === 'number', rp && rp.premium);
-  r = await call('GET', '/api/people/' + U.vp, T.none); check('без роли ВП премия не отдаётся', !r.d.show_money && !r.d.reports.some(x => x.premium));
+  check('отчёты: премия (неделя проверена)', rp && rp.premium && !rp.premium.pending && typeof rp.premium.total === 'number', rp && rp.premium);
+  // данные досье не утекают через другие эндпоинты к не-СС
+  const MARK = ['СЕКРЕТНАЯ', 'ВП 0123', 'А777АА77', 'Майор Смирнов', 'Нарушение устава', 'law_score', 'dossier', 'МСК+2', 'личное дело'];
+  const leaks = [];
+  for (const [who, tok, path] of [['ВП', T.vp, '/api/me'], ['ВП', T.vp, '/api/reports/my'], ['ВП', T.vp, '/api/premiums?week=' + PREV], ['ВП2', T.vp2, '/api/premiums?week=' + PREV], ['ВП', T.vp, '/api/my/attempts'],
+    ['ВП', T.vp, '/api/courses'], ['без ролей', T.none, '/api/me'], ['без ролей', T.none, '/api/docs'], ['проверяющий', T.exam, '/api/admin/users/' + U.vp], ['проверяющий', T.exam, '/api/admin/users']]) {
+    const x = await call('GET', path, tok); const hit = MARK.filter(m => x.raw.includes(m)); if (hit.length) leaks.push(`${who} ${path} (${x.status}): ${hit}`);
+  }
+  check('данные досье не утекают через профиль, отчёты, премии, попытки, админку проверяющего', !leaks.length, leaks);
+  r = await call('GET', '/api/lead/violations', T.vp); check('«Руководство → Нарушения» (со взысканиями из дел) — не для ВП (403)', r.status === 403);
   check('авто-нарушения по отчётам (недели без отчёта в срок)', D.violations.length >= 1 && D.strikes >= 1 && D.violations.every(v => v.measure), D.violations);
   check('попытки экзаменов: дата, балл, сдан/нет', D.attempts.length === 2 && D.attempts.some(a => a.passed && a.score_pct === 80) && D.attempts.some(a => !a.passed && a.score_pct === 50));
   check('знание законодательства по тестам: лучший/средний %', D.law_auto.all && D.law_auto.all.best === 80 && D.law_auto.all.avg === 65 && D.law_auto.exams.n === 2, D.law_auto);
@@ -123,11 +139,11 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   check('хронология отсортирована (новые сверху)', D.timeline.every((t, i) => i === 0 || (D.timeline[i - 1].at || 0) >= (t.at || 0)));
   r = await call('GET', '/api/lead/violations', T.lead); const lv = r.d.users.find(u => u.user_id === U.vp);
   check('нарушения (руководство): рядом показаны ручные взыскания из дела', lv && lv.dossier_penalties === 1 && lv.strikes >= 1, lv);
-  r = await call('GET', '/api/people', T.vp2); const card = r.d.people.find(p => p.id === U.vp);
+  r = await call('GET', '/api/people', T.ss); const card = r.d.people.find(p => p.id === U.vp);
   check('список: активные взыскания, авто-нарушения, основной служебный авто', card && card.pen_active === 1 && card.strikes >= 1 && card.car === 'УАЗ Патриот · ВП 0123', card);
 
   // ---------- 7. журнал ----------
-  r = await call('GET', '/api/people/' + U.vp, T.vp);
+  r = await call('GET', '/api/people/' + U.vp, T.lead);
   const acts = new Set(r.d.log.map(x => x.action));
   check('журнал: все правки с автором', ['dossier.create', 'dossier.update', 'dossier.event.add', 'dossier.event.lift', 'dossier.event.update', 'profile.update'].every(a => acts.has(a)) && r.d.log.every(x => x.by), [...acts]);
   const upd = r.d.log.find(x => x.action === 'dossier.update' && x.details.age !== undefined);
@@ -142,7 +158,7 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   r = await call('POST', `/api/people/${U.vp2}/archive`, T.ss, {}); check('архив без причины — 400', r.status === 400);
   r = await call('POST', `/api/people/${U.vp2}/archive`, T.ss, { reason: 'Уволен по собственному желанию' });
   check('увольнение: дело в архиве, не удалено, запись в истории', r.status === 200 && r.d.dossier.status === 'archived' && r.d.events.some(e => e.kind === 'archive'));
-  r = await call('GET', '/api/people', T.none); const ac = r.d.people.find(p => p.id === U.vp2); check('архивное дело остаётся в списке с отметкой', ac && ac.archived && ac.archive_reason.includes('Уволен'));
+  r = await call('GET', '/api/people', T.ss); const ac = r.d.people.find(p => p.id === U.vp2); check('архивное дело остаётся в списке с отметкой', ac && ac.archived && ac.archive_reason.includes('Уволен'));
   r = await call('POST', `/api/people/${U.vp2}/restore`, T.ss, { reason: 'Восстановлен' }); check('возврат из архива', r.status === 200 && r.d.dossier.status === 'active');
   await call('POST', `/api/people/${U.vp2}/archive`, T.ss, { reason: 'Уволен' });
 
@@ -171,7 +187,7 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   await go(P, '/people?st=archived', '.people'); check('UI фильтр «Архив»', (await P.$$eval('.pcard b', l => l.map(x => x.textContent))).join() === 'vp_petr');
   await go(P, '/person/' + U.vp, '.dztabs');
   await P.screenshot({ path: SHOTS + 'dossier-main.png', fullPage: true });
-  check('UI карточка: вкладки, кнопки СС, характеристика видна', (await P.$$('.dztabs a')).length === 8 && await P.isVisible('a:has-text("Редактировать")') && (await P.textContent('#dzbody')).includes('надёжный'));
+  check('UI карточка: все 8 вкладок, кнопки СС, характеристика видна', (await P.$$('.dztabs a')).length === 8 && await P.isVisible('a:has-text("Редактировать")') && (await P.textContent('#dzbody')).includes('надёжный'));
   const tabs = ['timeline', 'cars', 'reports', 'discipline', 'service', 'study', 'log']; const tabBad = [];
   for (const t of tabs) { await go(P, `/person/${U.vp}?tab=${t}`, '#dzbody'); const txt = await P.textContent('#dzbody'); if (!txt || txt.length < 20) tabBad.push(t); if (t === 'discipline' || t === 'reports') await P.screenshot({ path: SHOTS + `dossier-${t}.png`, fullPage: true }); }
   check('UI все вкладки открываются', !tabBad.length, tabBad);
@@ -189,13 +205,19 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   check('UI повышение: поля «с → на», «с» заполнено из профиля', await P.isVisible('[name=to_rank]') && (await P.inputValue('[name=from_rank]')) === 'Капитан');
   await go(P, `/person/${U.vp}?tab=discipline`, '[data-lift]'); await P.click('[data-lift]'); await P.waitForTimeout(800);
   r = await call('GET', '/api/people/' + U.vp, T.ss); check('UI кнопка «Снять» снимает взыскание (с основанием)', r.d.penalties_active === 0 && r.d.events.some(e => e.lift_reason === 'Основание из теста'));
-  // ВП — только просмотр
-  const V = await page(T.vp2);
-  await go(V, '/person/' + U.vp, '.dztabs');
-  const vt = await V.textContent('main');
-  check('UI ВП: нет кнопок правки, чувствительное скрыто, есть пометка 🔒', !(await V.isVisible('a:has-text("Редактировать")')) && !vt.includes('надёжный') && !vt.includes('Возраст (ИРЛ)') && !vt.includes('Часовой пояс') && vt.includes('видны только старшему составу') && (await V.$$('.dztabs a')).length === 7);
-  await go(V, `/person/${U.vp}/edit`, '.alert.err'); check('UI ВП: страница правки закрыта', (await V.textContent('.alert.err')).includes('старший состав'));
-  await go(V, '/people', '.pcard'); check('UI ВП: нет «Завести дело»', !(await V.isVisible('#newdz')));
+  // не-СС (ВП, сам сотрудник, без ролей): пункта нет, страницы закрыты
+  for (const [who, tok] of [['ВП', T.vp2], ['сам сотрудник', T.vp], ['без ролей', T.none]]) {
+    const V = await page(tok);
+    await go(V, '/', '#drawer');
+    const menu = await V.$$eval('#drawer a', l => l.map(a => a.getAttribute('href')));
+    const tiles = await V.$$eval('#app a', l => l.map(a => a.getAttribute('href') || ''));
+    const pages = [];
+    for (const h of ['/people', '/person/' + U.vp, `/person/${U.vp}?tab=log`, `/person/${U.vp}/edit`, `/person/${U.vp}/event`]) { await go(V, h, '.noacc'); const t = await V.textContent('#app'); if (t.includes('Иван Петров') || t.includes('СЕКРЕТНАЯ')) pages.push(h); }
+    check(`UI ${who}: «Личные дела» нет в шторке и на главной, страницы закрыты`, !menu.some(h => /people|person/.test(h)) && !tiles.some(h => /people|person/.test(h)) && !pages.length, { menu, pages });
+    if (who === 'сам сотрудник') { await go(V, '/profile', '#pf'); check('UI профиль: нет ссылки на своё личное дело', !(await V.$$eval('a', l => l.some(a => /person/.test(a.getAttribute('href') || '')))) ); await V.screenshot({ path: SHOTS + 'dossier-noacc.png' }); }
+    await V.context().close();
+  }
+  await go(P, '/', '#drawer'); check('UI СС: пункт «Личные дела» в шторке', (await P.$$eval('#drawer a', l => l.map(a => a.getAttribute('href')))).includes('#/people'));
   // телефон
   const M = await page(T.ss, true); const mob = [];
   for (const [h, sel, shot] of [['/people', '.pcard', 'm-list'], ['/person/' + U.vp, '.dztabs', 'm-main'], [`/person/${U.vp}?tab=reports`, '#dzbody', 'm-reports'], [`/person/${U.vp}?tab=discipline`, '.ev', 'm-discipline'], [`/person/${U.vp}?tab=timeline`, 'ol.tl', 'm-timeline'], [`/person/${U.vp}/edit`, '#dzf', 'm-edit'], [`/person/${U.vp}/event`, '#evf', 'm-event']]) {

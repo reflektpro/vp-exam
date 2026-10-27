@@ -1,4 +1,4 @@
-/* Личные дела (досье сотрудников ГУ ВП). Права и скрытие чувствительных полей — на сервере (worker: personFile / dz*). */
+/* Личные дела (досье сотрудников ГУ ВП). Только старший состав (cap «ss»); проверка — на сервере (worker: requireSS, personFile / dz*). */
 'use strict';
 const DZ_TABS = [['main', 'Общее'], ['timeline', 'Хронология'], ['cars', 'Транспорт'], ['reports', 'Отчёты'], ['discipline', 'Взыскания и поощрения'], ['service', 'Служба'], ['study', 'Обучение'], ['log', 'Журнал']];
 const DZ_EV = { penalty: ['Взыскание', 'err', '⚠'], reward: ['Поощрение', 'ok', '★'], promotion: ['Повышение', 'ok', '▲'], demotion: ['Понижение', 'err', '▼'], transfer: ['Перевод', 'info', '⇄'], note: ['Заметка', '', '✎'],
@@ -13,8 +13,8 @@ const dzBadge = (k) => { const x = DZ_EV[k] || [k, '']; return `<span class="bad
 const stars = (n) => n ? '★'.repeat(n) + '☆'.repeat(5 - n) : '—';
 
 // ---------- список ----------
-route('/people', () => peoplePage());
-route('/people\\?.*', () => peoplePage());
+route('/people', () => peoplePage(), { cap: 'ss' });
+route('/people\\?.*', () => peoplePage(), { cap: 'ss' });
 async function peoplePage() {
   const Q = hashQ(); const q = (Q.get('q') || '').toLowerCase(), pos = Q.get('pos') || '', pen = Q.get('pen') === '1', st = Q.get('st') || 'active';
   const d = await api('GET', '/api/people');
@@ -23,7 +23,7 @@ async function peoplePage() {
   const nArch = d.people.filter(p => p.archived).length;
   setView(`<div class="row" style="justify-content:space-between;align-items:center"><h1 style="margin:0">Личные дела</h1>
       ${d.can_edit ? '<button class="btn gold" id="newdz">+ Завести дело</button>' : ''}</div>
-    <p class="small mut">Досье сотрудников ГУ ВП. Ведёт старший состав${d.can_edit ? ' — вы можете заполнять дела' : ''}.</p>
+    <p class="small mut">Досье сотрудников ГУ ВП. Раздел виден только старшему составу.</p>
     <div id="cands" hidden></div>
     <form class="card flat dzfilter" id="pf">
       <input name="q" value="${esc(q)}" placeholder="Поиск: имя, статик, звание, номер авто">
@@ -51,8 +51,8 @@ async function peoplePage() {
 }
 
 // ---------- карточка ----------
-route('/person/:id', (id) => personPage(id));
-route('/person/:id\\?.*', (id) => personPage(id));
+route('/person/:id', (id) => personPage(id), { cap: 'ss' });
+route('/person/:id\\?.*', (id) => personPage(id), { cap: 'ss' });
 async function personPage(id) {
   const tab = hashQ().get('tab') || 'main';
   const d = await api('GET', '/api/people/' + encodeURIComponent(id));
@@ -84,7 +84,7 @@ async function personPage(id) {
   $$('[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Удалить ошибочную запись? Удаление попадёт в журнал.')) return; try { await api('DELETE', `/api/people/${p.id}/events/${b.dataset.del}`); toast('Запись удалена'); render(); } catch (e) { toast(e.message, true); } });
 }
 function kv(rows) { return `<dl class="dzkv">${rows.filter(Boolean).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`; }
-function lockNote(d) { return d.show_private ? '' : '<p class="small mut">🔒 Возраст, часовой пояс, оценка знаний и характеристика старшего состава видны только старшему составу и самому сотруднику.</p>'; }
+function lockNote() { return ''; }
 function dzMain(d) {
   const z = d.dossier || {}; const p = d.person; const priv = d.show_private;
   const main = (z.service_cars || []).find(c => c.main) || (z.service_cars || [])[0];
@@ -183,7 +183,7 @@ function logDetails(x) {
   return Object.entries(dd).filter(([k]) => k !== 'via').map(([k, v]) => `${esc(FIELD_RU[k] || k)}${Array.isArray(v) ? ': ' + esc(v[0] === '' || v[0] == null ? '—' : v[0]) + ' → ' + esc(v[1] === '' || v[1] == null ? '—' : v[1]) : v === true ? ' (изменено)' : ': ' + esc(typeof v === 'object' ? JSON.stringify(v) : v)}`).join('; ') + (dd.via ? ` <span class="mut">(${esc(dd.via)})</span>` : '');
 }
 function dzLog(d) {
-  return `<div class="card flat"><h3>Журнал изменений</h3><p class="small mut">Все правки профиля и личного дела с автором. Виден старшему составу и самому сотруднику.</p>
+  return `<div class="card flat"><h3>Журнал изменений</h3><p class="small mut">Все правки профиля и личного дела с автором. Виден только старшему составу.</p>
     ${d.log.length ? `<div class="dzrows">${d.log.map(x => `<div class="dzrow"><div style="flex:1"><b>${esc(LOG_RU[x.action] || x.action)}</b> <span class="small mut">${fmtDate(x.at)} · ${esc(x.self ? 'сам сотрудник' : x.by)}</span><div class="small">${logDetails(x)}</div></div></div>`).join('')}</div>` : '<p class="mut">Изменений нет.</p>'}</div>`;
 }
 
@@ -205,7 +205,7 @@ route('/person/:id/edit', async (id) => {
         <label class="f"><span>Дата вступления в ГУ ВП</span><input type="date" name="joined_on" value="${esc(z.joined_on || '')}"></label>
         <label class="f"><span>Discord</span><input name="discord" maxlength="60" value="${esc(z.discord || '')}"></label></div>
         <p class="small mut">Имя, статик, звание и должность — это поля профиля: они обновятся в профиле и в отчётах (с записью в журнал).</p></fieldset>
-      <fieldset class="card"><legend>Онлайн и личное <span class="small mut">🔒 возраст и часовой пояс видят только СС и сам сотрудник</span></legend><div class="fgrid">
+      <fieldset class="card"><legend>Онлайн и личное</legend><div class="fgrid">
         <label class="f"><span>Возраст (ИРЛ)</span><input type="number" name="age" min="14" max="99" value="${z.age ?? ''}"></label>
         <label class="f"><span>Часовой пояс</span><input name="timezone" maxlength="40" list="tzList" value="${esc(z.timezone || '')}" placeholder="МСК, МСК+2, UTC+5…"></label>
         <label class="f"><span>Средний онлайн, часов в день</span><input type="number" name="online_hours" min="0" max="24" step="0.5" value="${z.online_hours ?? ''}"></label>
@@ -213,11 +213,11 @@ route('/person/:id/edit', async (id) => {
         <datalist id="tzList">${['МСК−1 (Калининград)', 'МСК', 'МСК+1 (Самара)', 'МСК+2 (Екатеринбург)', 'МСК+3 (Омск)', 'МСК+4 (Новосибирск)', 'МСК+5 (Иркутск)', 'МСК+6 (Якутск)', 'МСК+7 (Владивосток)', 'МСК+9 (Камчатка)'].map(x => `<option>${x}</option>`).join('')}</datalist></fieldset>
       <fieldset class="card"><legend>Служебные автомобили ВП, закреплённые за сотрудником</legend><div id="scars">${(z.service_cars.length ? z.service_cars : []).map(c => vrow(c, true)).join('')}</div><button type="button" class="btn sm" id="addcar">+ Автомобиль</button></fieldset>
       <fieldset class="card"><legend>Личные транспортные средства</legend><div id="pcars">${z.vehicles.map(c => vrow(c, false)).join('')}</div><button type="button" class="btn sm" id="addveh">+ ТС</button></fieldset>
-      <fieldset class="card"><legend>Оценка знания законодательства <span class="small mut">🔒 только СС и сам сотрудник</span></legend>
+      <fieldset class="card"><legend>Оценка знания законодательства</legend>
         <div class="lawpick">${[1, 2, 3, 4, 5].map(n => `<label class="lp"><input type="radio" name="law_score" value="${n}" ${z.law_score === n ? 'checked' : ''}><span>${n}</span><small>${LAW_RU[n]}</small></label>`).join('')}<label class="lp"><input type="radio" name="law_score" value="" ${!z.law_score ? 'checked' : ''}><span>—</span><small>нет</small></label></div>
         <p class="small mut">По тестам: ${d.law_auto.all ? `средний ${d.law_auto.all.avg}%, лучший ${d.law_auto.all.best}% (${d.law_auto.all.n} попыток)` : 'попыток нет'}.</p>
         <label class="f"><span>Комментарий к оценке</span><input name="law_comment" maxlength="1000" value="${esc(z.law_comment || '')}"></label></fieldset>
-      <fieldset class="card"><legend>Характеристика / заметки старшего состава <span class="small mut">🔒 только СС и сам сотрудник</span></legend>
+      <fieldset class="card"><legend>Характеристика / заметки старшего состава</legend>
         <textarea name="notes" rows="6" maxlength="5000" placeholder="Можно Markdown: **жирный**, списки">${esc(z.notes || '')}</textarea></fieldset>
       <datalist id="rankList">${RANKS.map(r => `<option>${r}</option>`).join('')}</datalist><datalist id="posList">${POSITIONS.map(r => `<option>${r}</option>`).join('')}</datalist>
       <div class="row stickybar"><button class="btn gold">Сохранить</button><a class="btn" href="#/person/${p.id}">Отмена</a></div></form>`);
@@ -232,12 +232,12 @@ route('/person/:id/edit', async (id) => {
     b.law_score = (f.querySelector('[name=law_score]:checked') || {}).value || ''; b.service_cars = rows('#scars', true); b.vehicles = rows('#pcars', false);
     try { await api('PUT', '/api/people/' + p.id, b); toast('Личное дело сохранено'); location.hash = '#/person/' + p.id; } catch (e) { toast(e.message, true); }
   };
-});
+}, { cap: 'ss' });
 
 // ---------- запись в историю ----------
-route('/person/:id/event', (id) => eventForm(id, null));
-route('/person/:id/event\\?.*', (id) => eventForm(id, null));
-route('/person/:id/event/:eid', (id, eid) => eventForm(id, eid));
+route('/person/:id/event', (id) => eventForm(id, null), { cap: 'ss' });
+route('/person/:id/event\\?.*', (id) => eventForm(id, null), { cap: 'ss' });
+route('/person/:id/event/:eid', (id, eid) => eventForm(id, eid), { cap: 'ss' });
 async function eventForm(id, eid) {
   const d = await api('GET', '/api/people/' + encodeURIComponent(id));
   if (!d.can_edit || !d.dossier) { setView(`<div class="alert err">Записи в личное дело добавляет только старший состав ГУ ВП.</div><a class="btn" href="#/person/${esc(id)}">Назад</a>`); return; }

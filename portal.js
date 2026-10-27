@@ -24,7 +24,7 @@ async function homePage() {
   setView(`<div class="card hero"><div class="row"><div style="flex:1;min-width:240px"><h1>${esc(s.site_title || 'ГУ ВП')}</h1>
       <div class="mut">Здравствуйте, <b>${esc(userName(u))}</b>${u.rank ? ' · ' + esc(u.rank) : ''}</div>
       ${s.welcome_text ? `<div class="welcome small mut" style="margin-top:8px">${esc(s.welcome_text)}</div>` : '<div class="welcome" hidden></div>'}</div></div></div>
-    ${!anyRole ? `<div class="alert info"><b>У вас пока нет ролей.</b> Учебный отдел, отчёты и премии открываются с ролью «ВП», переаттестация — с ролью «Переаттестация». Роли назначает администратор — обратитесь к руководству ГУ ВП. Сейчас доступны «База данных» и «Личные дела».</div>` : ''}
+    ${!anyRole ? `<div class="alert info"><b>У вас пока нет ролей.</b> Учебный отдел, отчёты и премии открываются с ролью «ВП», переаттестация — с ролью «Переаттестация». Роли назначает администратор — обратитесь к руководству ГУ ВП. Сейчас доступны «База данных» и профиль.</div>` : ''}
     ${miss.length ? `<div class="alert warn">Заполните профиль: ${miss.join(', ')}. Эти данные подставляются в отчёты и документы. <a href="#/profile">Открыть профиль</a></div>` : ''}
     ${rep && !rep.report && rep.deadline > rep.now ? `<div class="alert info">Еженедельный отчёт за эту неделю ещё не отправлен. Срок — <b>${fmtDate(rep.deadline)}</b> МСК. <a href="${esc(CFG.REPORTS_URL)}">Заполнить отчёт</a></div>` : ''}
     <div class="tiles-grid">${tiles.map(m => `<a class="tile-card" href="#${m[0]}"><i>${m[2]}</i><b>${esc(m[1])}</b><span class="small mut">${esc(TILE_TXT[m[0]] || m[4] || '')}</span></a>`).join('')}</div>`);
@@ -269,7 +269,7 @@ route('/profile', async () => {
   setView(`<h1>Профиль</h1>
     <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:64px;height:64px;border-radius:50%;border:2px solid var(--gold)">` : ''}
       <div><div><b>${esc(u.global_name || u.username)}</b> <span class="mut">@${esc(u.username)}</span></div><div class="small mut">Discord ID: ${esc(u.id)} · ${esc(rolesText(u))}${u.super ? ' (главный администратор)' : ''}</div></div></div>
-      <p class="small mut" style="margin-top:12px">Эти данные подставляются в еженедельный отчёт и документы на сайте бланков и видны в «Личных делах». Администраторы и старший состав могут их исправить — изменения записываются в журнал. <a href="#/person/${esc(u.id)}">Моё личное дело →</a></p>
+      <p class="small mut" style="margin-top:12px">Эти данные подставляются в еженедельный отчёт и документы на сайте бланков. Администраторы и старший состав могут их исправить — изменения записываются в журнал.</p>
       <form id="pf"><div class="fgrid">
         <label class="f"><span>Имя Фамилия (игровые)</span><input name="ic_name" maxlength="100" value="${esc(u.ic_name)}" placeholder="Шерман Ассман"></label>
         <label class="f"><span>Звание</span><input name="rank" maxlength="60" list="rankList" value="${esc(u.rank)}" placeholder="Лейтенант"></label>

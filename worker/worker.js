@@ -196,7 +196,8 @@ function requireRole(user, role) {
 }
 // Роли доступа (можно несколько): «ВП» (users.vp) — учебный отдел, отчёты, премирование, система повышения;
 // «Переаттестация» (users.reatt); «Проверяющий» / «Администратор» (users.role); «Руководство ГУ ВП» (users.leader).
-// Администратор видит все разделы; главные администраторы (ADMIN_IDS) — всё. Без ролей — только База данных и Личные дела.
+// Администратор видит все разделы; главные администраторы (ADMIN_IDS) — всё. Без ролей — только База данных и профиль.
+// «Личные дела» — только старший состав (caps.ss).
 function caps(u) {
   const admin = u.role === 'admin' || !!u.super;
   const lead = !!u.leader || admin;
@@ -204,7 +205,7 @@ function caps(u) {
   return { vp: !!u.vp || admin, reatt: !!u.reatt || admin, examiner: admin || u.role === 'examiner', admin, lead, ss: lead || !!u.senior, super: !!u.super };
 }
 const CAP_MSG = { vp: 'Раздел доступен роли «ВП». Роль назначает администратор.', reatt: 'Раздел доступен роли «Переаттестация». Роль назначает администратор.',
-  examiner: 'Раздел доступен проверяющим и администраторам', admin: 'Только для администраторов', lead: 'Раздел доступен роли «Руководство ГУ ВП» и администраторам' };
+  examiner: 'Раздел доступен проверяющим и администраторам', ss: 'Личные дела доступны только старшему составу ГУ ВП', admin: 'Только для администраторов', lead: 'Раздел доступен роли «Руководство ГУ ВП» и администраторам' };
 function requireCap(user, cap) { if (!caps(user)[cap]) throw new HttpError(403, CAP_MSG[cap] || 'Недостаточно прав'); }
 function publicUser(u) {
   return {
@@ -1894,7 +1895,7 @@ async function adminUser(env, id) {
   const { results: plog } = await env.DB.prepare(`SELECT a.action, a.details, a.at, a.actor_id, x.ic_name, x.global_name, x.username FROM audit_log a LEFT JOIN users x ON x.id = a.actor_id
     WHERE a.target = ?1 AND a.action IN ('profile.update', 'profile.self') ORDER BY a.id DESC LIMIT 50`).bind(id).all();
   return json({ user: publicUser({ ...u, super: isSuper(env, u.id), role: isSuper(env, u.id) ? 'admin' : u.role }), lectures: lec,
-    profile_log: plog.map(r => ({ at: r.at, self: r.action === 'profile.self', by: r.ic_name || r.global_name || r.username || r.actor_id, changes: parseJ(r.details, {}) })),
+    profile_log: plog.map(r => ({ at: r.at, self: r.action === 'profile.self', by: r.ic_name || r.global_name || r.username || r.actor_id, changes: (({ via, ...c }) => c)(parseJ(r.details, {})) })),
     attempts: atts.map(a => ({ id: a.id, exam_id: a.exam_id, reatt: a.reatt || null, exam_title: a.exam_title, status: a.status, started_at: a.started_at, submitted_at: a.submitted_at, score_pct: a.score_pct, expired: !!a.expired })) });
 }
 const PROFILE_FIELDS = ['ic_name', 'rank', 'static_id', 'position'];
@@ -2749,15 +2750,14 @@ async function publicPremiums(env, user, url) {
 }
 
 // ---------- личные дела (досье сотрудников ГУ ВП) ----------
-// Просмотр — всем, кто вошёл. Заполняет и меняет только старший состав (caps.ss: «Руководство ГУ ВП», администраторы
-// и отметка «Старший состав» в составе ГУ ВП). Чувствительные поля (возраст, часовой пояс, оценка знаний СС,
-// характеристика/заметки, журнал изменений) отдаются только старшему составу и самому сотруднику — фильтр здесь, на сервере.
+// Видит и ведёт ТОЛЬКО старший состав (caps.ss: «Руководство ГУ ВП», администраторы и отметка «СС» в составе ГУ ВП).
+// Остальным, включая самого сотрудника, все /api/people… отвечают 403 (проверка в route). Для СС видны все поля.
 const DZ_SENSITIVE = ['age', 'timezone', 'law_score', 'law_comment', 'notes'];
 const DZ_KINDS = { penalty: 'Взыскание', reward: 'Поощрение', promotion: 'Повышение', demotion: 'Понижение', transfer: 'Перевод', note: 'Заметка' };
 const DZ_PENALTIES = ['Устное замечание', 'Предупреждение', 'Выговор', 'Строгий выговор', 'Неполное служебное соответствие', 'Отстранение', 'Другое'];
 const DZ_REWARDS = ['Благодарность', 'Поощрение', 'Почётная грамота', 'Денежная премия', 'Досрочное повышение', 'Другое'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-function requireSS(user) { if (!caps(user).ss) throw new HttpError(403, 'Личные дела заполняет только старший состав ГУ ВП'); }
+function requireSS(user) { requireCap(user, 'ss'); }
 function dzDate(v, name, required) {
   const s = String(v == null ? '' : v).trim();
   if (!s) { if (required) throw new HttpError(400, 'Не заполнено: ' + name); return null; }
@@ -2812,6 +2812,7 @@ function personCard(env, u, position) {
 }
 const dzPos = (cfg, u) => u.position || ((cfg.positions.find(p => p.key === u.staff_position) || {}).name || '');
 async function peopleList(env, viewer) {
+  requireSS(viewer);
   const cfg = await premConfig(env);
   const { results } = await env.DB.prepare(`SELECT u.id, u.username, u.global_name, u.avatar, u.ic_name, u.static_id, u.rank, u.position, u.staff_position, u.vp, u.reatt, u.leader, u.role, u.staff, u.senior,
       d.status, d.joined_on, d.service_cars, d.archived_at, d.archive_reason,
@@ -2837,7 +2838,8 @@ const dzAt = (date) => Date.parse(date + 'T12:00:00+03:00');
 async function personFile(env, viewer, id) {
   const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(id).first();
   if (!u || (u.blocked && !caps(viewer).ss)) throw new HttpError(404, 'Личное дело не найдено');
-  const C = caps(viewer); const self = viewer.id === id; const priv = C.ss || self; const money = C.ss || self || C.vp;
+  requireSS(viewer);
+  const C = caps(viewer); const self = viewer.id === id; const priv = true; const money = true;
   const cfg = await premConfig(env);
   const dz = await env.DB.prepare('SELECT * FROM dossiers WHERE user_id = ?1').bind(id).first();
   const position = dzPos(cfg, u);
@@ -3157,7 +3159,8 @@ async function route(request, env, ctx) {
   if (/^\/api\/reatt(\/|$)/.test(p)) requireCap(user, 'reatt');
   if (/^\/api\/(attempts|uploads)\//.test(p) && !(C.vp || C.reatt)) throw new HttpError(403, CAP_MSG.vp);
 
-  // общедоступное (всем, кто вошёл): база данных и личные дела
+  // общедоступное (всем, кто вошёл): база данных; личные дела — только старший состав (403 для всех остальных, в т. ч. самого сотрудника)
+  if (/^\/api\/people(\/|$)/.test(p)) requireSS(user);
   if (p === '/api/docs' && M === 'GET') return listDocs(env, url);
   if ((m = /^\/api\/docs\/(\d+)$/.exec(p)) && M === 'GET') return getDoc(env, idParam(m[1]));
   if (p === '/api/docs' && M === 'POST') { requireCap(user, 'admin'); return saveDoc(request, env, user, null); }

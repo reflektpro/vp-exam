@@ -30,12 +30,12 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   const EP = { courses: '/api/courses', lectures: '/api/lectures', exams: '/api/exams', reports: '/api/reports/my', premiums: '/api/premiums', promo: '/api/promo', reatt: '/api/reatt',
     lead: '/api/lead/week', adminUsers: '/api/admin/users', adminCourses: '/api/admin/courses', attempts: '/api/admin/attempts', docs: '/api/docs', people: '/api/people', me: '/api/me' };
   const expect = {
-    none: { docs: 200, people: 200, me: 200, courses: 403, lectures: 403, exams: 403, reports: 403, premiums: 403, promo: 403, reatt: 403, lead: 403, adminUsers: 403, adminCourses: 403, attempts: 403 },
-    vp: { courses: 200, lectures: 200, exams: 200, reports: 200, premiums: 200, promo: 200, docs: 200, people: 200, reatt: 403, lead: 403, adminUsers: 403, adminCourses: 403, attempts: 403 },
+    none: { docs: 200, people: 403, me: 200, courses: 403, lectures: 403, exams: 403, reports: 403, premiums: 403, promo: 403, reatt: 403, lead: 403, adminUsers: 403, adminCourses: 403, attempts: 403 },
+    vp: { courses: 200, lectures: 200, exams: 200, reports: 200, premiums: 200, promo: 200, docs: 200, people: 403, reatt: 403, lead: 403, adminUsers: 403, adminCourses: 403, attempts: 403 },
     reatt: { reatt: 200, docs: 200, courses: 403, reports: 403, premiums: 403, lead: 403, adminUsers: 403 },
     exam: { attempts: 200, adminUsers: 200, adminCourses: 403, courses: 403, lead: 403, reatt: 403 },
     admin: { courses: 200, reports: 200, premiums: 200, reatt: 200, lead: 200, adminUsers: 200, adminCourses: 200, attempts: 200, promo: 200 },
-    lead: { lead: 200, docs: 200, courses: 403, adminUsers: 403 },
+    lead: { lead: 200, docs: 200, people: 200, courses: 403, adminUsers: 403 },
   };
   for (const [who, exp] of Object.entries(expect)) {
     const bad = [];
@@ -115,9 +115,9 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   r = await call('PUT', '/api/docs/' + docId, T.admin, { category: 'Уставы', title: 'Порядок несения наряда (ред.)', body: 'текст' }); check('админ правит статью', r.status === 200);
   // с миграции 0010 в списке — заведённые личные дела (заводит старший состав)
   r = await call('POST', '/api/people/' + U.vp, T.lead, {}); check('руководство заводит личное дело ВП', r.status === 200, r.d);
-  r = await call('GET', '/api/people', T.none); const pv = r.d.people.find(p => p.id === U.vp);
+  r = await call('GET', '/api/people', T.lead); const pv = r.d.people.find(p => p.id === U.vp);
   check('личные дела: карточка ВП с ФИО, званием, статиком, должностью', pv && pv.name === 'Иван Петров' && pv.rank === 'Старший лейтенант' && pv.static_id === '4456' && pv.position === 'Инспектор ВП', pv);
-  r = await call('GET', '/api/people/' + U.vp, T.none); check('личное дело: история отчётов', r.status === 200 && r.d.reports && r.d.reports.some(x => x.week === PREV), r.d);
+  r = await call('GET', '/api/people/' + U.vp, T.lead); check('личное дело (руководство): история отчётов', r.status === 200 && r.d.reports && r.d.reports.some(x => x.week === PREV), r.d);
   r = await call('GET', '/api/promo', T.admin); const pc = r.d.config;
   pc.ladder[0].points = 175; r = await call('PUT', '/api/promo', T.admin, { points_per_item: 120, pts: pc.pts, ladder: pc.ladder }); check('админ меняет требования системы повышения', r.status === 200 && r.d.custom, r.d);
   r = await call('GET', '/api/promo-config'); check('публичная конфигурация повышения для сайта бланков', r.d.custom && r.d.config.points_per_item === 120 && r.d.config.ladder[0].points === 175);
@@ -136,12 +136,12 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   const M = {};
   for (const who of ['none', 'vp', 'reatt', 'exam', 'admin', 'lead']) { const p = await open(T[who], '/'); M[who] = await menu(p); if (who === 'none') { await p.screenshot({ path: SHOTS + 'roles-none.png' }); } await p.context().close(); }
   const has = (who, ...h) => h.every(x => M[who].includes('#' + x)), hasNo = (who, ...h) => h.every(x => !M[who].includes('#' + x));
-  check('без ролей: только Главная, База данных, Личные дела, Профиль', JSON.stringify(M.none) === JSON.stringify(['#/', '#/docs', '#/people', '#/profile']), M.none);
-  check('ВП: учебный отдел, отчёты, премирование, повышение; без переаттестации/админки', has('vp', '/study', '/reports', '/premiums', '/promo', '/docs', '/people') && hasNo('vp', '/reatt', '/admin', '/lead'), M.vp);
+  check('без ролей: только Главная, База данных, Профиль (Личные дела — только СС)', JSON.stringify(M.none) === JSON.stringify(['#/', '#/docs', '#/profile']), M.none);
+  check('ВП: учебный отдел, отчёты, премирование, повышение; без переаттестации/админки', has('vp', '/study', '/reports', '/premiums', '/promo', '/docs') && hasNo('vp', '/reatt', '/admin', '/lead', '/people'), M.vp);
   check('Переаттестация: только переаттестация + общие', has('reatt', '/reatt', '/docs') && hasNo('reatt', '/study', '/reports', '/admin'), M.reatt);
   check('Проверяющий: админка; без учебного отдела и руководства', has('exam', '/admin') && hasNo('exam', '/study', '/lead'), M.exam);
   check('Админ: все разделы', has('admin', '/study', '/reatt', '/reports', '/premiums', '/promo', '/docs', '/people', '/lead', '/admin'), M.admin);
-  check('Руководство: раздел «Руководство»', has('lead', '/lead') && hasNo('lead', '/admin'), M.lead);
+  check('Руководство: разделы «Руководство» и «Личные дела»', has('lead', '/lead', '/people') && hasNo('lead', '/admin'), M.lead);
   // прямой переход в закрытый раздел
   let p = await open(T.none, '/study'); check('без ролей: прямой переход в учебный отдел → «Раздел недоступен»', /Раздел недоступен/.test(await p.textContent('main'))); await p.context().close();
   p = await open(T.reatt, '/premiums'); check('переаттестация: премирование недоступно', /Раздел недоступен/.test(await p.textContent('main'))); await p.context().close();

@@ -24,7 +24,7 @@ const ROLE_RU = { candidate: 'Пользователь', examiner: 'Провер
 // Роли доступа (сервер присылает caps): vp, reatt, examiner, admin, lead, ss (старший состав), super. Проверка — на сервере, здесь только меню.
 function can(c) { return !!(App.me && App.me.caps && App.me.caps[c]); }
 function isLeadUser() { return can('lead'); }
-const CAP_RU = { vp: '«ВП»', reatt: '«Переаттестация»', examiner: '«Проверяющий» или «Администратор»', admin: '«Администратор»', lead: '«Руководство ГУ ВП»' };
+const CAP_RU = { vp: '«ВП»', reatt: '«Переаттестация»', examiner: '«Проверяющий» или «Администратор»', admin: '«Администратор»', lead: '«Руководство ГУ ВП»', ss: '«Руководство ГУ ВП», «Администратор» или отметкой «СС» (старший состав) в составе ГУ ВП' };
 
 async function api(method, path, body) {
   const h = {};
@@ -63,7 +63,7 @@ async function render() {
 }
 function hasRole(role) { const l = { candidate: 0, examiner: 1, admin: 2 }; return App.me && (l[App.me.role] || 0) >= l[role]; }
 function noAccess(c) { return `<div class="card noacc"><h2>Раздел недоступен</h2><p>Этот раздел открывается с ролью ${CAP_RU[c] || ''}. Роли назначает администратор — обратитесь к руководству ГУ ВП.</p>
-  <p class="small mut">Без ролей доступны «База данных» и «Личные дела».</p><div class="row"><a class="btn" href="#/">На главную</a><a class="btn" href="#/docs">База данных</a><a class="btn" href="#/people">Личные дела</a></div></div>`; }
+  <p class="small mut">Без ролей доступны «База данных» и профиль.</p><div class="row"><a class="btn" href="#/">На главную</a><a class="btn" href="#/docs">База данных</a></div></div>`; }
 // Разделы сайта (шторка): [путь, название, иконка, нужная роль (null — всем, кто вошёл), подпись]
 const MENU = [
   ['/', 'Главная', '⌂', null],
@@ -73,7 +73,7 @@ const MENU = [
   ['/premiums', 'Премирование', '₽', 'vp', 'премии недели'],
   ['/promo', 'Система повышения', '⭐', 'vp'],
   ['/docs', 'База данных', '📚', null, 'документация'],
-  ['/people', 'Личные дела', '🗂', null],
+  ['/people', 'Личные дела', '🗂', 'ss', 'только старший состав'],
   ['/lead', 'Руководство', '🛡', 'lead', 'проверка отчётов, фонд, бюджет'],
   ['/admin', 'Админка', '⚙', 'examiner'],
   ['/profile', 'Профиль', '👤', null],
