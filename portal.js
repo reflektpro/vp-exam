@@ -157,15 +157,15 @@ route('/reports', async () => {
   setView(`<h1>Отчёты</h1>
     <div class="card"><div class="row between"><h2 style="margin:0">Неделя ${weekLabel(d.week)}</h2>${r ? repBadge(r.status) + (r.late ? ' <span class="badge err">после срока</span>' : '') : '<span class="badge warn">не отправлен</span>'}</div>
       <p class="small mut">Срок — <b>${fmtDate(d.deadline)}</b> МСК${left > 0 ? ` (осталось ${Math.floor(left / 86400000) ? Math.floor(left / 86400000) + ' дн. ' : ''}${Math.floor(left % 86400000 / 3600000)} ч)` : ' — прошёл'}. Отчёт после срока сохраняется, но премия по нему не начисляется.</p>
-      ${r ? `<div class="kv"><span>Версия</span><b>${r.version} от ${fmtDate(r.submitted_at)}</b></div><div class="kv"><span>Должность</span><b>${esc(r.position_name)}</b></div>
+      ${r ? `<div class="kv"><span>Версия</span><b>${r.version} от ${fmtDate(r.submitted_at)}</b></div><div class="kv"><span>Должность</span><b>${esc(r.position_name)}</b></div><div class="kv"><span>Адресат (кому)</span><b class="rep-to">${esc(r.addressee_name || '')}</b></div>
         <div class="kv"><span>Баллы отчёта</span><b>${r.points}</b></div><div class="kv"><span>План недели</span><b>${r.plan ? `<span class="badge ${PLAN_RU[r.plan.level][1]}">${PLAN_RU[r.plan.level][0]}</span>` : '—'}</b></div>
         ${r.comment ? `<div class="alert info" style="margin-top:10px"><b>Комментарий руководства:</b> ${esc(r.comment)}</div>` : ''}
         ${rej.length ? `<div class="alert err small"><b>Не засчитано:</b> ${rej.map(i => esc(i.name) + (i.review.comment ? ' — ' + esc(i.review.comment) : '')).join('; ')}</div>` : ''}
         ${part.length ? `<div class="alert warn small"><b>Засчитано частично:</b> ${part.map(i => `${esc(i.name)}: ${i.review.n_ok} из ${i.n}`).join('; ')}</div>` : ''}` : ''}
       <div class="row" style="margin-top:12px"><a class="btn gold" href="${esc(CFG.REPORTS_URL)}">${r ? 'Изменить отчёт' : 'Заполнить отчёт'}</a><a class="btn" href="#/premiums">Премирование</a></div>
-      <p class="small mut">Отчёт заполняется на сайте бланков (тот же вход). Имя, звание и статик подставляются из <a href="#/profile">профиля</a>.</p></div>
-    <div class="card flat"><h3>Мои отчёты</h3>${d.recent.length ? `<table><tr><th>Неделя</th><th>Статус</th><th>Отправлен</th><th>Версия</th><th>Комментарий</th></tr>
-      ${d.recent.map(x => `<tr><td>${weekLabel(x.week)}</td><td>${repBadge(x.status)}${x.late ? ' <span class="badge err">после срока</span>' : ''}</td><td>${fmtDate(x.submitted_at)}</td><td class="num">${x.version}</td><td class="small">${esc(x.comment || '')}</td></tr>`).join('')}</table>` : '<p class="mut">Отчётов пока нет.</p>'}</div>`);
+      <p class="small mut">Отчёт заполняется на сайте бланков (тот же вход). Имя, звание и статик подставляются из <a href="#/profile">профиля</a>. Адресата («Кому») выбираете там же: по умолчанию командир батальона и комендант гарнизона пишут командиру бригады, старший состав — заместителю командира бригады по РЛС, остальные — ${esc(((d.addressees || [])[0] || {}).name || 'начальнику ГУ ВП')}.${d.addressee_default ? ` Вам по умолчанию — <b>${esc(((d.addressees || []).find(a => a.key === d.addressee_default) || {}).name || '')}</b>.` : ''}</p></div>
+    <div class="card flat"><h3>Мои отчёты</h3>${d.recent.length ? `<table><tr><th>Неделя</th><th>Кому</th><th>Статус</th><th>Отправлен</th><th>Версия</th><th>Комментарий</th></tr>
+      ${d.recent.map(x => `<tr><td>${weekLabel(x.week)}</td><td class="small">${esc(x.addressee_name || '')}</td><td>${repBadge(x.status)}${x.late ? ' <span class="badge err">после срока</span>' : ''}</td><td>${fmtDate(x.submitted_at)}</td><td class="num">${x.version}</td><td class="small">${esc(x.comment || '')}</td></tr>`).join('')}</table>` : '<p class="mut">Отчётов пока нет.</p>'}</div>`);
 }, { cap: 'vp' });
 
 // ---------- премирование (все ВП) ----------

@@ -28,6 +28,10 @@ leadRoute('/lead', async () => {
   const q = hashQ();
   const d = await api('GET', '/api/lead/week' + (q.get('week') ? '?week=' + encodeURIComponent(q.get('week')) : ''));
   const showAll = q.get('all') === '1';
+  const TO = d.config.addressees || [], toName = (k) => (TO.find(a => a.key === k) || {}).name || '';
+  const toF = q.get('to') || '';
+  if (toF) d.rows = d.rows.filter(r => (r.addressee || r.addressee_default) === toF);
+  const qs = (o) => { const x = new URLSearchParams({ week: d.week }); if (showAll) x.set('all', '1'); if (toF) x.set('to', toF); for (const [k, v] of Object.entries(o)) { if (v) x.set(k, v); else x.delete(k); } return x.toString(); };
   const used = new Set(); d.rows.forEach(r => Object.keys(r.counts || {}).forEach(k => used.add(k)));
   const cols = d.config.items.filter(i => showAll || used.has(i.key));
   const groups = ['main', 'extra', 'gu'].map(g => ({ g, items: cols.filter(i => i.group === g) })).filter(x => x.items.length);
@@ -56,7 +60,8 @@ leadRoute('/lead', async () => {
         ${d.deadline_passed ? `<button class="btn sm" id="leftBtn" ${T.remaining > 0 ? '' : 'disabled'}>Перенести остаток в бюджет ГУ ВП</button>${d.leftover_posted != null ? ` <span class="small mut">перенесено: ${RUB(d.leftover_posted)}</span>` : ''}${d.leftover_stale ? '<div class="alert warn small">Расчёт изменился после переноса остатка (например, удалён или перепроверен отчёт). Перенесите остаток заново.</div>' : ''}` : ''}
       </div></div>
     <div class="row between" style="margin:6px 0 8px"><div class="row">
-      <a class="btn sm ${showAll ? 'gold' : ''}" href="#/lead?week=${d.week}${showAll ? '' : '&all=1'}">${showAll ? 'Только отмеченные пункты' : 'Все пункты'}</a>
+      <a class="btn sm ${showAll ? 'gold' : ''}" href="#/lead?${qs({ all: showAll ? '' : '1' })}">${showAll ? 'Только отмеченные пункты' : 'Все пункты'}</a>
+      <label class="small">Адресат: <select id="toFilter" style="width:auto"><option value="">все</option>${TO.map(a => `<option value="${esc(a.key)}" ${a.key === toF ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
       <span class="small mut">${d.rows.length} сотрудн. · красным — нет отчёта, жёлтым — после срока / отклонён</span></div>
       <div class="row"><button class="btn sm" id="csvBtn">Экспорт CSV</button><button class="btn sm" id="xlsxBtn">Экспорт XLSX</button></div></div>
     ${d.rows.length ? `<div class="tblwrap"><table class="prem"><thead>
@@ -66,7 +71,7 @@ leadRoute('/lead', async () => {
       <tr>${groups.map(g => g.items.map(i => `<th class="ic" title="${esc(i.name)} — ${RUB(i.pay)}"><span>${esc(i.name)}</span></th>`).join('')).join('')}</tr></thead>
       <tbody>${d.rows.map(r => `<tr class="${rowCls(r)}" data-uid="${esc(r.user_id)}">
         <td><b>${esc(r.name)}</b>${r.senior ? ' <span class="badge info">СС</span>' : ''}<div class="small mut">${esc(r.static_id || r.user_id)}</div>${r.strikes ? `<div class="small neg">нарушений: ${r.strikes}</div>` : ''}</td>
-        <td>${esc(posName(r.position))}</td>
+        <td>${esc(posName(r.position))}<div class="small mut rep-to" title="Адресат отчёта">→ ${esc(toName(r.addressee || r.addressee_default))}${r.addressee ? '' : ' (по умолч.)'}</div></td>
         ${groups.map(g => g.items.map(i => `<td class="num">${r.counts[i.key] || ''}</td>`).join('')).join('')}
         <td class="num">${r.points || 0}</td>
         <td>${r.plan ? `<span class="badge ${PLAN_RU[r.plan.level][1]}" title="${esc(missingTxt(r))}">${PLAN_RU[r.plan.level][0]}</span>${r.plan.level !== 'normal' ? `<div class="small mut miss">${esc(missingTxt(r)).replace(/\n/g, '<br>')}</div>` : ''}` : '—'}</td>
@@ -85,6 +90,7 @@ leadRoute('/lead', async () => {
     <p class="small mut">Наградная из фонда: ${RUB(d.config.rules.award_min)}–${RUB(d.config.rules.award_max)}; премия СС — до ${RUB(d.config.rules.ss_max)} (только старшему составу); лимит на человека ${RUB(d.config.rules.person_cap)} (оклад + премия + доп. + наградная из фонда). Наградная из бюджета ГУ ВП — сверх лимита и списывается с бюджета ГУ ВП. Значения сохраняются при выходе из поля.</p>`
     : '<div class="alert info">За эту неделю нет отчётов, а состав ГУ ВП ещё не отмечен (раздел «Состав»).</div>'}`);
   bindWeekPicker('/lead');
+  $('#toFilter').onchange = (e) => { location.hash = '#/lead?' + qs({ to: e.target.value }); };
   $('#fundF').onsubmit = async (ev) => { ev.preventDefault(); try { await api('PUT', `/api/lead/week/${d.week}/fund`, { fund: ev.target.fund.value, note: ev.target.note.value }); toast('Фонд сохранён'); render(); } catch (e) { toast(e.message, true); } };
   const lb = $('#leftBtn'); if (lb) lb.onclick = async () => { if (!confirm(`Перенести остаток ${RUB(T.remaining)} в бюджет ГУ ВП?`)) return; try { await api('POST', `/api/lead/week/${d.week}/leftover`); toast('Остаток перенесён'); render(); } catch (e) { toast(e.message, true); } };
   $$('tr[data-uid]').forEach(tr => {
@@ -97,17 +103,17 @@ leadRoute('/lead', async () => {
     tr.querySelectorAll('input').forEach(i => i.onchange = save);
   });
   const exportRows = () => {
-    const head = ['Сотрудник', 'Discord ID', 'Статик', 'Должность', ...d.config.items.map(i => i.name), 'Баллы', 'План', 'Не хватает', 'Оклад (уровень)', 'Оклад', 'Действия', 'Вычет %', 'Вычет', 'База', 'Доп. премия', 'Наградная (фонд)', 'Премия СС', 'Итого из фонда', 'Наградная из бюджета ГУ ВП (отдельно)', 'Статус отчёта', 'После срока', 'Причина', 'Нарушений'];
-    const body = d.rows.map(r => [r.name, r.user_id, r.static_id, posName(r.position), ...d.config.items.map(i => r.counts[i.key] || 0), r.points || 0, r.plan ? PLAN_RU[r.plan.level][0] : '', missingTxt(r).replace(/\n/g, '; '),
+    const head = ['Сотрудник', 'Discord ID', 'Статик', 'Должность', 'Адресат', ...d.config.items.map(i => i.name), 'Баллы', 'План', 'Не хватает', 'Оклад (уровень)', 'Оклад', 'Действия', 'Вычет %', 'Вычет', 'База', 'Доп. премия', 'Наградная (фонд)', 'Премия СС', 'Итого из фонда', 'Наградная из бюджета ГУ ВП (отдельно)', 'Статус отчёта', 'После срока', 'Причина', 'Нарушений'];
+    const body = d.rows.map(r => [r.name, r.user_id, r.static_id, posName(r.position), r.addressee ? toName(r.addressee) : '', ...d.config.items.map(i => r.counts[i.key] || 0), r.points || 0, r.plan ? PLAN_RU[r.plan.level][0] : '', missingTxt(r).replace(/\n/g, '; '),
       r.eligible ? TIER_RU[r.oklad_tier] : '', r.oklad, r.actions, r.deduct_pct, r.deduction, r.base, r.add, r.award, r.ss, r.total_fund, r.award_budget, (REP_ST[r.status] || [r.status])[0], r.late ? 'да' : '', r.reason || '', r.strikes || 0]);
-    body.push(['Итого', '', '', '', ...d.config.items.map(() => ''), '', '', '', '', '', '', '', '', T.base, d.rows.reduce((s, r) => s + r.add, 0), d.rows.reduce((s, r) => s + r.award, 0), d.rows.reduce((s, r) => s + r.ss, 0), d.rows.reduce((s, r) => s + r.total_fund, 0), T.award_budget, '', '', '', '']);
+    body.push(['Итого', '', '', '', '', ...d.config.items.map(() => ''), '', '', '', '', '', '', '', '', T.base, d.rows.reduce((s, r) => s + r.add, 0), d.rows.reduce((s, r) => s + r.award, 0), d.rows.reduce((s, r) => s + r.ss, 0), d.rows.reduce((s, r) => s + r.total_fund, 0), T.award_budget, '', '', '', '']);
     body.push(['Фонд', d.fund], ['Итого из фонда', T.paid], ['Остаток фонда', T.remaining], ['Наградные из бюджета ГУ ВП (отдельно)', T.award_budget]);
     return [head, ...body];
   };
   const db = $('#delBox'); if (db) db.addEventListener('toggle', async () => { if (!db.open || db.dataset.done) return; db.dataset.done = 1;
     try { const r = await api('GET', '/api/lead/deleted?week=' + d.week); $('#delList').innerHTML = r.deleted.map(x => `<div>${esc(x.name)} — удалил ${esc(x.deleted_by)}, ${fmtDate(x.deleted_at)}${x.reason ? ': «' + esc(x.reason) + '»' : ''}</div>`).join('') || 'нет'; } catch (e) { $('#delList').textContent = e.message; } });
-  $('#csvBtn').onclick = () => { const csv = exportRows().map(r => r.map(c => { const s = String(c == null ? '' : c); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(';')).join('\r\n'); downloadBlob(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }), `premii_${d.week}.csv`); };
-  $('#xlsxBtn').onclick = () => downloadBlob(xlsxBlob(exportRows(), 'Премии ' + d.week), `premii_${d.week}.xlsx`);
+  $('#csvBtn').onclick = () => { const csv = exportRows().map(r => r.map(c => { const s = String(c == null ? '' : c); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(';')).join('\r\n'); downloadBlob(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }), `premii_${d.week}${toF ? '_' + toF : ''}.csv`); };
+  $('#xlsxBtn').onclick = () => downloadBlob(xlsxBlob(exportRows(), 'Премии ' + d.week), `premii_${d.week}${toF ? '_' + toF : ''}.xlsx`);
 });
 function rowManual(r, k) { return r['m_' + k] || ''; }
 function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
@@ -161,7 +167,9 @@ route('/lead/report/:id', async (id) => {
     <div class="card"><div class="row between"><h2 style="margin:0">Отчёт: ${esc(h.rank || '')} ${esc(h.name || '')}</h2><div class="row">${repBadge(r.status)}${r.late ? '<span class="badge err">после срока — без премии</span>' : ''}${r.edited_after_deadline ? '<span class="badge warn">изменён после срока</span>' : ''}</div></div>
       <p class="small mut">Discord: ${esc(d.user ? (d.user.global_name || d.user.username) : r.user_id)} (${esc(r.user_id)}) · удостоверение ${esc(h.static_id || '—')} · ${esc(h.unit || '')} · период ${esc(weekLabel(r.week))}
         · первая отправка ${fmtDate(r.first_submitted_at)} · версия ${r.version} от ${fmtDate(r.submitted_at)} · срок ${fmtDate(r.deadline)}</p>
+      <p class="rep-to-line"><b>Кому:</b> ${esc(r.addressee_to || '')}</p>
       <div class="row"><label>Должность (из отчёта, можно исправить): <select id="pos" style="width:auto">${d.config.positions.map(p => `<option value="${p.key}" ${p.key === r.position ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+        <label>Адресат: <select id="toSel" style="width:auto">${(d.config.addressees || []).map(a => `<option value="${esc(a.key)}" ${a.key === r.addressee ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
         <span>Баллы отчёта: <b>${r.points}</b></span></div>
       ${h.result ? `<p><b>Общий результат:</b> ${esc(h.result)}</p>` : ''}${h.extra ? `<p><b>Дополнительные сведения:</b> ${esc(h.extra)}</p>` : ''}</div>
     <div class="grid two">
@@ -194,6 +202,7 @@ route('/lead/report/:id', async (id) => {
   });
   $('#allOk').onclick = () => { const items = {}; r.items.filter(i => !i.review).forEach(i => { items[i.key] = { status: 'ok' }; }); if (!Object.keys(items).length) return toast('Все пункты уже проверены'); send({ items }, 'Пункты приняты'); };
   $('#pos').onchange = () => send({ position: $('#pos').value }, 'Должность исправлена');
+  $('#toSel').onchange = () => send({ addressee: $('#toSel').value }, 'Адресат исправлен');
   $('#delRep').onclick = async () => {
     if (!confirm(`Удалить отчёт ${h.rank || ''} ${h.name || ''} за неделю ${weekLabel(r.week)}? Это нельзя отменить — копия останется только в журнале.`)) return;
     try { await api('DELETE', '/api/lead/reports/' + r.id, { reason: $('#delReason').value }); toast('Отчёт удалён'); location.hash = '#/lead?week=' + r.week; } catch (e) { toast(e.message, true); }

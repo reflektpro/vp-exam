@@ -1,7 +1,7 @@
 // Юнит-тест движка премий (приказ № 01_10 + уточнения руководства): node tests/prem-unit.js
 const fs = require('fs'), path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
-const W = new Function(src + '\nreturn { PREM_DEFAULT, computePremiums, premBase, premPlan, premCounts, premShare, weeklyPoints, reportInput, weekOf, weekDeadline, positionKey, strikeLabel, premConfigInput };')();
+const W = new Function(src + '\nreturn { PREM_DEFAULT, computePremiums, premBase, premPlan, premCounts, premShare, weeklyPoints, reportInput, weekOf, weekDeadline, positionKey, strikeLabel, premConfigInput, reportToDefault, REPORT_TO };')();
 let fail = 0, pass = 0; const ok = (n, c, x) => { if (c) { pass++; console.log('PASS', n); } else { fail++; console.log('FAIL', n, x !== undefined ? JSON.stringify(x).slice(0, 500) : ''); } };
 const cfg = JSON.parse(JSON.stringify(W.PREM_DEFAULT));
 const rub = n => n.toLocaleString('ru-RU') + ' ₽';
@@ -105,6 +105,18 @@ if (fs.existsSync(PR)) {
   ok('таблица выплат: каждый пункт есть на сайте отчётов', cfg.items.every(i => acts.some(a => a.key === i.key)));
   ok('названия, разделы и баллы совпадают', acts.every(a => pk.get(a.key).name === a.name && pk.get(a.key).group === a.group && (a.group !== 'main' || pk.get(a.key).wk === a.wk)));
   ok('без выплаты только пункты вне приказа (наряд, организация патрулирования, выговор)', cfg.items.filter(i => !i.pay).map(i => i.key).join() === 'naryad,patrol,vygovor');
+}
+// адресат отчёта: дефолт по должности и отметке СС, ручной выбор, header.to (конец периода) не затирается
+{
+  const base = (pos, extra) => ({ week: '2026-10-19', position: pos, header: { rank: 'x', name: 'y', static_id: '1', from: '2026-10-19', to: '2026-10-25' }, items: [{ key: 'postavka', n: 1 }], ...extra });
+  ok('адресаты: gu, зам. ком. брига по РЛС, ком. бриг', W.REPORT_TO.map(a => a.key).join() === 'gu,zam_kombrig_rls,kombrig');
+  ok('обычный сотрудник → gu', W.reportInput(cfg, base('Инспектор ВП'), false).addressee === 'gu');
+  ok('СС → zam_kombrig_rls', W.reportInput(cfg, base('Инструктор ВП'), true).addressee === 'zam_kombrig_rls');
+  ok('ком. бат (и СС) → kombrig', W.reportInput(cfg, base('Ком. Бат. ВП'), true).addressee === 'kombrig' && W.reportToDefault('kom_gar', false) === 'kombrig');
+  const man = W.reportInput(cfg, base('Инспектор ВП', { addressee: 'kombrig' }), false);
+  ok('ручной выбор, в header.addressee, период цел', man.addressee === 'kombrig' && man.header.addressee === 'kombrig' && man.header.to === '2026-10-25');
+  ok('по названию тоже', W.reportInput(cfg, base('Стажёр ВП', { addressee: 'Командир бригады' }), false).addressee === 'kombrig');
+  let t = ''; try { W.reportInput(cfg, base('Стажёр ВП', { addressee: 'министр' }), false); } catch (e) { t = e.message; } ok('неизвестный адресат → ошибка', /Адресат/.test(t));
 }
 console.log(fail ? `FAILED ${fail}` : `ALL OK ${pass}`);
 process.exit(fail ? 1 : 0);

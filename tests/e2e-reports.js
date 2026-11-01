@@ -40,7 +40,13 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   await page.fill('#num', '7'); await page.fill('#fromRank', 'Лейтенант'); await page.fill('#fromStatic', '4455'); await page.fill('#fromName', 'Иван Петров');
   await page.fill('#fromUnit', 'Батальон военной полиции');
   check('должность — список из 7 должностей таблицы окладов', (await page.$$eval('#fromPos option', o => o.map(x => x.value).filter(Boolean))).join('|') === 'Комендант Гарнизона|Ком. Бат. ВП|Зам. Ком. Бат. ВП|Инспектор Комендатуры|Инструктор ВП|Инспектор ВП|Стажёр ВП');
+  // адресат («Кому»): по умолчанию по должности; командир батальона — командиру бригады
+  const toOf = async () => page.evaluate(async () => JSON.stringify((await window.__vp.spec()).to[0]));
+  check('адресат: в форме 3 варианта (нач. ГУ ВП, зам. ком. брига по РЛС, ком. бриг)', (await page.$$eval('#toSel option', o => o.map(x => x.value))).join('|') === 'gu|zam_kombrig_rls|kombrig');
+  await page.selectOption('#fromPos', 'Ком. Бат. ВП');
+  check('адресат: ком. бат → командиру бригады (в шапке документа)', (await page.inputValue('#toSel')) === 'kombrig' && /Командиру бригады/.test(await toOf()), await toOf());
   await page.selectOption('#fromPos', 'Инспектор ВП');
+  check('адресат: обычный сотрудник → прежний адресат (военный комендант, начальник ГУ ВП)', (await page.inputValue('#toSel')) === 'gu' && /Военному коменданту гарнизона, начальнику ГУ ВП/.test(await toOf()), await toOf());
   await page.click('#wkCur');
   check('период по умолчанию — текущая неделя пн–вс', (await page.inputValue('#fromDate')) === WEEK && (await page.inputValue('#toDate')) === addD(WEEK, 6), [await page.inputValue('#fromDate'), WEEK]);
   const setAct = async (key, n, links) => {
@@ -80,6 +86,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   let r = await call('GET', '/api/reports/my?week=' + WEEK, t1);
   check('повторная отправка → тот же отчёт, версия 2', r.d.report && r.d.report.version === 2 && r.d.report.items.some(i => i.key === 'docs'), r.d.report && r.d.report.version);
   check('сервер: баллы основной отчётности (200+60+10+3+10+15 = 298)', r.d.report.points === 298, r.d.report.points);
+  check('сервер: адресат сохранён (gu), период не затёрт', r.d.report.addressee === 'gu' && r.d.report.header.to === addD(WEEK, 6) && /начальник ГУ ВП/.test(r.d.report.addressee_name), [r.d.report.addressee, r.d.report.header]);
   const repId = r.d.report.id;
 
   // ---------- 2. права и роль «Руководство ГУ ВП» ----------
@@ -191,6 +198,44 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   r = await call('GET', '/api/me', t3); check('чекбокс «Руководство ГУ ВП» на странице пользователя', r.d.user.leader === true);
   await page.goto(OFF + 'otchet.html'); await page.evaluate(t => localStorage.setItem('vpexam_token', t), L); await page.reload(); await page.waitForSelector('#ecoBar .eco-out');
   check('сайт отчётов: руководству в шторке видна ссылка «Руководство: отчёты»', /Руководство: отчёты/.test(await page.textContent('#ecoDrawer')) && (await page.getAttribute('#ecoDrawer a[href$="#/lead"]', 'href')) === SITE + '#/lead');
+  // ---------- 9. адресат отчёта ----------
+  r = await call('GET', '/api/report-config'); check('report-config: список адресатов', (r.d.addressees || []).map(a => a.key).join('|') === 'gu|zam_kombrig_rls|kombrig', r.d.addressees);
+  r = await call('POST', '/__test/sql', null, { sql: "SELECT dflt_value AS d FROM pragma_table_info('reports') WHERE name = 'addressee'" });
+  check('миграция 0015: столбец reports.addressee, по умолчанию gu', r.d.results[0] && /gu/.test(r.d.results[0].d), r.d);
+  const t2 = await login(E2, 'petr_s');
+  const repBody = (pos, extra) => ({ week: WEEK, position: pos, header: { rank: 'Капитан', name: 'Пётр Сидоров', static_id: '77', from: WEEK, to: addD(WEEK, 6) }, items: [{ key: 'postavka', n: 2, links: [] }], ...extra });
+  r = await call('POST', '/api/reports', t2, repBody('Инструктор ВП')); check('СС без выбора → зам. командира бригады по РЛС', r.status === 200 && r.d.report.addressee === 'zam_kombrig_rls', r.d);
+  r = await call('GET', '/api/reports/my', t2); check('reports/my: адресат по умолчанию для СС', r.d.addressee_default === 'zam_kombrig_rls' && r.d.recent[0].addressee === 'zam_kombrig_rls', [r.d.addressee_default, r.d.recent]);
+  r = await call('POST', '/api/reports', t2, repBody('Инструктор ВП', { addressee: 'kombrig' })); check('ручной выбор адресата сохраняется (версия 2)', r.d.report.addressee === 'kombrig' && r.d.report.version === 2, r.d.report && [r.d.report.addressee, r.d.report.version]);
+  r = await call('POST', '/api/reports', t2, repBody('Инструктор ВП', { addressee: 'ministr' })); check('неизвестный адресат → 400', r.status === 400);
+  r = await call('POST', '/api/reports', t2, repBody('Инструктор ВП', { addressee: 'zam_kombrig_rls' }));
+  r = await call('POST', '/api/reports', t3, repBody('Ком. Бат. ВП')); check('ком. бат без выбора → командир бригады', r.status === 200 && r.d.report.addressee === 'kombrig', r.d);
+  r = await call('GET', '/api/reports/my?week=' + PREV, t3); check('старый отчёт (до выбора) — прежний адресат', r.d.report.addressee === 'gu', r.d.report && r.d.report.addressee);
+  r = await call('GET', '/api/lead/week', L);
+  check('руководство: адресат в строках недели', r.d.rows.find(x => x.user_id === E1).addressee === 'gu' && r.d.rows.find(x => x.user_id === E2).addressee === 'zam_kombrig_rls' && r.d.rows.find(x => x.user_id === E3).addressee === 'kombrig', r.d.rows.map(x => [x.user_id, x.addressee]));
+  await as(L, '/lead'); await page.waitForSelector('table.prem');
+  check('таблица недели: адресат под должностью', /Командир бригады/.test(await rowTxt(E3)) && /по РЛС/.test(await rowTxt(E2)), await rowTxt(E3));
+  await page.selectOption('#toFilter', 'kombrig'); await page.waitForFunction(() => /to=kombrig/.test(location.hash) && document.querySelectorAll('tr[data-uid]').length === 1);
+  check('фильтр по адресату: только отчёты командиру бригады', (await page.$$eval('tr[data-uid]', t => t.map(x => x.dataset.uid))).join() === E3);
+  dlp = page.waitForEvent('download'); await page.click('#csvBtn'); f = await dlp; await f.saveAs(SHOTS + 'premii-kombrig.csv');
+  const csv2 = fs.readFileSync(SHOTS + 'premii-kombrig.csv', 'utf8');
+  check('экспорт: столбец «Адресат», при фильтре — только выбранные', /;Адресат;/.test(csv2.split('\n')[0]) && /;Командир бригады;/.test(csv2) && !/Иван Петров/.test(csv2), csv2.slice(0, 300));
+  await page.selectOption('#toFilter', ''); await page.waitForFunction(() => document.querySelectorAll('tr[data-uid]').length >= 3);
+  await page.click(`tr[data-uid="${E3}"] a[href^="#/lead/report/"]`); await page.waitForSelector('#toSel');
+  check('отчёт: «Кому: Командиру бригады»', /Кому:\s*Командиру бригады/.test(await page.textContent('.rep-to-line')) && (await page.inputValue('#toSel')) === 'kombrig');
+  await page.selectOption('#toSel', 'zam_kombrig_rls'); await page.waitForFunction(() => /по РЛС/.test(document.querySelector('.rep-to-line')?.textContent || ''));
+  r = await call('GET', '/api/reports/my', t3); check('руководство исправляет адресата', r.d.report.addressee === 'zam_kombrig_rls', r.d.report.addressee);
+  r = await call('GET', '/api/admin/audit?limit=20', A); check('журнал: смена адресата', JSON.stringify(r.d).includes('zam_kombrig_rls'));
+  await as(t2, '/reports'); await page.waitForSelector('.rep-to');
+  check('сотрудник видит адресата своего отчёта', /по РЛС/.test(await page.textContent('.rep-to')), await page.textContent('.rep-to'));
+  // сайт отчётов: СС после входа → по умолчанию зам. ком. брига по РЛС; ручной выбор запоминается; «по должности» сбрасывает
+  await page.goto(OFF + 'otchet.html'); await page.evaluate(t => { localStorage.setItem('vpexam_token', t); localStorage.removeItem('vp_week_to'); }, t2); await page.reload(); await page.waitForSelector('#ecoBar .eco-out');
+  await page.waitForFunction(() => document.getElementById('toSel').value === 'zam_kombrig_rls');
+  check('форма: СС → зам. командира бригады по РЛС', /Заместителю командира бригады по РЛС/.test(await toOf()), await toOf());
+  await page.selectOption('#toSel', 'gu'); await page.reload(); await page.waitForSelector('#ecoBar .eco-out'); await page.waitForTimeout(300);
+  check('форма: ручной выбор сохраняется, подсказка «по должности»', (await page.inputValue('#toSel')) === 'gu' && !!(await page.$('#toAuto')) && (await page.evaluate(() => window.__vp.payload().addressee)) === 'gu');
+  await page.click('#toAuto'); check('форма: «по должности» возвращает адресата по умолчанию', (await page.inputValue('#toSel')) === 'zam_kombrig_rls');
+  await page.screenshot({ path: SHOTS + 'rep-addressee.png' });
   // мобильный вид
   const m = await b.newPage({ viewport: { width: 390, height: 800 } }); await m.goto(OFF + 'otchet.html'); await m.waitForSelector('#ecoBar');
   check('мобильный: шапка сайта отчётов помещается в ширину', await m.evaluate(() => { const e = document.querySelector('header.topbar'); return e.scrollWidth <= e.clientWidth + 1 && e.getBoundingClientRect().right <= innerWidth + 1; }));

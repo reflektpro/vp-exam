@@ -2569,13 +2569,35 @@ function weeklyPoints(cfg, items) {
 function strikeLabel(n) { return n <= 0 ? '' : n === 1 ? 'предупреждение' : n === 2 ? 'выговор' : 'увольнение'; }
 
 // --- отчёты сотрудника ---
+// Адресат еженедельного отчёта (блок «Кому» в шапке). gu — прежний фиксированный адресат (по умолчанию для сотрудников и для всех старых отчётов).
+// По умолчанию: командир батальона и комендант гарнизона — командиру бригады; старший состав (СС) — заместителю командира бригады по РЛС; остальные — gu.
+// Сотрудник может выбрать адресата вручную; руководство может исправить его при проверке. Видимость отчётов адресат не меняет: их видят «Руководство ГУ ВП» и администраторы.
+const REPORT_TO = [
+  { key: 'gu', name: 'Военный комендант гарнизона, начальник ГУ ВП', short: 'Нач. ГУ ВП', to: 'Военному коменданту гарнизона, начальнику ГУ ВП' },
+  { key: 'zam_kombrig_rls', name: 'Заместитель командира бригады по РЛС', short: 'Зам. ком. брига по РЛС', to: 'Заместителю командира бригады по РЛС' },
+  { key: 'kombrig', name: 'Командир бригады', short: 'Ком. бриг', to: 'Командиру бригады' },
+];
+const REPORT_TO_KEYS = REPORT_TO.map(a => a.key);
+function reportToDefault(position, senior) {
+  if (position === 'kom_bat' || position === 'kom_gar') return 'kombrig';
+  if (senior) return 'zam_kombrig_rls';
+  return 'gu';
+}
+function reportToKey(v) {
+  const s = String(v == null ? '' : v).trim(); if (!s) return '';
+  if (REPORT_TO_KEYS.includes(s)) return s;
+  const low = s.toLowerCase(); const a = REPORT_TO.find(x => [x.name, x.short, x.to].some(t => t.toLowerCase() === low));
+  if (a) return a.key;
+  throw new HttpError(400, 'Адресат отчёта: ' + REPORT_TO.map(a => a.name).join(', '));
+}
+const reportToInfo = (k) => REPORT_TO.find(a => a.key === k) || REPORT_TO[0];
 const REPORT_STATUS = ['submitted', 'review', 'approved', 'rejected'];
 function cleanLinks(v) {
   const arr = (Array.isArray(v) ? v : String(v || '').split(/\s+/)).map(s => String(s).trim()).filter(Boolean);
   if (arr.length > 60) throw new HttpError(400, 'Слишком много ссылок у одного пункта (макс. 60)');
   return arr.map(u => { if (u.length > 1000 || !/^https?:\/\/[^\s]+$/i.test(u)) throw new HttpError(400, 'Ссылка должна начинаться с http:// или https://: ' + u.slice(0, 80)); return u; });
 }
-function reportInput(cfg, b) {
+function reportInput(cfg, b, senior) {
   const week = weekParam(b.week);
   const h = b.header || {};
   const position = positionKey(cfg, b.position || h.position);
@@ -2606,7 +2628,10 @@ function reportInput(cfg, b) {
     return o;
   }).filter(x => x.n > 0);
   if (!items.length) throw new HttpError(400, 'В отчёте нет ни одного выполненного пункта');
-  return { week, position, header, items };
+  // header.to — конец периода (дата), поэтому адресат — отдельное поле: b.addressee (или header.addressee)
+  const addressee = reportToKey(b.addressee ?? h.addressee) || reportToDefault(position, senior);
+  header.addressee = addressee;
+  return { week, position, header, items, addressee };
 }
 function sameItem(a, b) { return a && b && a.n === b.n && (a.vp || 0) === (b.vp || 0) && JSON.stringify(a.links) === JSON.stringify(b.links); }
 async function submitReport(request, env, user) {
@@ -2616,7 +2641,7 @@ async function submitReport(request, env, user) {
   // имя, звание и статик — из профиля (если заполнены): в отчёте те же данные, что в личном деле
   b.header = { ...(b.header || {}) };
   if (user.ic_name) b.header.name = user.ic_name; if (user.rank) b.header.rank = user.rank; if (user.static_id) b.header.static_id = user.static_id;
-  const r = reportInput(cfg, b);
+  const r = reportInput(cfg, b, !!user.senior);
   const now = Date.now();
   if (r.week > weekOf(now)) throw new HttpError(400, 'Нельзя отправить отчёт за будущую неделю');
   const deadline = weekDeadline(r.week, cfg.rules);
@@ -2626,8 +2651,8 @@ async function submitReport(request, env, user) {
   let id, version;
   if (!old) {
     const late = now > deadline ? 1 : 0;
-    const row = await env.DB.prepare(`INSERT INTO reports (user_id, week, position, data, points, status, late, first_submitted_at, submitted_at, version, item_review, created_at, updated_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, 'submitted', ?6, ?7, ?7, 1, '{}', ?7, ?7) RETURNING id`).bind(user.id, r.week, r.position, data, points, late, now).first();
+    const row = await env.DB.prepare(`INSERT INTO reports (user_id, week, position, data, points, status, late, first_submitted_at, submitted_at, version, item_review, created_at, updated_at, addressee)
+      VALUES (?1, ?2, ?3, ?4, ?5, 'submitted', ?6, ?7, ?7, 1, '{}', ?7, ?7, ?8) RETURNING id`).bind(user.id, r.week, r.position, data, points, late, now, r.addressee).first();
     id = row.id; version = 1;
   } else {
     // правка в том же отчёте: история версий; опоздание определяется первой отправкой; отметки проверки по изменённым пунктам сбрасываются
@@ -2638,8 +2663,8 @@ async function submitReport(request, env, user) {
     version = (old.version || 1) + 1; id = old.id;
     await env.DB.batch([
       env.DB.prepare('INSERT INTO report_history (report_id, version, data, position, submitted_at, after_deadline) VALUES (?1, ?2, ?3, ?4, ?5, ?6)').bind(old.id, old.version || 1, old.data, old.position, old.submitted_at, old.submitted_at > deadline ? 1 : 0),
-      env.DB.prepare(`UPDATE reports SET position = ?1, data = ?2, points = ?3, status = 'submitted', item_review = ?4, submitted_at = ?5, version = ?6, updated_at = ?5, edited_after_deadline = CASE WHEN ?5 > ?7 THEN 1 ELSE edited_after_deadline END WHERE id = ?8`)
-        .bind(r.position, data, points, JSON.stringify(review), now, version, deadline, old.id),
+      env.DB.prepare(`UPDATE reports SET position = ?1, data = ?2, points = ?3, status = 'submitted', item_review = ?4, submitted_at = ?5, version = ?6, updated_at = ?5, edited_after_deadline = CASE WHEN ?5 > ?7 THEN 1 ELSE edited_after_deadline END, addressee = ?9 WHERE id = ?8`)
+        .bind(r.position, data, points, JSON.stringify(review), now, version, deadline, old.id, r.addressee),
     ]);
   }
   return json({ report: await reportPublic(env, cfg, await env.DB.prepare('SELECT * FROM reports WHERE id = ?1').bind(id).first(), true), created: !old });
@@ -2654,6 +2679,8 @@ async function reportPublic(env, cfg, row, mine) {
     header: d.header || {}, items: (d.items || []).map(i => ({ ...i, review: review[i.key] || null })), points: row.points, status: row.status, late: !!row.late, edited_after_deadline: !!row.edited_after_deadline,
     first_submitted_at: row.first_submitted_at, submitted_at: row.submitted_at, version: row.version, comment: row.comment || '', reviewed_at: row.reviewed_at, reviewed_by: row.reviewed_by,
     plan: premPlan(cfg, counts) };
+  const to = reportToInfo(row.addressee || (d.header && d.header.addressee) || 'gu');
+  Object.assign(o, { addressee: to.key, addressee_name: to.name, addressee_to: to.to });
   return o;
 }
 async function myReports(env, user, url) {
@@ -2661,12 +2688,14 @@ async function myReports(env, user, url) {
   const cur = weekOf(Date.now());
   const week = url.searchParams.get('week') ? weekParam(url.searchParams.get('week')) : cur;
   const row = await env.DB.prepare('SELECT * FROM reports WHERE user_id = ?1 AND week = ?2').bind(user.id, week).first();
-  const { results } = await env.DB.prepare('SELECT id, week, status, late, submitted_at, version, comment FROM reports WHERE user_id = ?1 ORDER BY week DESC LIMIT 20').bind(user.id).all();
-  return json({ week, current_week: cur, deadline: weekDeadline(week, cfg.rules), now: Date.now(), report: await reportPublic(env, cfg, row, true), recent: results.map(r => ({ ...r, late: !!r.late })),
-    user: publicUser(user) });
+  const { results } = await env.DB.prepare('SELECT id, week, status, late, submitted_at, version, comment, addressee FROM reports WHERE user_id = ?1 ORDER BY week DESC LIMIT 20').bind(user.id).all();
+  return json({ week, current_week: cur, deadline: weekDeadline(week, cfg.rules), now: Date.now(), report: await reportPublic(env, cfg, row, true),
+    recent: results.map(r => ({ ...r, late: !!r.late, addressee: r.addressee || 'gu', addressee_name: reportToInfo(r.addressee).name })),
+    addressees: REPORT_TO, addressee_default: reportToDefault(user.staff_position || '', !!user.senior), user: publicUser(user) });
 }
 function premConfigPublic(cfg) {
-  return { items: cfg.items, positions: cfg.positions.map(p => ({ key: p.key, name: p.name })), plan: cfg.plan, rules: { thanks_points: cfg.rules.thanks_points, deadline_dow: cfg.rules.deadline_dow, deadline_hour: cfg.rules.deadline_hour } };
+  return { items: cfg.items, positions: cfg.positions.map(p => ({ key: p.key, name: p.name })), plan: cfg.plan, rules: { thanks_points: cfg.rules.thanks_points, deadline_dow: cfg.rules.deadline_dow, deadline_hour: cfg.rules.deadline_hour },
+    addressees: REPORT_TO, addressee_defaults: { kom_bat: 'kombrig', kom_gar: 'kombrig', senior: 'zam_kombrig_rls', other: 'gu' } };
 }
 
 // --- руководство: неделя, премии ---
@@ -2703,13 +2732,14 @@ async function leadWeek(env, url) {
   const strikes = await strikeMap(env, cfg);
   const rows = list.map((p, i) => ({ user_id: p.user_id, name: p.name, static_id: p.static_id, staff: !!p.staff, senior: !!p.senior, position: p.position, report_id: p.row ? p.row.id : null,
     status: p.report ? p.status : 'missing', late: !!p.late, submitted_at: p.row ? p.row.first_submitted_at : null, edited_after_deadline: p.row ? !!p.row.edited_after_deadline : false,
-    points: p.row ? p.row.points : 0, counts: p.counts || {}, manual_note: p.manual_note, m_award: p.award, m_ss: p.ss, strikes: strikes.get(p.user_id) || 0, ...calc.rows[i] }));
+    points: p.row ? p.row.points : 0, counts: p.counts || {}, manual_note: p.manual_note, m_award: p.award, m_ss: p.ss, strikes: strikes.get(p.user_id) || 0,
+    addressee: p.row ? (p.row.addressee || 'gu') : null, addressee_default: reportToDefault(p.position, !!p.senior), ...calc.rows[i] }));
   const leftover = await env.DB.prepare("SELECT id, amount FROM budget_ledger WHERE kind = 'leftover' AND week = ?1 AND deleted_at IS NULL").bind(week).first();
   const { results: delr } = await env.DB.prepare('SELECT COUNT(*) AS c FROM reports_deleted WHERE week = ?1').bind(week).all();
   return json({ week, deadline, deadline_passed: Date.now() > deadline, current_week: weekOf(Date.now()), fund: wk ? wk.fund : 0, fund_note: wk ? wk.note || '' : '', fund_set: !!wk,
     rows, totals: { base: calc.base_total, paid: calc.paid_from_fund, remaining: calc.remaining, award_budget: calc.award_budget_total, fund_short: calc.fund_short, add_short: calc.add_short, award_short: calc.award_short, ss_short: calc.ss_short },
     leftover_posted: leftover ? leftover.amount : null, leftover_stale: !!leftover && leftover.amount !== Math.max(0, calc.remaining), deleted_count: delr[0] ? delr[0].c : 0,
-    totals_fund: calc.paid_from_fund, config: { items: cfg.items, positions: cfg.positions, plan: cfg.plan, rules: cfg.rules } });
+    totals_fund: calc.paid_from_fund, config: { items: cfg.items, positions: cfg.positions, plan: cfg.plan, rules: cfg.rules, addressees: REPORT_TO } });
 }
 async function leadSetFund(request, env, actor, week) {
   const cfg = await premConfig(env); const b = await readJson(request);
@@ -2762,7 +2792,7 @@ async function leadReport(env, id) {
   return json({ report: rep, user: u ? publicUser({ ...u, super: isSuper(env, u.id) }) : null, calc: idx >= 0 ? calc.rows[idx] : null,
     reviewer: reviewer ? (reviewer.ic_name || reviewer.global_name || reviewer.username) : null,
     history: hist.map(h => { const d = parseJ(h.data, {}); return { version: h.version, position: h.position, submitted_at: h.submitted_at, after_deadline: !!h.after_deadline, items: (d.items || []).map(i => ({ key: i.key, name: i.name, n: i.n, links: (i.links || []).length })) }; }),
-    config: { items: cfg.items, positions: cfg.positions, plan: cfg.plan } });
+    config: { items: cfg.items, positions: cfg.positions, plan: cfg.plan, addressees: REPORT_TO } });
 }
 async function leadReview(request, env, actor, id) {
   const cfg = await premConfig(env);
@@ -2787,9 +2817,11 @@ async function leadReview(request, env, actor, id) {
   const comment = b.comment !== undefined ? str(b.comment, 2000, { name: 'комментарий' }) : row.comment;
   let position = row.position;
   if (b.position !== undefined) { position = positionKey(cfg, b.position); if (!position) throw new HttpError(400, 'Неизвестная должность'); }
-  await env.DB.prepare('UPDATE reports SET item_review = ?1, status = ?2, comment = ?3, position = ?4, reviewed_by = ?5, reviewed_at = ?6 WHERE id = ?7')
-    .bind(JSON.stringify(review), status, comment, position, actor.id, Date.now(), id).run();
-  await audit(env, actor, 'report.review', id, { status, items: b.items ? Object.keys(b.items).length : 0, position: position !== row.position ? position : undefined });
+  let addressee = row.addressee || 'gu';
+  if (b.addressee !== undefined) { addressee = reportToKey(b.addressee); if (!addressee) throw new HttpError(400, 'Неизвестный адресат'); }
+  await env.DB.prepare('UPDATE reports SET item_review = ?1, status = ?2, comment = ?3, position = ?4, reviewed_by = ?5, reviewed_at = ?6, addressee = ?8 WHERE id = ?7')
+    .bind(JSON.stringify(review), status, comment, position, actor.id, Date.now(), id, addressee).run();
+  await audit(env, actor, 'report.review', id, { status, items: b.items ? Object.keys(b.items).length : 0, position: position !== row.position ? position : undefined, addressee: addressee !== (row.addressee || 'gu') ? addressee : undefined });
   return leadReport(env, id);
 }
 // --- состав, нарушения ---
