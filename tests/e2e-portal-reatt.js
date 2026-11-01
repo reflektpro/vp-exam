@@ -24,6 +24,15 @@ const U = { r1: '820000000000000001', r2: '820000000000000002', r3: '82000000000
   const T = { r1: await login(U.r1, 'reatt_one', 'reatt'), r2: await login(U.r2, 'reatt_two', 'vp,reatt'), r3: await login(U.r3, 'reatt_three', 'reatt'), vp: await login(U.vp, 'vp_only', 'vp') };
   await sql("UPDATE reattestations SET cooldown_min = 0, max_attempts = 0");
 
+  // Переаттестации v2 (0017): прежние виды по умолчанию берут вопросы из своих баз; прежний состав блоков сохранён —
+  // здесь он возвращается через админку (режим «по блокам»), чтобы проверить, что старый механизм работает как раньше.
+  {
+    const lst = (await call('GET', '/api/admin/reatt', A)).d.items;
+    const old = lst.filter(x => ['simple', 'full', 'cases'].includes(x.key));
+    check('v2: прежние виды (simple/full/cases) после 0017 — выборка из баз, состав блоков сохранён', old.length === 3 && old.every(x => x.mode === 'bank' && x.groups.length > 0), old.map(x => [x.key, x.mode, x.groups.length]));
+    for (const x of old) { const rr = await call('PUT', `/api/admin/reatt/${x.id}`, A, { mode: 'groups' }); if (rr.status !== 200) console.log('FAIL v2: возврат в режим блоков', x.key, rr.status, rr.d); }
+  }
+
   // ---------- 1. главная ----------
   let r = await call('GET', '/api/config');
   const st = (r.d && (r.d.settings || r.d)) || {};

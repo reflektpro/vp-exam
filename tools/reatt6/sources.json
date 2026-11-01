@@ -1,0 +1,22 @@
+{
+  "_comment": "Документы проекта для переаттестаций v2: id (как в worker SOURCE_DOCS) → исходный файл. Копия текста кладётся в content/reatt6/docs/<id>.md.",
+  "docs": {
+    "vu": "/workspace/vp_reatt_sources/ustavy/src/vu.txt",
+    "du": "/workspace/vp_reatt_sources/ustavy/src/du.txt",
+    "kps": "/workspace/vp_reatt_sources/ustavy/src/kps.txt",
+    "su": "/workspace/vp_reatt_sources/ustavy/src/su.txt",
+    "pk": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/processualnyj-kodeks-rossijskoj-federacii.md",
+    "uk": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/ugolovnyj-kodeks-rossijskoj-federacii.md",
+    "koap": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/kodeks-ob-administrativnyx-pravonarushenijax-rossijskoj-federacii.md",
+    "tk": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/trudovoj-kodeks-rossijskoj-federacii.md",
+    "fz_oborona": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-ob-oborone-no52-fz.md",
+    "fz_oruzhie": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-ob-oruzhii-no-34-fz.md",
+    "fz_territorii": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-sobstvennosti-zakrytyx-i-oxranjaemyx-territorijax-no-86-fz.md",
+    "fz_gostayna": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-tajne-no10-fz.md",
+    "fz_gossluzhba": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-sluzhbe-no-54-fz.md",
+    "fz_vozduh": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-vozdushnom-prostranstve-no-95-fz-poslednjaja-redakcija.md",
+    "fkz_rezhimy": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-konstitucionnyj-zakon-ob-osobyx-pravovyx-rezhimax-no-28-fkz.md"
+  },
+  "law_files": { "pk": "pk", "uk": "uk", "koap": "koap", "tk": "tk", "fz_oborona": "fz_oborona", "fz_oruzhie": "fz_oruzhie", "fz_territorii": "fz_territorii", "fz_gostayna": "fz_gostayna", "fz_gossluzhba": "fz_gossluzhba", "fz_vozduh": "fz_vozduh", "fkz_rezhimy": "fkz_rezhimy" },
+  "pkc_law": { "pk": "pk", "uk": "uk", "koap": "koap", "fz86": "fz_territorii", "fz52": "fz_oborona", "fz34": "fz_oruzhie", "ustav_vs": "vu" }
+}

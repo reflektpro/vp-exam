@@ -45,6 +45,15 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 (async () => {
   const A = await login(ADMIN, 'Шерман'), C = await login(CAND, 'Кандидат Орлов'), C2 = await login(CAND2, 'Кандидат Белов'), L = await login(LEGACY, 'legacy');
+
+  // Переаттестации v2 (0017): прежние виды по умолчанию берут вопросы из своих баз; прежний состав блоков сохранён —
+  // здесь он возвращается через админку (режим «по блокам»), чтобы проверить, что старый механизм работает как раньше.
+  {
+    const lst = (await call('GET', '/api/admin/reatt', A)).d.items;
+    const old = lst.filter(x => ['simple', 'full', 'cases'].includes(x.key));
+    check('v2: прежние виды (simple/full/cases) после 0017 — выборка из баз, состав блоков сохранён', old.length === 3 && old.every(x => x.mode === 'bank' && x.groups.length > 0), old.map(x => [x.key, x.mode, x.groups.length]));
+    for (const x of old) { const rr = await call('PUT', `/api/admin/reatt/${x.id}`, A, { mode: 'groups' }); if (rr.status !== 200) console.log('FAIL v2: возврат в режим блоков', x.key, rr.status, rr.d); }
+  }
   let r;
   // ---------- 1. старые данные после миграции ----------
   r = await call('GET', '/api/attempts/1', L);
@@ -342,7 +351,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.goto(SITE + '#/admin/bank'); await page.waitForSelector('#bf');
   check('UI банка: нет «не душных»', !/не душн/i.test(await page.textContent('main')));
   await page.goto(SITE + '#/admin/attempts?status=pending_review&kind=reatt'); await page.waitForSelector('tr.click[data-href^="#/admin/attempt/"]');
-  check('проверка: фильтр «Переаттестация» показывает попытку по кейсам', /по кейсам/.test(await page.textContent('table')));
+  check('проверка: фильтр «Переаттестация» показывает попытку по кейсам', /по (общим )?кейсам/.test(await page.textContent('table')));
   check('проверка: вкладка по каждой переаттестации', /полная/.test(await page.textContent('main')) && /Тестовая: только ВУ \(удалена\)/.test(await page.textContent('main')));
   await page.click('tr.click'); await page.waitForSelector('#rf');
   check('проверка переаттестации: сводка по блокам', /По блокам/.test(await page.textContent('main')));
