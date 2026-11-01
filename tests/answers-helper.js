@@ -20,6 +20,7 @@ function correctAnswer(row, pub, params) {
     case 'find': { const out = []; d.tokens.forEach((t, i) => { if (t.c) out.push(i); }); return out; }
     case 'letters': { const used = new Set(); return d.word.replace(/\s/g, '').split('').map(ch => { const k = pub.letters.findIndex((x, i) => x === ch && !used.has(i)); used.add(k); return k; }); }
     case 'words': { const used = new Set(); return d.phrase.split(/\s+/).map(w => { const k = pub.words.findIndex((x, i) => x === w && !used.has(i)); used.add(k); return k; }); }
+    case 'hotspot': return d.zones.filter(z => z.correct).map(z => z.id);
     default: return null;
   }
 }
@@ -39,6 +40,7 @@ function wrongAnswer(row, pub) {
     case 'find': { const i = d.tokens.findIndex(t => !t.c && !t.br); return [i]; }
     case 'letters': return pub.letters.map((_, i) => i).reverse().slice(0, 2);
     case 'words': return [pub.words.length - 1];
+    case 'hotspot': return [d.zones.find(z => !z.correct).id];
     default: return null;
   }
 }

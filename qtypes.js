@@ -7,10 +7,13 @@
     blanks_input: 'Заполнение пропусков (ввод)', blanks_select: 'Заполнение пропусков (из списка)', dictation: 'Интерактивный диктант',
     eliminate: 'Последовательное исключение', slider: 'Слайдер (ползунок)', file: 'Загрузка файла', voice: 'Голосовой ответ',
     info: 'Информационный текст', letters: 'Слова из букв', words: 'Фразы из слов', find: 'Поиск в тексте', case: 'Кейс (ситуационная задача)',
+    hotspot: 'Вопрос по изображению (выбор области)',
   };
   const ICONS = { single: '◉', multi: '☑', number: '🔢', text: '⌨', param: '⇄', long: '📝', order: '⇅', match: '🔗', blanks_input: '▭', blanks_select: '▾',
-    dictation: '✎', eliminate: '✕', slider: '⟷', file: '📎', voice: '🎙', info: 'ℹ', letters: '🔤', words: '💬', find: '🔍', case: '⚖' };
-  const PARTIAL = new Set(['multi', 'order', 'match', 'blanks_input', 'blanks_select', 'dictation', 'find', 'eliminate', 'words']);
+    dictation: '✎', eliminate: '✕', slider: '⟷', file: '📎', voice: '🎙', info: 'ℹ', letters: '🔤', words: '💬', find: '🔍', case: '⚖', hotspot: '🎯' };
+  const PARTIAL = new Set(['multi', 'order', 'match', 'blanks_input', 'blanks_select', 'dictation', 'find', 'eliminate', 'words', 'hotspot']);
+  const DIFF = { 1: 'лёгкий', 2: 'средний', 3: 'сложный' };
+  const BASES = { cases_int: 'Внутренние кейсы', cases_gen: 'Общие кейсы', simple: 'Упрощённая', medium: 'Средняя', full: 'Полная общая', vp: 'Полная ВП' };
   const HINTS = {
     multi: 'Можно выбрать несколько вариантов', order: 'Расставьте элементы в правильном порядке: перетащите или используйте стрелки ↑↓',
     match: 'Для каждого элемента слева выберите соответствие', blanks_input: 'Впишите пропущенные слова', blanks_select: 'Выберите слова в пропусках',
@@ -21,6 +24,20 @@
   const e = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
   const fmtKB = (n) => n >= 1024 * 1024 ? (n / 1048576).toFixed(1) + ' МБ' : Math.ceil(n / 1024) + ' КБ';
+  const apiBase = () => ((window.VP_CONFIG && window.VP_CONFIG.API_BASE) || '');
+  // Изображение вопроса: загруженное (m — ключ, отдаётся GET /media/<key>) или SVG-схема (проверена сервером при сохранении).
+  function mediaHtml(m, bare) {
+    if (!m) return '';
+    const inner = m.m ? `<img src="${e(apiBase() + '/media/' + m.m)}" alt="${e(m.alt || 'Изображение к вопросу')}" loading="lazy">` : m.svg ? `<span class="qsvg" role="img" aria-label="${e(m.alt || 'Схема')}">${m.svg}</span>` : '';
+    return bare ? inner : `<figure class="qmedia">${inner}${m.alt ? `<figcaption class="small mut">${e(m.alt)}</figcaption>` : ''}</figure>`;
+  }
+  function extrasHtml(q) {
+    let out = '';
+    if (q.material) out += `<div class="qmat"><div class="small mut">Фрагмент документа:</div><div class="qmat-t">${e(q.material)}</div></div>`;
+    const ms = (q.media || []).slice(q.type === 'hotspot' ? 1 : 0);
+    if (ms.length) out += `<div class="qmedia-list">${ms.map(m => mediaHtml(m)).join('')}</div>`;
+    return out;
+  }
   const fileToB64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).replace(/^data:[^,]*,/, '')); r.onerror = () => rej(new Error('Не удалось прочитать файл')); r.readAsDataURL(blob); });
 
   // ---------- кандидат ----------
@@ -28,11 +45,25 @@
   function mount(box, q, val, onChange, ctx) {
     const ch = () => onChange && onChange();
     const body = document.createElement('div'); body.className = 'qbody qt-' + q.type;
+    const ex = extrasHtml(q); if (ex) box.appendChild(h(`<div class="qextras">${ex}</div>`));
     box.appendChild(body);
+    if (q.type === 'hotspot') body.appendChild(h(`<div class="small mut qhint">${q.multi ? 'Отметьте на изображении все нужные области (повторное нажатие снимает отметку)' : 'Нажмите на нужную область изображения'}</div>`));
     if (HINTS[q.type]) body.appendChild(h(`<div class="small mut qhint">${e(HINTS[q.type])}</div>`));
     const T = q.type;
+    if (T === 'hotspot') {
+      const sel = new Set(Array.isArray(val) ? val : []);
+      const wrap = h(`<div class="hs-wrap">${mediaHtml((q.media || [])[0], true)}</div>`);
+      const sync = () => wrap.querySelectorAll('.hs-zone').forEach(x => x.classList.toggle('on', sel.has(x.dataset.id)));
+      (q.zones || []).forEach(z => {
+        const b = h(`<button type="button" class="hs-zone" style="left:${Number(z.x)}%;top:${Number(z.y)}%;width:${Number(z.w)}%;height:${Number(z.h)}%" data-id="${e(z.id)}" aria-label="Область ${e(z.label)}"><span>${e(z.label)}</span></button>`);
+        b.onclick = () => { if (sel.has(z.id)) sel.delete(z.id); else { if (!q.multi) sel.clear(); sel.add(z.id); } sync(); ch(); };
+        wrap.appendChild(b);
+      });
+      body.appendChild(wrap); sync();
+      return { get: () => sel.size ? [...sel] : null };
+    }
     if (T === 'single' || T === 'multi') {
-      q.options.forEach(o => body.appendChild(h(`<label class="opt"><input type="${T === 'single' ? 'radio' : 'checkbox'}" name="q${q.id}" value="${e(o.id)}" ${(T === 'single' ? val === o.id : Array.isArray(val) && val.includes(o.id)) ? 'checked' : ''}><span>${e(o.text)}</span></label>`)));
+      q.options.forEach(o => body.appendChild(h(`<label class="opt ${o.media ? 'opt-img' : ''}"><input type="${T === 'single' ? 'radio' : 'checkbox'}" name="q${q.id}" value="${e(o.id)}" ${(T === 'single' ? val === o.id : Array.isArray(val) && val.includes(o.id)) ? 'checked' : ''}><span>${o.media ? mediaHtml(o.media) : ''}${e(o.text)}</span></label>`)));
       body.addEventListener('change', ch);
       return { get: () => T === 'single' ? ((body.querySelector('input:checked') || {}).value || null) : [...body.querySelectorAll('input:checked')].map(x => x.value) };
     }
@@ -226,6 +257,8 @@
   // editor(q, {bank, categories}) → { el, get() }  (get возвращает тело для API или бросает Error)
   function editor(q, opts = {}) {
     q = Object.assign({ type: 'single', text: '', points: 1, reference: '', options: [{ text: '', correct: true }, { text: '' }] }, q || {});
+    const docs = opts.docs || [];
+    let media = (q.media || []).slice();
     const el = h(`<div class="qform">
       <div class="fgrid">
         <label class="f"><span>Тип вопроса</span><select class="e-type">${Object.entries(LABELS).map(([k, v]) => `<option value="${k}" ${k === q.type ? 'selected' : ''}>${ICONS[k]} ${v}</option>`).join('')}</select></label>
@@ -233,20 +266,54 @@
         ${opts.bank ? `<label class="f"><span>Категория *</span><input class="e-cat" list="catlist" maxlength="100" value="${e(q.category || '')}" placeholder="ПК, УК, ВУ, ФЗ об обороне…"><datalist id="catlist">${(opts.categories || []).map(c => `<option value="${e(c)}">`).join('')}</datalist></label>
         <label class="f"><span>Вид</span><select class="e-kind"><option value="question" ${q.kind !== 'case' ? 'selected' : ''}>Вопрос</option><option value="case" ${q.kind === 'case' ? 'selected' : ''}>Кейс</option></select></label>` : ''}
       </div>
-      ${opts.bank ? `<div class="row"><label class="chk"><input type="checkbox" class="e-active" ${q.active === false ? '' : 'checked'}> Активен (попадает в выборку)</label>${q.ext_id ? `<span class="small mut">ext_id: ${e(q.ext_id)}</span>` : ''}</div>` : ''}
+      ${opts.bank ? `<div class="row"><label class="chk"><input type="checkbox" class="e-active" ${q.active === false ? '' : 'checked'}> Активен (попадает в выборку)</label>${q.ext_id ? `<span class="small mut">ext_id: ${e(q.ext_id)}</span>` : ''}</div>
+      <fieldset class="e-r6"><legend class="small">Переаттестация: база, сложность, источник</legend><div class="fgrid">
+        <label class="f"><span>База</span><select class="e-base"><option value="">— не в базе переаттестации —</option>${Object.entries(BASES).map(([k, v]) => `<option value="${k}" ${q.base === k ? 'selected' : ''}>${e(v)}</option>`).join('')}</select></label>
+        <label class="f"><span>Сложность</span><select class="e-diff"><option value="">—</option>${[1, 2, 3].map(d => `<option value="${d}" ${Number(q.difficulty) === d ? 'selected' : ''}>${d} — ${DIFF[d]}</option>`).join('')}</select></label>
+        <label class="f"><span>Документ-источник</span><select class="e-doc"><option value="">—</option>${docs.map(d => `<option value="${e(d.id)}" ${q.source_doc === d.id ? 'selected' : ''}>${e(d.short)}</option>`).join('')}${q.source_doc && !docs.some(d => d.id === q.source_doc) ? `<option value="${e(q.source_doc)}" selected>${e(q.source_doc)} (нет в проекте!)</option>` : ''}</select></label>
+        <label class="f"><span>Пункт / статья</span><input class="e-ref6" maxlength="300" value="${e(q.source_ref || '')}" placeholder="п. 2.1 / ст. 14 ч. 2"></label></div>
+        <label class="f"><span>Цитата из документа (подтверждает правильный ответ)</span><textarea class="e-quote" maxlength="3000" rows="2">${e(q.quote || '')}</textarea></label></fieldset>` : ''}
       <label class="f"><span class="e-tlabel">Текст вопроса</span><textarea class="e-text" maxlength="10000" rows="3">${e(q.text)}</textarea></label>
+      <details class="e-extra-w" ${q.material || (q.media || []).length || q.type === 'hotspot' ? 'open' : ''}><summary class="small">Фрагмент документа и изображения</summary>
+        <label class="f"><span>Фрагмент документа (кандидат видит его над вопросом; для «поиска в тексте»)</span><textarea class="e-material" maxlength="20000" rows="3">${e(q.material || '')}</textarea></label>
+        <div class="small mut">Изображения / схемы к вопросу (для «вопроса по изображению» — первое изображение с областями):</div>
+        <div class="e-media"></div>
+        <div class="row"><label class="btn sm">🖼 Загрузить изображение<input type="file" class="e-mfile" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label><button type="button" class="btn sm e-msvg">＋ SVG-схема</button><input class="e-mkey" placeholder="или ключ загруженного" style="max-width:220px"><button type="button" class="btn sm e-mkeyadd">Добавить</button><span class="small e-merr"></span></div>
+      </details>
       <div class="e-spec"></div>
-      <label class="chk e-part-w"><input type="checkbox" class="e-partial" ${q.partial ? 'checked' : ''}> Частичные баллы (пропорционально числу верных элементов)</label>
+      <div class="row e-part-w"><label class="chk"><input type="checkbox" class="e-partial" ${q.partial ? 'checked' : ''}> Частичные баллы (пропорционально числу верных элементов)</label><label class="small">потолок частичного балла, % <input type="number" class="e-pcap" min="0" max="100" value="${q.partial_cap ?? ''}" placeholder="100" style="width:70px"></label></div>
       <details class="e-meta"><summary class="small">Доп. сведения (статья, пояснение — видит только админ)</summary>
         <label class="f"><span>Статья / источник</span><input class="e-article" maxlength="3000" value="${e(q.article || '')}"></label>
         <label class="f"><span>Пояснение</span><textarea class="e-expl" maxlength="3000" rows="2">${e(q.explanation || '')}</textarea></label></details>
     </div>`);
     const spec = el.querySelector('.e-spec');
+    // --- изображения вопроса ---
+    const mbox = el.querySelector('.e-media'); const merr = el.querySelector('.e-merr');
+    const drawMedia = () => {
+      mbox.innerHTML = '';
+      media.forEach((m, i) => {
+        const r = h(`<div class="e-mitem"><div class="e-mprev">${mediaHtml(m, true)}</div><div class="e-mctl">${m.svg ? `<textarea class="e-msrc" rows="3">${e(m.svg)}</textarea>` : `<span class="small mut">ключ: ${e(m.m)}</span>`}<input class="e-malt" maxlength="300" placeholder="Подпись (необязательно)" value="${e(m.alt || '')}"><button type="button" class="btn sm danger e-mrm">Убрать</button></div></div>`);
+        r.querySelector('.e-mrm').onclick = () => { media.splice(i, 1); drawMedia(); if (curType === 'hotspot') build('hotspot', true); };
+        r.querySelector('.e-malt').oninput = (ev) => { media[i].alt = ev.target.value; };
+        const src = r.querySelector('.e-msrc'); if (src) src.onchange = () => { media[i].svg = src.value; drawMedia(); if (curType === 'hotspot') build('hotspot', true); };
+        mbox.appendChild(r);
+      });
+    };
+    const uploadImg = async (file) => {
+      if (!opts.uploadMedia) throw new Error('Загрузка изображений доступна в банке вопросов');
+      if (file.size > 1024 * 1024) throw new Error('Файл больше 1 МБ');
+      return await opts.uploadMedia({ name: file.name, mime: file.type, data: await fileToB64(file) });
+    };
+    el.querySelector('.e-mfile').onchange = async (ev) => { const f = ev.target.files[0]; if (!f) return; merr.textContent = 'Загрузка…';
+      try { const r = await uploadImg(f); media.push({ m: r.key }); merr.textContent = ''; drawMedia(); if (curType === 'hotspot') build('hotspot', true); } catch (err) { merr.innerHTML = `<span class="o-wrong">${e(err.message)}</span>`; } ev.target.value = ''; };
+    el.querySelector('.e-msvg').onclick = () => { media.push({ svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200"><rect x="1" y="1" width="398" height="198" fill="none" stroke="#888"/></svg>' }); drawMedia(); };
+    el.querySelector('.e-mkeyadd').onclick = () => { const k = el.querySelector('.e-mkey').value.trim().replace(/^.*\/media\//, ''); if (!/^[A-Za-z0-9_-]{16,48}$/.test(k)) { merr.innerHTML = '<span class="o-wrong">Некорректный ключ</span>'; return; } media.push({ m: k }); el.querySelector('.e-mkey').value = ''; drawMedia(); };
+    drawMedia();
     let curType = q.type; let getSpec = () => ({});
     const num = (cls, label, v, extra = '') => `<label class="f"><span>${label}</span><input class="${cls}" inputmode="decimal" value="${e(v == null ? '' : v)}" ${extra}></label>`;
     const ref = (label) => `<label class="f"><span>${label || 'Эталонный ответ / критерии (видит только проверяющий)'}</span><textarea class="e-ref" maxlength="10000" rows="3">${e(q.reference || '')}</textarea></label>`;
     const n = (sel) => { const v = spec.querySelector(sel).value.trim().replace(',', '.'); return v === '' ? undefined : Number(v); };
-    const build = (t) => {
+    const build = (t, keep) => {
       curType = t;
       el.querySelector('.e-part-w').hidden = !PARTIAL.has(t);
       el.querySelector('.e-pts-w').hidden = t === 'info';
@@ -255,16 +322,20 @@
       if (t === 'single' || t === 'multi' || t === 'eliminate') {
         spec.innerHTML = `<div class="small mut" style="margin-bottom:6px">${t === 'eliminate' ? 'Варианты — отметьте тот, который должен остаться последним (правильный):' : 'Варианты ответа — отметьте правильные:'}</div><div class="olist"></div><button type="button" class="btn sm addO">+ вариант</button>`;
         const olist = spec.querySelector('.olist');
-        const add = (o) => { const r = h(`<div class="optrow"><input type="${t === 'multi' ? 'checkbox' : 'radio'}" name="c${Math.random().toString(36).slice(2, 6)}x" class="oc" ${o.correct ? 'checked' : ''}><input type="text" class="ot" maxlength="1000" value="${e(o.text)}" placeholder="Текст варианта"><button type="button" class="btn sm danger rm">✕</button></div>`);
-          r.dataset.oid = o.id || ''; r.querySelector('.rm').onclick = () => r.remove(); olist.appendChild(r); };
+        const add = (o) => { const r = h(`<div class="optrow"><input type="${t === 'multi' ? 'checkbox' : 'radio'}" name="c${Math.random().toString(36).slice(2, 6)}x" class="oc" ${o.correct ? 'checked' : ''}><input type="text" class="ot" maxlength="1000" value="${e(o.text)}" placeholder="Текст варианта">${t !== 'eliminate' ? '<label class="btn sm" title="Изображение варианта">🖼<input type="file" class="omf" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label><span class="omprev"></span>' : ''}<button type="button" class="btn sm danger rm">✕</button></div>`);
+          r.dataset.oid = o.id || ''; r.querySelector('.rm').onclick = () => r.remove();
+          const setM = (m) => { r._media = m || null; const pv = r.querySelector('.omprev'); if (pv) pv.innerHTML = m ? `<span class="omthumb">${mediaHtml(m, true)}</span><button type="button" class="btn sm omrm" title="Убрать изображение">×</button>` : ''; const x = r.querySelector('.omrm'); if (x) x.onclick = () => setM(null); };
+          setM(o.media);
+          const mf = r.querySelector('.omf'); if (mf) mf.onchange = async (ev) => { const f = ev.target.files[0]; if (!f) return; try { const res = await uploadImg(f); setM({ m: res.key }); } catch (err) { alert(err.message); } ev.target.value = ''; };
+          olist.appendChild(r); };
         const name = 'c' + Math.random().toString(36).slice(2, 8);
         (q.options && q.options.length ? q.options : [{ text: '', correct: true }, { text: '' }]).forEach(add);
         spec.querySelectorAll('.oc').forEach(x => { if (t !== 'multi') x.name = name; });
         spec.querySelector('.addO').onclick = () => { add({ text: '' }); spec.querySelectorAll('.oc').forEach(x => { if (t !== 'multi') x.name = name; }); };
-        getSpec = () => ({ options: [...olist.querySelectorAll('.optrow')].map(r => ({ id: r.dataset.oid || undefined, text: r.querySelector('.ot').value, correct: r.querySelector('.oc').checked })) });
+        getSpec = () => ({ options: [...olist.querySelectorAll('.optrow')].map(r => ({ id: r.dataset.oid || undefined, text: r.querySelector('.ot').value, correct: r.querySelector('.oc').checked, ...(r._media ? { media: r._media } : {}) })) });
       } else if (t === 'number') {
-        spec.innerHTML = `<div class="fgrid">${num('e-ans', 'Правильный ответ *', q.answer)}${num('e-tol', 'Допуск ± (0 — точно)', q.tolerance || 0)}<label class="f"><span>Единица</span><input class="e-unit" maxlength="40" value="${e(q.unit || '')}"></label></div>`;
-        getSpec = () => ({ answer: n('.e-ans'), tolerance: n('.e-tol') || 0, unit: spec.querySelector('.e-unit').value });
+        spec.innerHTML = `<div class="fgrid">${num('e-ans', 'Правильный ответ * (или «от» для диапазона)', q.answer)}${num('e-amax', 'Диапазон «до» (необязательно)', q.answer_max)}${num('e-tol', 'Допуск ± (0 — точно)', q.tolerance || 0)}<label class="f"><span>Единица</span><input class="e-unit" maxlength="40" value="${e(q.unit || '')}"></label></div><div class="small mut">Кандидат может ввести «1 500», «1,5», «15 минут» — единица после числа допускается.</div>`;
+        getSpec = () => ({ answer: n('.e-ans'), answer_max: n('.e-amax') ?? '', tolerance: n('.e-tol') || 0, unit: spec.querySelector('.e-unit').value });
       } else if (t === 'slider') {
         spec.innerHTML = `<div class="fgrid">${num('e-min', 'Минимум', q.min ?? 0)}${num('e-max', 'Максимум', q.max ?? 100)}${num('e-step', 'Шаг', q.step ?? 1)}${num('e-ans', 'Правильное значение *', q.answer)}${num('e-tol', 'Допуск ±', q.tolerance || 0)}<label class="f"><span>Единица</span><input class="e-unit" maxlength="40" value="${e(q.unit || '')}"></label></div>`;
         getSpec = () => ({ min: n('.e-min'), max: n('.e-max'), step: n('.e-step'), answer: n('.e-ans'), tolerance: n('.e-tol') || 0, unit: spec.querySelector('.e-unit').value });
@@ -303,15 +374,34 @@
       } else if (t === 'words') {
         spec.innerHTML = `<label class="f"><span>Фраза-ответ * (слова через пробел)</span><input class="e-phrase" maxlength="1000" value="${e(q.phrase || '')}"></label><label class="f"><span>Лишние слова (через пробел, необязательно)</span><input class="e-extra" maxlength="1000" value="${e((q.extra_words || []).join(' '))}"></label>`;
         getSpec = () => ({ phrase: spec.querySelector('.e-phrase').value, extra_words: spec.querySelector('.e-extra').value.split(/\s+/).filter(Boolean) });
+      } else if (t === 'hotspot') {
+        const zl = (q.zones || []).map(z => `${z.x}, ${z.y}, ${z.w}, ${z.h} | ${z.label}${z.correct ? ' | *' : ''}`).join('\n');
+        const prevZ = keep && spec.querySelector('.e-zones') ? spec.querySelector('.e-zones').value : zl;
+        spec.innerHTML = `<div class="small mut">Области на первом изображении — по одной в строке: «x, y, ширина, высота | подпись | *» (в % от размера изображения; * — правильная область). Можно обвести область мышью на превью.</div>
+          <div class="hs-wrap hs-edit">${media[0] ? mediaHtml(media[0], true) : '<div class="alert warn">Сначала добавьте изображение или SVG-схему (блок «Фрагмент документа и изображения»)</div>'}</div>
+          <label class="f"><span>Области</span><textarea class="e-zones" rows="5">${e(prevZ)}</textarea></label>
+          <label class="chk"><input type="checkbox" class="e-showlab" ${q.show_labels ? 'checked' : ''}> Показывать кандидату подписи областей (иначе — только номера)</label>`;
+        const wrap = spec.querySelector('.hs-edit'); const ta = spec.querySelector('.e-zones');
+        const drawZ = () => { wrap.querySelectorAll('.hs-zone').forEach(x => x.remove()); splitLines(ta.value).forEach((l, i) => { const [g, lab, mk] = l.split('|').map(x => (x || '').trim()); const [x, y, w, hh] = g.split(/[,;\s]+/).map(Number);
+          if ([x, y, w, hh].some(v => !Number.isFinite(v))) return; wrap.appendChild(h(`<div class="hs-zone ${mk === '*' ? 'ok' : ''}" style="left:${x}%;top:${y}%;width:${w}%;height:${hh}%"><span>${i + 1}. ${e(lab || '')}</span></div>`)); }); };
+        ta.oninput = drawZ; drawZ();
+        let st = null;
+        const pt = (ev) => { const r = wrap.getBoundingClientRect(); return [Math.max(0, Math.min(100, (ev.clientX - r.left) / r.width * 100)), Math.max(0, Math.min(100, (ev.clientY - r.top) / r.height * 100))]; };
+        wrap.onmousedown = (ev) => { if (!media[0]) return; ev.preventDefault(); st = pt(ev); };
+        wrap.onmouseup = (ev) => { if (!st) return; const p = pt(ev); const x = Math.min(st[0], p[0]), y = Math.min(st[1], p[1]), w = Math.abs(p[0] - st[0]), hh = Math.abs(p[1] - st[1]); st = null;
+          if (w < 1 || hh < 1) return; const r1 = (v) => Math.round(v * 10) / 10; ta.value = (ta.value.trim() ? ta.value.trim() + '\n' : '') + `${r1(x)}, ${r1(y)}, ${r1(w)}, ${r1(hh)} | область`; drawZ(); };
+        getSpec = () => ({ zones: ta.value, show_labels: spec.querySelector('.e-showlab').checked });
       } else { spec.innerHTML = ''; getSpec = () => ({}); }
     };
     build(q.type);
     el.querySelector('.e-type').onchange = (ev) => { const t = ev.target.value; if (t === 'case' && !Number(el.querySelector('.e-pts').value)) el.querySelector('.e-pts').value = 5; build(t); };
     const get = () => {
       const body = Object.assign({ type: curType, text: el.querySelector('.e-text').value, points: Number(el.querySelector('.e-pts').value || 0) }, getSpec());
-      if (PARTIAL.has(curType)) body.partial = el.querySelector('.e-partial').checked;
+      if (PARTIAL.has(curType)) { body.partial = el.querySelector('.e-partial').checked; body.partial_cap = el.querySelector('.e-pcap').value; }
       body.article = el.querySelector('.e-article').value; body.explanation = el.querySelector('.e-expl').value;
-      if (opts.bank) { body.category = el.querySelector('.e-cat').value; body.kind = el.querySelector('.e-kind').value; body.active = el.querySelector('.e-active').checked; }
+      body.material = el.querySelector('.e-material').value; body.media = media.map(m => ({ ...m }));
+      if (opts.bank) { body.category = el.querySelector('.e-cat').value; body.kind = el.querySelector('.e-kind').value; body.active = el.querySelector('.e-active').checked;
+        body.base = el.querySelector('.e-base').value; body.difficulty = el.querySelector('.e-diff').value; body.source_doc = el.querySelector('.e-doc').value; body.source_ref = el.querySelector('.e-ref6').value; body.quote = el.querySelector('.e-quote').value; }
       return body;
     };
     return { el, get };
@@ -321,16 +411,20 @@
   function review(it, i, ctx) {
     const q = it.question; const N = q.native || {};
     const pts = it.manual_points ?? '';
-    const head = `<div class="row between"><span class="small mut">${it.group ? e(it.group) + ' · ' : ''}${q.kind === 'case' ? '<b>Кейс</b> · ' : ''}Вопрос ${i + 1} · ${ICONS[q.type] || ''} ${e(LABELS[q.type] || q.type)}${q.category ? ' · ' + e(q.category) : ''}</span><span class="small mut">${q.points} балл(ов)</span></div>`;
+    const head = `<div class="row between"><span class="small mut">${it.group ? e(it.group) + ' · ' : ''}${q.kind === 'case' ? '<b>Кейс</b> · ' : ''}Вопрос ${i + 1} · ${ICONS[q.type] || ''} ${e(LABELS[q.type] || q.type)}${q.category ? ' · ' + e(q.category) : ''}${N.difficulty ? ' · сложность ' + N.difficulty : ''}</span><span class="small mut">${q.points} балл(ов)</span></div>`;
+    const pub = it.public || {};
     let body = '';
     const text = it.public && it.public.text ? it.public.text : q.text;
     if (q.type === 'info') return `<div class="q info-q">${head}<div class="qt">${e(text)}</div><div class="small mut">Информационный блок — не оценивается.</div></div>`;
+    body += extrasHtml({ type: q.type, material: pub.material, media: pub.media });
     if (q.type === 'single' || q.type === 'multi') {
       const chosen = Array.isArray(it.answer) ? it.answer : it.answer ? [it.answer] : [];
-      body = '<ul>' + q.options.map(o => { const c = chosen.includes(o.id), ok = q.correct.includes(o.id);
-        return `<li class="${c ? 'o-chosen' : ''} ${ok ? 'o-correct' : c ? 'o-wrong' : ''}">${c ? '☑' : '☐'} ${e(o.text)}${ok ? ' — правильный' : ''}</li>`; }).join('') + '</ul>';
+      body += '<ul>' + q.options.map(o => { const c = chosen.includes(o.id), ok = q.correct.includes(o.id);
+        return `<li class="${c ? 'o-chosen' : ''} ${ok ? 'o-correct' : c ? 'o-wrong' : ''}">${c ? '☑' : '☐'} ${o.media ? `<span class="omthumb">${mediaHtml(o.media, true)}</span>` : ''}${e(o.text)}${ok ? ' — правильный' : ''}</li>`; }).join('') + '</ul>';
     } else {
-      body = `<div class="small mut">Ответ кандидата:</div><div class="ans">${it.answer_text ? e(it.answer_text) : '<span class="mut">(нет ответа)</span>'}</div>`;
+      if (q.type === 'hotspot' && pub.media) { const chosen = Array.isArray(it.answer) ? it.answer : [];
+        body += `<div class="hs-wrap hs-review">${mediaHtml(pub.media[0], true)}${(N.zones || []).map((z, k) => `<div class="hs-zone ${z.correct ? 'ok' : ''} ${chosen.includes(z.id) ? 'on' : ''}" style="left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%"><span>${k + 1}</span></div>`).join('')}</div>`; }
+      body += `<div class="small mut">Ответ кандидата:</div><div class="ans">${it.answer_text ? e(it.answer_text) : '<span class="mut">(нет ответа)</span>'}</div>`;
       if (it.upload) body += `<div class="row small"><button type="button" class="btn sm" data-up="${it.upload.id}">${it.upload.kind === 'voice' ? '▶ Прослушать' : '📎 Открыть файл'}</button><span class="mut">${e(it.upload.name)} · ${e(it.upload.mime)} · ${fmtKB(it.upload.size)}</span></div><div class="upview" id="upv${it.upload.id}"></div>`;
       else if (it.answer && it.answer.url) body += `<div class="small">Ссылка: <a href="${e(it.answer.url)}" target="_blank" rel="noopener noreferrer nofollow">${e(it.answer.url)}</a></div>`;
       if (it.expected_text) body += `<div class="ref"><b>Правильно:</b>\n${e(it.expected_text)}</div>`;
@@ -338,7 +432,7 @@
     if (q.reference) body += `<div class="ref"><b>Эталон:</b> ${e(q.reference)}</div>`;
     const crit = (N.criteria || []).filter(c => c.text);
     if (crit.length) body += `<div class="crit" data-q="${q.id}"><div class="small"><b>Критерии</b> (отметьте выполненные — баллы посчитаются сами):</div>${crit.map((c, k) => `<label class="chk small"><input type="checkbox" class="critc" data-q="${q.id}" data-p="${c.points}"> ${e(c.text)} <span class="mut">(${c.points})</span></label>`).join('')}</div>`;
-    if (N.article || N.explanation) body += `<div class="small mut">${N.article ? 'Статья: ' + e(N.article) : ''}${N.explanation ? '<br>' + e(N.explanation) : ''}</div>`;
+    if (N.article || N.explanation || N.source_doc) body += `<div class="small mut">${N.source_doc ? 'Источник: ' + e(N.source_doc) + (N.source_ref ? ', ' + e(N.source_ref) : '') + '<br>' : ''}${N.article ? 'Статья: ' + e(N.article) : ''}${N.explanation ? '<br>' + e(N.explanation) : ''}${N.quote ? '<br>Цитата: «' + e(N.quote) + '»' : ''}</div>`;
     const manualNeeded = it.needs_review && it.manual_points == null;
     body += `<div class="row small" style="margin-top:6px">${it.auto_points != null ? `Автопроверка: <b>${it.auto_points} / ${q.points}</b> · ` : ''}${it.needs_review ? 'Баллы' : 'Изменить баллы вручную'}: <input type="number" class="pts" data-q="${q.id}" min="0" max="${q.points}" step="0.5" value="${pts}" placeholder="${it.needs_review ? '' : 'авто'}" style="width:90px"> / ${q.points} ${manualNeeded ? '<span class="badge warn">требует оценки</span>' : ''}</div>`;
     return `<div class="q">${head}<div class="qt">${e(text)}</div>${body}</div>`;
@@ -359,5 +453,5 @@
       c.addEventListener('change', () => { let s = 0; c.querySelectorAll('.critc:checked').forEach(x => { s += Number(x.dataset.p) || 0; }); inp.value = Math.min(s, Number(inp.max)); });
     });
   }
-  window.QT = { LABELS, ICONS, PARTIAL, mount, editor, review, bindReview, esc: e };
+  window.QT = { LABELS, ICONS, PARTIAL, DIFF, BASES, mount, editor, review, bindReview, mediaHtml, esc: e };
 })();

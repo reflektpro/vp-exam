@@ -385,7 +385,7 @@ function attemptResult(a) {
   setView(`<p><a href="${back.href}">← ${esc(back.title)}</a></p>
     <div class="card result"><h2>${esc(a.exam ? a.exam.title : '')}</h2><div class="mut">Попытка #${a.id} · отправлена ${fmtDate(a.submitted_at)}${a.expired ? ' (автоматически, время вышло)' : ''}</div>
       <div class="big ${cls}">${big}</div>
-      ${a.score_pct != null ? `<p>Результат: <b>${a.score_pct}%</b> (проходной — ${a.exam ? a.exam.pass_pct : '?'}%)</p>` : '<p class="mut">Ваши развёрнутые ответы (кейсы, файлы, голосовые) проверит экзаменатор. Результат появится здесь.</p>'}
+      ${a.score_pct != null ? `<p>Результат: <b>${a.score_pct}%</b>${a.max_score ? ` — <b>${a.score}</b> из ${a.max_score} балл(ов)` : ''} (проходной — ${a.exam ? a.exam.pass_pct : '?'}%${a.exam && a.exam.pass_points != null ? ' и не меньше ' + a.exam.pass_points + ' балл(ов)' : ''})</p>` : '<p class="mut">Ваши развёрнутые ответы (кейсы, файлы, голосовые) проверит экзаменатор. Результат появится здесь.</p>'}
       ${a.reviewer_comment ? `<div class="alert info" style="text-align:left"><b>Комментарий проверяющего:</b><br><span class="welcome">${esc(a.reviewer_comment)}</span></div>` : ''}
       ${a.reviewed_at ? `<p class="small mut">Проверено ${fmtDate(a.reviewed_at)}</p>` : ''}
     </div>`);
@@ -395,16 +395,17 @@ route('/reatt', async () => {
   const { versions } = await api('GET', '/api/reatt');
   setView(`<h1>Переаттестация</h1>
     <p class="mut small">В каждой попытке вопросы выбираются случайно, порядок вопросов и вариантов перемешивается. Тесты проверяются автоматически — результат сразу после отправки; кейсы проверяет экзаменатор.</p>
-    <div class="reatt-grid">${versions.map(v => `<div class="card reatt-card" data-v="${v.key}">
-      <div class="row between"><h2 style="margin:0">${esc(v.title)}</h2>${v.attempts[0] ? badge(v.attempts[0].status) : v.enabled ? '<span class="badge ok">Доступна</span>' : '<span class="badge lock">Выключена</span>'}</div>
+    ${[['line', 'Основная линия', 'Упрощённая → Средняя → Полная общая → Полная ВП'], ['cases', 'Кейсы', 'Отдельная категория: ситуационные задачи'], ['', '', '']].map(([tr, tt, sub]) => { const vs = versions.filter(v => (v.track || '') === tr).sort((a, b) => (a.level || 0) - (b.level || 0)); return vs.length ? `${tt ? `<div class="reatt-track"><h2>${tt}</h2><div class="small mut">${sub}</div></div>` : ''}<div class="reatt-grid">${vs.map(reattCard).join('')}</div>` : ''; }).join('') || '<div class="alert info">Сейчас нет открытых переаттестаций. Доступ к конкретной переаттестации выдаёт администратор — на время и на определённое число попыток.</div>'}`);
+  function reattCard(v) { return `<div class="card reatt-card" data-v="${v.key}">
+      <div class="row between"><h2 style="margin:0">${v.track === 'line' && v.level ? `<span class="reatt-lvl">уровень ${v.level}</span>` : ''}${esc(v.title)}</h2>${v.attempts[0] ? badge(v.attempts[0].status) : v.enabled ? '<span class="badge ok">Доступна</span>' : '<span class="badge lock">Выключена</span>'}</div>
       ${v.description ? `<p class="welcome small">${esc(v.description)}</p>` : ''}
-      <p class="small mut">Всего: ${[v.total_questions ? v.total_questions + ' вопросов' : '', v.total_cases ? v.total_cases + ' кейсов' : ''].filter(Boolean).join(' + ') || '—'} · ${v.total_cases ? 'кейсы проверяет экзаменатор' : 'автопроверка'} · ${v.time_limit_min ? 'время ' + v.time_limit_min + ' мин' : 'без ограничения времени'} · проходной ${v.pass_pct}%${v.max_attempts ? ' · попыток: ' + v.max_attempts : ''}${v.cooldown_min ? ' · пауза ' + v.cooldown_min + ' мин' : ''}</p>
+      <p class="small mut">Всего: ${[v.total_questions ? v.total_questions + (v.track === 'cases' ? ' заданий' : ' вопросов') : '', v.total_cases ? v.total_cases + ' кейсов' : ''].filter(Boolean).join(' + ') || '—'} · ${v.total_cases || v.manual ? 'часть ответов проверяет экзаменатор' : 'автопроверка'} · ${v.time_limit_min ? 'время ' + v.time_limit_min + ' мин' : 'без ограничения времени'} · проходной ${v.pass_pct}%${v.pass_points != null ? ' и ≥ ' + v.pass_points + ' б.' : ''}${v.max_attempts ? ' · попыток: ' + v.max_attempts : ''}${v.cooldown_min ? ' · пауза ' + v.cooldown_min + ' мин' : ''}</p>
       ${v.access ? `<p class="small access-note">🔑 Доступ ${v.access.expires_at ? 'до <b>' + fmtDate(v.access.expires_at) + '</b> МСК' : 'бессрочный'}${v.access.attempts != null ? ' · осталось попыток: <b>' + v.access.left + '</b> из ' + v.access.attempts : ''}</p>` : ''}
       ${v.active_attempt_id ? `<a class="btn primary" href="#/attempt/${v.active_attempt_id}">Продолжить попытку</a>`
         : v.can_start ? `<button class="btn primary startR" data-v="${v.key}" data-t="${v.time_limit_min}">Начать</button>`
         : `<div class="alert warn">${esc(v.reason || 'Недоступно')}${v.next_at ? ' — ' + fmtDate(v.next_at) : ''}</div>`}
       ${v.attempts.length ? `<table style="margin-top:12px"><tr><th>№</th><th>Дата</th><th>Статус</th><th>Результат</th></tr>${v.attempts.map(x => `<tr class="click" data-href="#/attempt/${x.id}"><td>#${x.id}</td><td>${fmtDate(x.submitted_at || x.started_at)}</td><td>${badge(x.status)}</td><td>${x.score_pct != null ? x.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : ''}
-    </div>`).join('') || '<div class="alert info">Сейчас нет открытых переаттестаций. Доступ к конкретной переаттестации выдаёт администратор — на время и на определённое число попыток.</div>'}</div>`);
+    </div>`; }
   $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; });
   $$('.startR').forEach(b => b.onclick = async () => {
     if (!confirm(Number(b.dataset.t) ? `После начала пойдёт таймер (${b.dataset.t} мин). Начать?` : 'Начать переаттестацию?')) return;

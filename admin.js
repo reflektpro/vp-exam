@@ -2,7 +2,7 @@
 'use strict';
 function adminNav(active) {
   const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Пользователи и роли', 'examiner'],
-    ['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
+    ['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/bases', 'Базы и источники', 'admin'], ['/admin/media', 'Изображения', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
   return `<div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
 }
 function formObj(form) {
@@ -328,6 +328,9 @@ function qSummary(q) {
   if (q.kind === 'case') extra.push('<span class="badge warn">кейс</span>');
   if (q.active === false) extra.push('<span class="badge err">выключен</span>');
   if (q.ext_id && /^example-/.test(q.ext_id)) extra.push('<span class="badge info">ПРИМЕР</span>');
+  if (q.base) extra.push(`<span class="badge ok">${esc(window.QT.BASES[q.base] || q.base)}</span>`);
+  if (q.difficulty) extra.push(`<span class="badge info">сложн. ${q.difficulty}</span>`);
+  if (q.base) extra.push(q.source_doc && q.source_ref ? `<span class="small mut">${esc(q.source_doc)} · ${esc(q.source_ref)}</span>` : '<span class="badge err">нет источника</span>');
   return `${window.QT.ICONS[q.type] || ''} <span class="small mut">${esc(QTYPE_RU[q.type] || q.type)} · ${q.points} б.</span> ${extra.join(' ')}<div class="qsum-t">${esc(String(q.text || '').slice(0, 220))}${String(q.text || '').length > 220 ? '…' : ''}</div>`;
 }
 function qCard(q, i, o) {
@@ -337,7 +340,7 @@ function qCard(q, i, o) {
     ${q.id && o.reorderPath ? `<button type="button" class="btn sm up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="btn sm down" ${i < o.ids.length - 1 ? '' : 'disabled'}>↓</button>` : ''}
     ${q.id ? '<button type="button" class="btn sm try">Проверить как кандидат</button><button type="button" class="btn danger sm del">Удалить</button>' : ''}</span></div>
     <div class="qsum" ${o.open || !q.id ? 'hidden' : ''}>${qSummary(q)}</div><div class="qed" ${o.open || !q.id ? '' : 'hidden'}></div><div class="qtry"></div>`;
-  const ed = window.QT.editor(q, { bank: !!o.bank, categories: o.categories });
+  const ed = window.QT.editor(q, { bank: !!o.bank, categories: o.categories, docs: o.docs || (window._r6 && window._r6.docs) || [], uploadMedia: async (p) => (await api('POST', '/api/admin/media', p)).media });
   el.querySelector('.qed').appendChild(ed.el);
   el.querySelector('.qed').appendChild(h2(`<div class="row" style="margin-top:10px"><button type="button" class="btn gold sm save">Сохранить вопрос</button>${q.id ? '' : '<button type="button" class="btn sm cancel">Отмена</button>'}<span class="qerr small"></span></div>`));
   const tg = el.querySelector('.tgl'); if (tg) tg.onclick = () => { const ed2 = el.querySelector('.qed'); ed2.hidden = !ed2.hidden; el.querySelector('.qsum').hidden = !ed2.hidden; tg.textContent = ed2.hidden ? 'Изменить' : 'Свернуть'; };
@@ -414,8 +417,9 @@ function importBox(box, path, bank) {
 // ---------- банк вопросов ----------
 route('/admin/bank', async () => {
   const qp = new URLSearchParams((location.hash.split('?')[1]) || '');
-  const f = { category: qp.get('category') || '', kind: qp.get('kind') || '', type: qp.get('type') || '', q: qp.get('q') || '', offset: Number(qp.get('offset')) || 0 };
-  const r = await api('GET', '/api/admin/bank?' + new URLSearchParams({ ...f, limit: 50 }).toString());
+  const f = { category: qp.get('category') || '', kind: qp.get('kind') || '', type: qp.get('type') || '', q: qp.get('q') || '', base: qp.get('base') || '', difficulty: qp.get('difficulty') || '', source_doc: qp.get('source_doc') || '', active: qp.get('active') || '', offset: Number(qp.get('offset')) || 0 };
+  const [r, st] = await Promise.all([api('GET', '/api/admin/bank?' + new URLSearchParams({ ...f, limit: 50 }).toString()), api('GET', '/api/admin/bank/stats')]);
+  window._r6 = st;
   const cats = {}; for (const c of r.categories) { cats[c.category] = cats[c.category] || { q: 0, c: 0 }; if (c.kind === 'case') cats[c.category].c += c.c; else cats[c.category].q += c.c; }
   const catNames = Object.keys(cats);
   const link = (o) => '#/admin/bank?' + new URLSearchParams(Object.fromEntries(Object.entries({ ...f, offset: 0, ...o }).filter(([, v]) => v !== '' && v !== 0))).toString();
@@ -430,6 +434,10 @@ route('/admin/bank', async () => {
       <select name="category" style="max-width:220px"><option value="">Все категории</option>${catNames.map(c => `<option ${c === f.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="ФЗ*" ${f.category === 'ФЗ*' ? 'selected' : ''}>ФЗ* (все ФЗ)</option></select>
       <select name="kind" style="max-width:150px"><option value="">Вопросы и кейсы</option><option value="question" ${f.kind === 'question' ? 'selected' : ''}>Только вопросы</option><option value="case" ${f.kind === 'case' ? 'selected' : ''}>Только кейсы</option></select>
       <select name="type" style="max-width:220px"><option value="">Все типы</option>${Object.entries(QTYPE_RU).map(([k, v]) => `<option value="${k}" ${k === f.type ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <select name="base" style="max-width:200px"><option value="">Все (и вне баз)</option><option value="*" ${f.base === '*' ? 'selected' : ''}>Любая база переаттестации</option>${st.base_order.map(b => `<option value="${b}" ${f.base === b ? 'selected' : ''}>База: ${esc(st.base_names[b])}</option>`).join('')}<option value="-" ${f.base === '-' ? 'selected' : ''}>Вне баз</option></select>
+      <select name="difficulty" style="max-width:140px"><option value="">Любая сложность</option>${[1, 2, 3].map(d => `<option value="${d}" ${String(d) === f.difficulty ? 'selected' : ''}>${d} — ${window.QT.DIFF[d]}</option>`).join('')}</select>
+      <select name="source_doc" style="max-width:200px"><option value="">Любой документ</option>${st.docs.map(d => `<option value="${esc(d.id)}" ${f.source_doc === d.id ? 'selected' : ''}>${esc(d.short)}</option>`).join('')}<option value="-" ${f.source_doc === '-' ? 'selected' : ''}>Без документа</option></select>
+      <select name="active" style="max-width:150px"><option value="">Активные и выкл.</option><option value="1" ${f.active === '1' ? 'selected' : ''}>Только активные</option><option value="0" ${f.active === '0' ? 'selected' : ''}>Только выключенные</option></select>
       <button class="btn">Фильтр</button></form>
     <p class="small mut">Найдено: ${r.total}${r.total > 50 ? ` · показаны ${f.offset + 1}–${Math.min(f.offset + 50, r.total)}` : ''}</p>
     <div id="blist"></div>
@@ -437,8 +445,8 @@ route('/admin/bank', async () => {
   bindRows();
   const o = { bank: true, categories: [...new Set(catNames.concat(['ПК', 'УК', 'ТК', 'ВУ', 'СУ', 'ДУ', 'КПС', 'КоАП', 'ФЗ об обороне', 'ФЗ о закрытых и охраняемых территориях', 'ФЗ о гос. службе', 'ФЗ о гос. тайне', 'ФЗ об оружии', 'ФЗ о воздушном пространстве', 'ФКЗ об особых правовых режимах']))], createPath: '/api/admin/bank', open: false, ids: [] };
   r.questions.forEach((q, i) => $('#blist').appendChild(qCard(q, i, o)));
-  $('#bf').onsubmit = (ev) => { ev.preventDefault(); const fd = new FormData(ev.target); location.hash = link({ q: fd.get('q') || '', category: fd.get('category') || '', kind: fd.get('kind') || '', type: fd.get('type') || '' }); };
-  $('#addB').onclick = () => { const t = $('#newTypeB').value; $('#newBox').innerHTML = ''; const c = qCard({ id: null, type: t, category: f.category && !f.category.endsWith('*') ? f.category : '', kind: t === 'case' ? 'case' : 'question', points: t === 'case' ? 5 : 1 }, 0, { ...o, open: true }); $('#newBox').appendChild(c); c.querySelector('textarea').focus(); };
+  $('#bf').onsubmit = (ev) => { ev.preventDefault(); const fd = new FormData(ev.target); location.hash = link({ q: fd.get('q') || '', category: fd.get('category') || '', kind: fd.get('kind') || '', type: fd.get('type') || '', base: fd.get('base') || '', difficulty: fd.get('difficulty') || '', source_doc: fd.get('source_doc') || '', active: fd.get('active') || '' }); };
+  $('#addB').onclick = () => { const t = $('#newTypeB').value; $('#newBox').innerHTML = ''; const nb = f.base && !['*', '-'].includes(f.base) ? f.base : ''; const c = qCard({ id: null, type: t, category: f.category && !f.category.endsWith('*') ? f.category : (nb ? 'Переаттестация: ' + st.base_names[nb] : ''), kind: t === 'case' ? 'case' : 'question', points: t === 'case' ? 5 : 1, base: nb, difficulty: f.difficulty ? Number(f.difficulty) : (nb ? 2 : null), source_doc: f.source_doc && f.source_doc !== '-' ? f.source_doc : '' }, 0, { ...o, open: true }); $('#newBox').appendChild(c); c.querySelector('textarea').focus(); };
   $('#impB').onclick = () => importBox($('#impBox'), '/api/admin/bank/import', true);
   $('#expB').onclick = () => exportJson('/api/admin/bank/export' + (f.category && !f.category.endsWith('*') ? '?category=' + encodeURIComponent(f.category) : ''), 'bank' + (f.category ? '-' + f.category : '') + '.json');
   $('#delEx').onclick = async () => {
@@ -455,19 +463,24 @@ const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 &
 route('/admin/reatt', async () => {
   const r = await api('GET', '/api/admin/reatt');
   setView(`<h1>Переаттестация</h1>${adminNav('/admin/reatt')}
-    <p class="small mut">Каждая переаттестация — свой набор квот по категориям банка. Кандидат видит переаттестацию, только если она включена, отмечена «Показывать кандидатам» <b>и ему выдан доступ</b> (кнопка «🔑 Доступ»: кому, до какого времени, сколько попыток).
+    <p class="small mut">Шесть видов: основная линия <b>Упрощённая → Средняя → Полная общая → Полная ВП</b> и отдельная категория <b>кейсов</b> (внутренние и общие). У каждого вида — своя база вопросов (<a href="#/admin/bases">«Базы и источники»</a>), доли лёгких/средних/сложных, баллы за сложность и проходной балл. Прежний режим «по блокам категорий» тоже доступен. Кандидат видит переаттестацию, только если она включена, отмечена «Показывать кандидатам» <b>и ему выдан доступ</b> (кнопка «🔑 Доступ»: кому, до какого времени, сколько попыток).
       Результаты и проверка кейсов — в <a href="#/admin/attempts?status=pending_review&kind=reatt">«Проверка» → Переаттестация</a>.</p>
     <div class="row" style="margin-bottom:14px"><a class="btn gold" id="newR" href="#/admin/reatt/new">+ Создать переаттестацию</a></div>
-    <div class="reatt-admin-list">${r.items.map(v => { const q = v.groups.reduce((s, g) => s + g.questions, 0), c = v.groups.reduce((s, g) => s + g.cases, 0);
-      const bad = v.availability.filter(a => !a.ok); const at = Object.values(v.attempts).reduce((s, n) => s + n, 0);
-      return `<div class="card ritem" data-id="${v.id}"><div class="row between"><h2 style="margin:0">${esc(v.title)}</h2>
-        <span>${c ? '<span class="badge warn">Кейсы — ручная проверка</span>' : '<span class="badge info">Автопроверка</span>'} ${v.enabled ? '<span class="badge ok">Включена</span>' : '<span class="badge lock">Выключена</span>'} ${v.visible ? '' : '<span class="badge info">Скрыта от кандидатов</span>'}</span></div>
-        <p class="small mut">${q} ${plural(q, 'вопрос', 'вопроса', 'вопросов')} + ${c} ${plural(c, 'кейс', 'кейса', 'кейсов')} · ${v.groups.length} ${plural(v.groups.length, 'блок', 'блока', 'блоков')} · ${v.time_limit_min ? v.time_limit_min + ' мин' : 'без лимита времени'} · проходной ${v.pass_pct}%${v.q_points != null ? ' · вопрос = ' + v.q_points + ' б.' : ''}${v.c_points != null ? ' · кейс = ' + v.c_points + ' б.' : ''} · попыток: ${at}${v.attempts.pending_review ? ` (на проверке ${v.attempts.pending_review})` : ''}</p>
+    <div class="reatt-admin-list">${[['line', 'Основная линия'], ['cases', 'Кейсы (отдельная категория)'], ['', 'Прочие']].map(([tr, tt]) => { const its = r.items.filter(v => (v.track || '') === tr).sort((a, b) => (a.level - b.level) || (a.position - b.position)); return its.length ? `<div class="reatt-track"><h2>${tt}</h2>${its.map(v => reattAdminCard(v, r)).join('')}</div>` : ''; }).join('') || '<p class="mut">Переаттестаций пока нет.</p>'}</div>`);
+  function reattAdminCard(v, r) {
+      const bankMode = v.mode === 'bank';
+      const q = bankMode ? v.cfg.count : v.groups.reduce((s, g) => s + g.questions, 0), c = bankMode ? 0 : v.groups.reduce((s, g) => s + g.cases, 0);
+      const bad = (v.availability || []).filter(a => !a.ok); const at = Object.values(v.attempts).reduce((s, n) => s + n, 0);
+      const ba = v.base_availability; const bs = bankMode ? r.bases[v.cfg.base] : null;
+      return `<div class="card ritem" data-id="${v.id}"><div class="row between"><h2 style="margin:0">${v.level ? `<span class="reatt-lvl">${v.track === 'line' ? 'уровень ' + v.level : 'кейсы'}</span>` : ''}${esc(v.title)}</h2>
+        <span>${c || (bs && bs.cases) ? '<span class="badge warn">Есть ручная проверка</span>' : '<span class="badge info">Автопроверка</span>'} ${v.enabled ? '<span class="badge ok">Включена</span>' : '<span class="badge lock">Выключена</span>'} ${v.visible ? '' : '<span class="badge info">Скрыта от кандидатов</span>'}</span></div>
+        <p class="small mut">${bankMode ? `База «${esc(r.base_names[v.cfg.base] || v.cfg.base)}»: ${q} ${plural(q, 'вопрос', 'вопроса', 'вопросов')} из ${ba ? ba.total : 0} (×${ba ? ba.ratio : 0}) · сложность ${v.cfg.mix.join('/')}% · баллы ${v.cfg.pts.join('/')}` : `${q} ${plural(q, 'вопрос', 'вопроса', 'вопросов')} + ${c} ${plural(c, 'кейс', 'кейса', 'кейсов')} · ${v.groups.length} ${plural(v.groups.length, 'блок', 'блока', 'блоков')}`} · ${v.time_limit_min ? v.time_limit_min + ' мин' : 'без лимита времени'} · проходной ${v.pass_pct}%${bankMode && v.cfg.pass_points != null ? ' и ≥ ' + v.cfg.pass_points + ' б.' : ''}${!bankMode && v.q_points != null ? ' · вопрос = ' + v.q_points + ' б.' : ''}${!bankMode && v.c_points != null ? ' · кейс = ' + v.c_points + ' б.' : ''} · попыток: ${at}${v.attempts.pending_review ? ` (на проверке ${v.attempts.pending_review})` : ''}</p>
         ${bad.length ? `<div class="alert warn small">В банке не хватает вопросов: ${bad.map(a => esc(a.label)).join(', ')}</div>` : ''}
+        ${ba && !ba.ok ? `<div class="alert warn small">В базе не хватает вопросов для выборки: нужно лёгких/средних/сложных ${ba.want[1]}/${ba.want[2]}/${ba.want[3]}, есть ${ba.have[1]}/${ba.have[2]}/${ba.have[3]} (недостающие добираются из соседней сложности)</div>` : ''}
         <div class="row"><a class="btn sm" href="#/admin/reatt/${v.id}">Редактировать</a><button class="btn sm r-tog">${v.enabled ? 'Выключить' : 'Включить'}</button>
           <a class="btn sm gold" href="#/admin/reatt/${v.id}/access">🔑 Доступ${v.access.active ? ' (' + v.access.active + ')' : ''}</a>
           <a class="btn sm" href="#/admin/attempts?kind=${encodeURIComponent(v.key)}">Попытки</a><button class="btn sm danger r-del">Удалить</button></div>
-        <p class="small ${v.access.active ? 'mut' : 'neg'}">${v.access.active ? `Действующих выдач доступа: ${v.access.active}${v.access.global ? ' (в т. ч. всем с ролью)' : ''}` : 'Доступ никому не выдан — кандидаты эту переаттестацию не видят.'}</p></div>`; }).join('') || '<p class="mut">Переаттестаций пока нет.</p>'}</div>`);
+        <p class="small ${v.access.active ? 'mut' : 'neg'}">${v.access.active ? `Действующих выдач доступа: ${v.access.active}${v.access.global ? ' (в т. ч. всем с ролью)' : ''}` : 'Доступ никому не выдан — кандидаты эту переаттестацию не видят.'}</p></div>`; }
   $$('.ritem').forEach(el => {
     const id = el.dataset.id, v = r.items.find(x => String(x.id) === id);
     el.querySelector('.r-tog').onclick = async () => { try { await api('PUT', '/api/admin/reatt/' + id, { enabled: !v.enabled }); toast(v.enabled ? 'Выключена' : 'Включена'); render(); } catch (e) { toast(e.message, true); } };
@@ -482,7 +495,12 @@ route('/admin/reatt/:id', async (id) => {
   const isNew = id === 'new';
   const [list, one] = await Promise.all([api('GET', '/api/admin/reatt'), isNew ? null : api('GET', '/api/admin/reatt/' + id)]);
   const v = isNew ? { title: '', description: '', enabled: true, visible: true, time_limit_min: 60, pass_pct: 70, cooldown_min: 0, max_attempts: 0, q_points: null, c_points: null, position: 0,
+    mode: 'groups', level: 0, track: '', cfg: { base: 'simple', count: 12, mix: [50, 50, 0], pts: [1, 2, 3], topics: {}, types: [], max_topic_pct: 40, max_type_pct: 50, partial: 'question', pass_points: null, unique_ref: true, avoid_repeat: true },
     groups: [{ label: 'Блок 1', categories: [], questions: 5, cases: 0 }] } : one.item;
+  const cfg = v.cfg || { base: 'simple', count: 12, mix: [50, 50, 0], pts: [1, 2, 3], topics: {}, types: [], max_topic_pct: 40, max_type_pct: 50, partial: 'question', pass_points: null, unique_ref: true, avoid_repeat: true };
+  const B = list.bases, BN = list.base_names, TOP = list.topics;
+  if (!v.groups.length) v.groups = [{ label: 'Блок 1', categories: [], questions: 5, cases: 0 }];
+  const R6_TYPES = ['single', 'multi', 'number', 'text', 'order', 'match', 'blanks_input', 'blanks_select', 'find', 'hotspot', 'case', 'long'];
   const av = isNew ? [] : ((list.items.find(x => x.id === v.id) || {}).availability || []);
   const cats = list.categories;
   const catOpts = cats.map(c => `<option value="${esc(c.category)}">${esc(c.category)} — ${c.questions} вопр., ${c.cases} кейс.</option>`).join('');
@@ -503,17 +521,41 @@ route('/admin/reatt/:id', async (id) => {
         <label class="f"><span>Пауза между попытками, мин</span><input type="number" name="cooldown_min" min="0" value="${v.cooldown_min}"></label>
         <label class="f"><span>Макс. попыток (0 — без лимита)</span><input type="number" name="max_attempts" min="0" value="${v.max_attempts}"></label>
         <label class="f"><span>Порядок в списке</span><input type="number" name="position" min="0" value="${v.position || 0}"></label>
-        <label class="f"><span>Баллы за вопрос (пусто — как в банке)</span><input name="q_points" inputmode="decimal" value="${v.q_points ?? ''}"></label>
-        <label class="f"><span>Баллы за кейс (пусто — как в банке)</span><input name="c_points" inputmode="decimal" value="${v.c_points ?? ''}"></label></div>
+        <label class="f"><span>Линия</span><select name="track"><option value="line" ${v.track === 'line' ? 'selected' : ''}>Основная линия</option><option value="cases" ${v.track === 'cases' ? 'selected' : ''}>Кейсы</option><option value="" ${!v.track ? 'selected' : ''}>— вне иерархии —</option></select></label>
+        <label class="f"><span>Уровень в линии (1 — Упрощённая … 4 — Полная ВП)</span><input type="number" name="level" min="0" max="100" value="${v.level || 0}"></label>
+        <label class="f m-groups-f"><span>Баллы за вопрос (пусто — как в банке)</span><input name="q_points" inputmode="decimal" value="${v.q_points ?? ''}"></label>
+        <label class="f m-groups-f"><span>Баллы за кейс (пусто — как в банке)</span><input name="c_points" inputmode="decimal" value="${v.c_points ?? ''}"></label></div>
       <label class="f"><span>Описание для кандидата</span><textarea name="description" rows="2" maxlength="5000">${esc(v.description)}</textarea></label>
       <div class="row"><label class="chk"><input type="checkbox" name="enabled" ${v.enabled ? 'checked' : ''}> Включена (можно начать)</label>
         <label class="chk"><input type="checkbox" name="visible" ${v.visible ? 'checked' : ''}> Показывать кандидатам</label></div>
-      <h3>Квоты на одну попытку</h3>
+      <h3>Состав попытки</h3>
+      <div class="row"><label class="chk"><input type="radio" class="r-mode" value="bank" ${v.mode === 'bank' ? 'checked' : ''}> Из базы переаттестации (сложность, темы, баллы)</label><label class="chk"><input type="radio" class="r-mode" value="groups" ${v.mode !== 'bank' ? 'checked' : ''}> По блокам категорий банка (прежний режим)</label></div>
+      <div class="m-bank">
+        <div class="fgrid">
+          <label class="f"><span>База вопросов</span><select class="c-base">${Object.entries(BN).map(([k, t]) => `<option value="${k}" ${cfg.base === k ? 'selected' : ''}>${esc(t)} — ${B[k] ? B[k].active : 0} акт.</option>`).join('')}</select></label>
+          <label class="f"><span>Вопросов в попытке</span><input type="number" class="c-count" min="1" max="200" value="${cfg.count}"></label>
+          <label class="f"><span>Лёгкие, %</span><input type="number" class="c-mix" data-i="0" min="0" max="100" value="${cfg.mix[0]}"></label>
+          <label class="f"><span>Средние, %</span><input type="number" class="c-mix" data-i="1" min="0" max="100" value="${cfg.mix[1]}"></label>
+          <label class="f"><span>Сложные, %</span><input type="number" class="c-mix" data-i="2" min="0" max="100" value="${cfg.mix[2]}"></label>
+          <label class="f"><span>Баллы: лёгкий</span><input class="c-pts" data-i="0" inputmode="decimal" value="${cfg.pts[0]}"></label>
+          <label class="f"><span>Баллы: средний</span><input class="c-pts" data-i="1" inputmode="decimal" value="${cfg.pts[1]}"></label>
+          <label class="f"><span>Баллы: сложный</span><input class="c-pts" data-i="2" inputmode="decimal" value="${cfg.pts[2]}"></label>
+          <label class="f"><span>Макс. доля одной темы, % (0 — без ограничения)</span><input type="number" class="c-mtp" min="0" max="100" value="${cfg.max_topic_pct}"></label>
+          <label class="f"><span>Макс. доля одного типа, % (0 — без ограничения)</span><input type="number" class="c-myp" min="0" max="100" value="${cfg.max_type_pct}"></label>
+          <label class="f"><span>Частичные баллы</span><select class="c-partial"><option value="question" ${cfg.partial === 'question' ? 'selected' : ''}>как настроено в вопросе</option><option value="on" ${cfg.partial === 'on' ? 'selected' : ''}>всегда (где возможно)</option><option value="off" ${cfg.partial === 'off' ? 'selected' : ''}>никогда (всё или ничего)</option></select></label>
+          <label class="f"><span>Проходной балл в баллах (необязательно, дополнительно к %)</span><input class="c-pp" inputmode="decimal" value="${cfg.pass_points ?? ''}"></label>
+        </div>
+        <div class="row"><label class="chk"><input type="checkbox" class="c-uref" ${cfg.unique_ref ? 'checked' : ''}> Не больше одного вопроса на один пункт документа</label><label class="chk"><input type="checkbox" class="c-arep" ${cfg.avoid_repeat ? 'checked' : ''}> Вопросы прошлых попыток кандидата — в последнюю очередь</label></div>
+        <div class="small c-info"></div>
+        <details class="c-topics-w"><summary>Веса тем (пусто во всех — равномерно по темам базы; 0 — тема исключена)</summary><div class="c-topics"></div></details>
+        <details><summary>Типы вопросов (ничего не отмечено — все типы)</summary>${R6_TYPES.map(t => `<label class="chk small"><input type="checkbox" class="c-type" value="${t}" ${(cfg.types || []).includes(t) ? 'checked' : ''}> ${esc(QTYPE_RU[t] || t)}</label>`).join('')}</details>
+      </div>
+      <div class="m-groups">
       <p class="small mut">В каждом блоке — категории банка через запятую (<b>ФЗ*</b> — все категории, начинающиеся с «ФЗ»). Вопросы и кейсы выбираются случайно, без повторов между блоками. «Предпочтительные типы, из них N» — сколько вопросов блока брать в первую очередь из отмеченных типов (если таких не хватает, добираются любые).</p>
       <datalist id="catlist">${catOpts}</datalist>
       <div class="tscroll"><table class="gt"><tr><th>Блок</th><th>Категории</th><th>Вопросов</th><th>Предпочтительные типы</th><th>Кейсов</th><th>В банке</th><th></th></tr>
       ${v.groups.map((g, i) => rowHtml(g, av[i])).join('')}</table></div>
-      <div class="row" style="margin-top:8px"><button type="button" class="btn sm g-add">+ блок</button><span class="small mut">Итого: <b class="g-tot"></b></span></div>
+      <div class="row" style="margin-top:8px"><button type="button" class="btn sm g-add">+ блок</button><span class="small mut">Итого: <b class="g-tot"></b></span></div></div>
       <div class="row" style="margin-top:12px"><button class="btn gold">${isNew ? 'Создать' : 'Сохранить'}</button><button type="button" class="btn g-prev">Пробная выборка</button>${isNew ? '' : '<button type="button" class="btn danger sm g-del">Удалить</button>'}</div>
       <div class="g-out"></div></form>
       <details class="card flat"><summary>Категории в банке</summary><table><tr><th>Категория</th><th>Вопросов</th><th>Кейсов</th></tr>${cats.map(c => `<tr><td>${esc(c.category)}</td><td>${c.questions}</td><td>${c.cases}</td></tr>`).join('')}</table></details>`);
@@ -522,7 +564,29 @@ route('/admin/reatt/:id', async (id) => {
   const bindRow = (rw) => { rw.querySelector('.g-rm').onclick = () => { rw.remove(); tot(); }; rw.querySelector('.g-pt').addEventListener('change', () => { rw.querySelector('.g-pt summary').textContent = prefLabel([...rw.querySelectorAll('.g-pt input:checked')].map(x => x.value)); }); };
   $$('.grow', form).forEach(bindRow); tot(); form.addEventListener('input', tot);
   form.querySelector('.g-add').onclick = () => { const rw = h2(`<table>${rowHtml({ label: 'Блок ' + ($$('.grow', form).length + 1), categories: [], questions: 1, cases: 0 })}</table>`).querySelector('tr'); form.querySelector('.gt tbody').appendChild(rw); bindRow(rw); tot(); };
-  const collect = () => { const o = formObj(form); delete o['']; o.q_points = String(o.q_points).trim() === '' ? null : Number(String(o.q_points).replace(',', '.')); o.c_points = String(o.c_points).trim() === '' ? null : Number(String(o.c_points).replace(',', '.'));
+  const mode = () => (form.querySelector('.r-mode:checked') || {}).value || 'groups';
+  const showMode = () => { const b = mode() === 'bank'; form.querySelector('.m-bank').hidden = !b; form.querySelector('.m-groups').hidden = b; $$('.m-groups-f', form).forEach(x => { x.hidden = b; }); };
+  $$('.r-mode', form).forEach(x => { x.name = 'rmode_' + id; x.onchange = showMode; }); showMode();
+  const drawTopics = () => {
+    const bs = B[form.querySelector('.c-base').value] || { by_topic: {}, by_difficulty: {}, active: 0 };
+    const keys = Object.keys(TOP).filter(k => bs.by_topic[k] || cfg.topics[k] !== undefined);
+    form.querySelector('.c-topics').innerHTML = keys.length ? `<table class="r6-stats"><tr><th>Тема</th><th>В базе</th><th>Вес</th></tr>${keys.map(k => `<tr><td>${esc(TOP[k])}</td><td>${bs.by_topic[k] || 0}</td><td><input type="number" class="c-tw" data-k="${k}" min="0" max="1000" value="${cfg.topics[k] ?? ''}" style="width:80px"></td></tr>`).join('')}</table>` : '<span class="mut small">В базе пока нет вопросов</span>';
+  };
+  const info = () => {
+    const bs = B[form.querySelector('.c-base').value] || { by_difficulty: {}, active: 0 };
+    const n = Number(form.querySelector('.c-count').value) || 0; const mix = $$('.c-mix', form).map(x => Number(x.value) || 0); const sum = mix.reduce((a, b) => a + b, 0);
+    form.querySelector('.c-info').innerHTML = `В базе активных: <b>${bs.active}</b> (лёгких ${bs.by_difficulty[1] || 0}, средних ${bs.by_difficulty[2] || 0}, сложных ${bs.by_difficulty[3] || 0}) — в ${n ? (bs.active / n).toFixed(1) : '—'} раза больше одной попытки. ${sum !== 100 ? `<span class="o-wrong">Сумма долей сложности = ${sum}%, нужно 100%</span>` : `Ожидается примерно: ${mix.map(p => Math.round(n * p / 100)).join(' / ')}`}`;
+  };
+  form.querySelector('.c-base').onchange = () => { drawTopics(); info(); }; form.addEventListener('input', info); drawTopics(); info();
+  const numOrNull = (x) => { const t = String(x).trim().replace(',', '.'); return t === '' ? null : Number(t); };
+  const collectCfg = () => {
+    const topics = {}; $$('.c-tw', form).forEach(x => { if (x.value !== '') topics[x.dataset.k] = Number(x.value); });
+    return { base: form.querySelector('.c-base').value, count: Number(form.querySelector('.c-count').value) || 0, mix: $$('.c-mix', form).map(x => Number(x.value) || 0), pts: $$('.c-pts', form).map(x => numOrNull(x.value) ?? 0),
+      topics, types: $$('.c-type:checked', form).map(x => x.value), max_topic_pct: Number(form.querySelector('.c-mtp').value) || 0, max_type_pct: Number(form.querySelector('.c-myp').value) || 0,
+      partial: form.querySelector('.c-partial').value, pass_points: numOrNull(form.querySelector('.c-pp').value), unique_ref: form.querySelector('.c-uref').checked, avoid_repeat: form.querySelector('.c-arep').checked };
+  };
+  const collect = () => { const o = formObj(form); delete o['']; for (const k of Object.keys(o)) if (k.startsWith('rmode_')) delete o[k]; o.q_points = String(o.q_points).trim() === '' ? null : Number(String(o.q_points).replace(',', '.')); o.c_points = String(o.c_points).trim() === '' ? null : Number(String(o.c_points).replace(',', '.'));
+    o.mode = mode(); if (o.mode === 'bank') { o.cfg = collectCfg(); return o; }
     o.groups = $$('.grow', form).map(rw => ({ label: rw.querySelector('.g-label').value, categories: rw.querySelector('.g-cats').value.split(',').map(x => x.trim()).filter(Boolean), questions: Number(rw.querySelector('.g-q').value) || 0, cases: Number(rw.querySelector('.g-c').value) || 0, pref_types: [...rw.querySelectorAll('.g-pt input:checked')].map(x => x.value), pref_count: Number(rw.querySelector('.g-pc').value) || 0 })); return o; };
   const out = form.querySelector('.g-out');
   form.onsubmit = async (ev) => { ev.preventDefault();
@@ -530,13 +594,60 @@ route('/admin/reatt/:id', async (id) => {
       toast(isNew ? 'Переаттестация создана' : 'Сохранено'); if (isNew) location.hash = '#/admin/reatt/' + r.item.id; else render(); }
     catch (e) { toast(e.message, true); out.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; } };
   form.querySelector('.g-prev').onclick = async () => {
-    try { const c = collect(); const p = await api('POST', '/api/admin/reatt/preview', { groups: c.groups, q_points: c.q_points, c_points: c.c_points });
+    try { const c = collect(); const p = await api('POST', '/api/admin/reatt/preview', c.mode === 'bank' ? { mode: 'bank', cfg: c.cfg } : { groups: c.groups, q_points: c.q_points, c_points: c.c_points });
+      if (p.mode === 'bank') {
+        const cp = p.comp;
+        out.innerHTML = `<div class="card flat r6-prev"><b>Пробная выборка из базы</b>: всего ${p.total}, баллов ${p.max_score}. Сложность (лёгк./сред./сложн.): нужно ${cp.want[1]}/${cp.want[2]}/${cp.want[3]}, выбрано ${cp.got[1]}/${cp.got[2]}/${cp.got[3]}${cp.short ? ` <span class="badge err">не хватает ${cp.short}</span>` : ''}
+          <div class="small mut">По темам: ${Object.entries(cp.by_topic).map(([k, n]) => esc(TOP[k] || k) + ' ' + n).join(', ')} · по типам: ${Object.entries(cp.by_type).map(([k, n]) => esc(QTYPE_RU[k] || k) + ' ' + n).join(', ')}</div>
+          ${p.groups.map(g => `<div style="margin-top:8px"><b>${esc(g.label)}</b> — ${g.q.length + g.c.length}<ul class="small">${g.q.concat(g.c).map(x => `<li>${window.QT.ICONS[x.type] || ''} сложн. ${x.difficulty || '—'} · ${x.points} б. · <span class="mut">${esc(x.source_doc || '')} ${esc(x.source_ref || '')}</span> · ${esc(x.text.slice(0, 120))}</li>`).join('')}</ul></div>`).join('')}</div>`;
+        return;
+      }
       out.innerHTML = `<div class="card flat"><b>Пробная выборка (по текущим значениям формы)</b>: всего ${p.total}, баллов ${p.max_score}
         ${p.groups.map(g => `<div style="margin-top:8px"><b>${esc(g.label)}</b> — вопросов ${g.q.length}/${g.need_q}, кейсов ${g.c.length}/${g.need_c} ${g.short_q || g.short_c ? '<span class="badge err">не хватает</span>' : ''}<ul class="small">${g.q.concat(g.c).map(x => `<li>${window.QT.ICONS[x.type] || ''} [${esc(x.category)}]${x.kind === 'case' ? ' <b>кейс</b>' : ''} · ${x.points} б. · ${esc(x.text.slice(0, 120))}</li>`).join('')}</ul></div>`).join('')}</div>`;
     } catch (e) { out.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; }
   };
   const del = form.querySelector('.g-del');
   if (del) del.onclick = async () => { if (!confirm(`Удалить «${v.title}»? Попытки кандидатов сохранятся.`)) return; try { await api('DELETE', '/api/admin/reatt/' + id); toast('Удалено'); location.hash = '#/admin/reatt'; } catch (e) { toast(e.message, true); } };
+}, { role: 'admin' });
+
+// ---------- базы переаттестаций и проверка привязки к документам ----------
+route('/admin/bases', async () => {
+  const st = await api('GET', '/api/admin/bank/stats');
+  const docName = (id) => { const d = st.docs.find(x => x.id === id); return d ? d.short : id === '-' ? '(без документа)' : id + ' ⚠'; };
+  setView(`<h1>Базы переаттестаций</h1>${adminNav('/admin/bases')}
+    <p class="small mut">У каждого вида переаттестации — своя база. Вопрос базы обязан ссылаться на документ, загруженный в проект, и пункт/статью (и желательно цитату). Тексты документов — в репозитории сайта, папка <code>content/reatt6/docs</code>.</p>
+    <div class="tscroll"><table class="r6-stats"><tr><th>База</th><th>Активных</th><th>Выкл.</th><th>Лёгк.</th><th>Сред.</th><th>Сложн.</th><th>Без сложн.</th><th>Кейсов (ручн.)</th><th>Типы</th><th>Документы</th><th></th></tr>
+    ${st.base_order.map(b => { const x = st.bases[b]; return `<tr><td><b>${esc(st.base_names[b])}</b><div class="small mut">${b}</div></td><td>${x.active}</td><td>${x.inactive}</td><td>${x.by_difficulty[1]}</td><td>${x.by_difficulty[2]}</td><td>${x.by_difficulty[3]}</td><td>${x.by_difficulty['-']}</td><td>${x.cases}</td>
+      <td class="small">${Object.entries(x.by_type).sort((a, c) => c[1] - a[1]).map(([t, n]) => esc(QTYPE_RU[t] || t) + ' ' + n).join(', ')}</td><td class="small">${Object.entries(x.by_doc).sort((a, c) => c[1] - a[1]).map(([d, n]) => esc(docName(d)) + ' ' + n).join(', ')}</td>
+      <td><a class="btn sm" href="#/admin/bank?base=${b}">Вопросы</a></td></tr>`; }).join('')}</table></div>
+    <h2 style="margin-top:18px">Документы проекта</h2>
+    <table class="r6-stats"><tr><th>id</th><th>Документ</th><th>Тема</th><th>Текст</th></tr>${st.docs.map(d => `<tr><td>${esc(d.id)}</td><td>${esc(d.title)}</td><td>${esc(st.topics[d.topic] || d.topic)}</td><td><a href="content/reatt6/docs/${encodeURIComponent(d.id)}.md" target="_blank" rel="noopener">открыть</a></td></tr>`).join('')}</table>
+    <h2 style="margin-top:18px">Проверка привязки и качества</h2>
+    <div class="row"><select id="chkBase"><option value="">Все базы</option>${st.base_order.map(b => `<option value="${b}">${esc(st.base_names[b])}</option>`).join('')}</select><button class="btn gold" id="chkGo">Проверить</button></div>
+    <div id="chkOut" class="small mut">Проверяет: документ и пункт указаны и документ есть в проекте, есть цитата, указана сложность, у пропусков «из списка» ровно 4 варианта, у текстового ответа есть допустимые ответы, изображения на месте, правильный вариант не угадывается по длине, нет почти одинаковых вопросов.</div>`);
+  $('#chkGo').onclick = async () => {
+    const o = $('#chkOut'); o.textContent = 'Проверка…';
+    try { const r = await api('GET', '/api/admin/bank/check' + ($('#chkBase').value ? '?base=' + $('#chkBase').value : ''));
+      o.innerHTML = `<p>Проверено вопросов: <b>${r.checked}</b> · ошибок: <b class="${r.errors ? 'lint-err' : ''}">${r.errors}</b> · предупреждений: <b class="${r.warnings ? 'lint-warn' : ''}">${r.warnings}</b></p>
+        ${r.items.length ? `<table class="r6-stats"><tr><th>#</th><th>База</th><th>Источник</th><th>Вопрос</th><th>Замечания</th></tr>${r.items.map(x => `<tr><td><a href="#/admin/bank?q=${encodeURIComponent(x.ext_id || '')}">${x.id}</a></td><td>${esc(st.base_names[x.base] || x.base)}</td><td>${esc(x.source_doc || '—')} ${esc(x.source_ref || '')}</td><td>${esc(x.text)}</td><td>${x.issues.map(i => `<div class="lint-${i.level}">${esc(i.msg)}</div>`).join('')}</td></tr>`).join('')}</table>` : '<p class="o-correct">Замечаний нет</p>'}`;
+    } catch (e) { o.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; }
+  };
+}, { role: 'admin' });
+
+route('/admin/media', async () => {
+  const r = await api('GET', '/api/admin/media');
+  const b64 = (f) => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).replace(/^data:[^,]*,/, '')); fr.onerror = () => rej(new Error('Не удалось прочитать файл')); fr.readAsDataURL(f); });
+  setView(`<h1>Изображения для вопросов</h1>${adminNav('/admin/media')}
+    <p class="small mut">PNG, JPEG, WEBP, GIF до 1 МБ. Ключ изображения вставляется в вопрос (редактор вопроса умеет загружать сам). «Заменить» меняет файл во всех вопросах, где он используется. Схемы SVG вставляются прямо в вопрос.</p>
+    <div class="row"><label class="btn gold">⬆ Загрузить изображение<input type="file" id="mUp" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label><span id="mMsg" class="small"></span></div>
+    <div class="tscroll"><table class="r6-stats"><tr><th>Превью</th><th>Файл</th><th>Ключ</th><th>Вопросы</th><th></th></tr>
+    ${r.media.map(m => `<tr data-id="${m.id}"><td><img src="${esc(CFG.API_BASE + '/media/' + m.key)}" alt="" style="max-width:120px;max-height:80px;background:#f4f1e8"></td><td>${esc(m.name)}<div class="small mut">${esc(m.mime)} · ${Math.ceil(m.size / 1024)} КБ · ${fmtDate(m.created_at)}</div></td><td><code class="small">${esc(m.key)}</code></td><td class="small">${m.used_by.length ? m.used_by.map(x => '#' + x).join(', ') : '<span class="mut">не используется</span>'}</td>
+      <td><label class="btn sm">Заменить<input type="file" class="mRep" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label> <button class="btn sm danger mDel">Удалить</button></td></tr>`).join('') || '<tr><td colspan="5" class="mut">Изображений пока нет</td></tr>'}</table></div>`);
+  $('#mUp').onchange = async (ev) => { const f = ev.target.files[0]; if (!f) return; try { const x = await api('POST', '/api/admin/media', { name: f.name, mime: f.type, data: await b64(f) }); toast('Загружено: ключ ' + x.media.key); render(); } catch (e) { $('#mMsg').innerHTML = `<span class="o-wrong">${esc(e.message)}</span>`; } };
+  $$('tr[data-id]').forEach(tr => {
+    tr.querySelector('.mRep').onchange = async (ev) => { const f = ev.target.files[0]; if (!f) return; try { await api('PUT', '/api/admin/media/' + tr.dataset.id, { name: f.name, mime: f.type, data: await b64(f) }); toast('Заменено'); render(); } catch (e) { toast(e.message, true); } };
+    tr.querySelector('.mDel').onclick = async () => { if (!confirm('Удалить изображение?')) return; try { await api('DELETE', '/api/admin/media/' + tr.dataset.id); toast('Удалено'); render(); } catch (e) { toast(e.message, true); } };
+  });
 }, { role: 'admin' });
 
 // ---------- кандидаты ----------

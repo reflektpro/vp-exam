@@ -571,14 +571,14 @@ async function getExam(env, user, id) {
 // questions.data (JSON) — всё остальное по типу (в т.ч. правильные ответы). Кандидату уходит только publicQuestion().
 // Состояние вопроса в конкретной попытке (перемешивание, параметры) — attempts.opt_order[qid].
 const QTYPE_LIST = ['single', 'multi', 'number', 'text', 'param', 'long', 'order', 'match', 'blanks_input', 'blanks_select', 'dictation',
-  'eliminate', 'slider', 'file', 'voice', 'info', 'letters', 'words', 'find', 'case'];
+  'eliminate', 'slider', 'file', 'voice', 'info', 'letters', 'words', 'find', 'case', 'hotspot'];
 const CHOICE_TYPES = new Set(['single', 'multi', 'eliminate']);
-const PARTIAL_TYPES = new Set(['multi', 'order', 'match', 'blanks_input', 'blanks_select', 'dictation', 'find', 'eliminate', 'words']);
+const PARTIAL_TYPES = new Set(['multi', 'order', 'match', 'blanks_input', 'blanks_select', 'dictation', 'find', 'eliminate', 'words', 'hotspot']);
 const UPLOAD_HARD_MAX = 1024 * 1024;   // 1 МБ на файл (D1, base64)
 const IMPORT_TYPE_ALIASES = { multiple: 'multi', choice: 'single', radio: 'single', checkbox: 'multi', numeric: 'number', input: 'text', short: 'text',
   free: 'long', essay: 'long', sequence: 'order', matching: 'match', fill: 'blanks_input', blanks: 'blanks_input', fill_input: 'blanks_input', fill_select: 'blanks_select',
   select: 'blanks_select', exclude: 'eliminate', elimination: 'eliminate', range: 'slider', upload: 'file', audio: 'voice', information: 'info',
-  anagram: 'letters', phrase: 'words', search: 'find', situation: 'case' };
+  anagram: 'letters', phrase: 'words', search: 'find', situation: 'case', image_click: 'hotspot', zones: 'hotspot', image_zones: 'hotspot' };
 const RU_DIGITS = /^[-+]?(\d+[.,]?\d*|[.,]\d+)(e[-+]?\d+)?$/i;
 
 function randInt(n) { const x = new Uint32Array(1); crypto.getRandomValues(x); return x[0] % n; }
@@ -682,7 +682,8 @@ function optList(raw, correctIdx, name, prevOpts) {
     let id = typeof obj.id === 'string' && /^[a-z0-9]{1,16}$/i.test(obj.id) && !seen.has(obj.id) ? obj.id : null;
     if (id) seen.add(id); else id = reuseId(text, prevOpts, seen);
     const correct = ci ? ci.map(Number).includes(i) : !!obj.correct;
-    return { id, text, correct };
+    const media = obj.media ? mediaItem(obj.media, `${name} ${i + 1}: изображение`) : null;
+    return media ? { id, text, correct, media } : { id, text, correct };
   });
 }
 function parseCriteria(v) {
@@ -693,6 +694,94 @@ function parseCriteria(v) {
   });
 }
 function prevData(cur) { if (!cur) return {}; const d = parseJ(cur.data, {}); d._options = parseJ(cur.options, []); return d; }
+
+
+// ---------- переаттестации v2: базы вопросов, сложность, источники, изображения ----------
+// Каждый вопрос переаттестации принадлежит одной базе (questions.base), имеет сложность 1/2/3 (questions.difficulty)
+// и привязку к документу проекта (questions.source_doc — id из SOURCE_DOCS, questions.source_ref — пункт/статья; цитата — data.meta.quote).
+const R6_BASES = { cases_int: 'Внутренние кейсы', cases_gen: 'Общие кейсы', simple: 'Упрощённая', medium: 'Средняя', full: 'Полная общая', vp: 'Полная ВП' };
+const R6_BASE_ORDER = ['cases_int', 'cases_gen', 'simple', 'medium', 'full', 'vp'];
+const DIFF_NAMES = { 1: 'лёгкий', 2: 'средний', 3: 'сложный' };
+const DIFF_ALIASES = { '1': 1, '2': 2, '3': 3, easy: 1, basic: 1, 'базовый': 1, 'лёгкий': 1, 'легкий': 1, 'простой': 1, medium: 2, 'средний': 2, hard: 3, 'сложный': 3, 'трудный': 3 };
+// Документы, загруженные в проект (тексты — content/reatt6/docs/<id>.md в репозитории сайта). topic — тема для распределения в попытке.
+const SOURCE_DOCS = [
+  { id: 'vu', short: 'ВУ', topic: 'vu', title: 'Внутренний устав (ВС РФ, сервер)', group: 'internal' },
+  { id: 'du', short: 'ДУ', topic: 'du', title: 'Дисциплинарный устав (ред. 27.09.2026)', group: 'internal' },
+  { id: 'kps', short: 'КПС', topic: 'kps', title: 'Устав караульной и патрульной службы', group: 'internal' },
+  { id: 'su', short: 'СУ', topic: 'su', title: 'Строевой устав', group: 'internal' },
+  { id: 'pk', short: 'ПК', topic: 'pk', title: 'Процессуальный кодекс', group: 'law' },
+  { id: 'uk', short: 'УК', topic: 'uk', title: 'Уголовный кодекс', group: 'law' },
+  { id: 'koap', short: 'КоАП', topic: 'koap', title: 'Кодекс об административных правонарушениях', group: 'law' },
+  { id: 'tk', short: 'ТК', topic: 'tk', title: 'Трудовой кодекс', group: 'law' },
+  { id: 'fz_oborona', short: 'ФЗ «Об обороне»', topic: 'fz', title: 'Федеральный закон «Об обороне»', group: 'law' },
+  { id: 'fz_oruzhie', short: 'ФЗ «Об оружии»', topic: 'fz', title: 'Федеральный закон «Об оружии»', group: 'law' },
+  { id: 'fz_territorii', short: 'ФЗ о закрытых и охраняемых территориях', topic: 'fz', title: 'Федеральный закон о закрытых и охраняемых территориях', group: 'law' },
+  { id: 'fz_gostayna', short: 'ФЗ «О государственной тайне»', topic: 'fz', title: 'Федеральный закон «О государственной тайне»', group: 'law' },
+  { id: 'fz_gossluzhba', short: 'ФЗ о госслужбе', topic: 'fz', title: 'Федеральный закон о государственной службе', group: 'law' },
+  { id: 'fz_vozduh', short: 'ФЗ о воздушном пространстве', topic: 'fz', title: 'Федеральный закон об использовании воздушного пространства', group: 'law' },
+  { id: 'fkz_rezhimy', short: 'ФКЗ об особых правовых режимах', topic: 'fkz', title: 'Федеральный конституционный закон об особых правовых режимах', group: 'law' },
+];
+const SOURCE_DOC_MAP = new Map(SOURCE_DOCS.map(d => [d.id, d]));
+const R6_TOPICS = { vu: 'ВУ', du: 'ДУ', kps: 'КПС', su: 'СУ', pk: 'ПК', uk: 'УК', koap: 'КоАП', tk: 'ТК', fz: 'ФЗ', fkz: 'ФКЗ' };
+function docTopic(id) { const d = SOURCE_DOC_MAP.get(id); return d ? d.topic : (id || '—'); }
+function diffInput(v, strict) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = DIFF_ALIASES[String(v).trim().toLowerCase()];
+  if (!n) { if (strict) throw new HttpError(400, 'Сложность: 1 (лёгкий), 2 (средний) или 3 (сложный)'); return null; }
+  return n;
+}
+const MEDIA_KEY_RE = /^[A-Za-z0-9_-]{16,48}$/;
+const MEDIA_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+// SVG-схемы хранятся в вопросе и вставляются в страницу: всё, что может исполнять код или ходить во внешнюю сеть, отклоняется.
+function sanitizeSvg(src) {
+  const s = String(src || '').trim();
+  if (!/^<svg[\s>]/i.test(s) || !/<\/svg>$/i.test(s)) throw new HttpError(400, 'Схема: ожидается разметка <svg>…</svg>');
+  if (s.length > 200000) throw new HttpError(400, 'Схема слишком большая (макс. 200 000 символов)');
+  if (/<\s*(script|foreignobject|iframe|object|embed|image|a|animate\w*|set|style|link|meta)\b/i.test(s) || /\son[a-z]+\s*=/i.test(s) || /<!(entity|doctype)/i.test(s)
+    || /(?:xlink:)?href\s*=\s*["']\s*[^#"'\s]/i.test(s) || /url\s*\(\s*['"]?\s*(?!#)/i.test(s) || /javascript:/i.test(s))
+    throw new HttpError(400, 'Схема: недопустимые элементы (скрипты, обработчики событий, ссылки, внешние ресурсы, <image>, <style>)');
+  return s;
+}
+function mediaItem(x, name) {
+  if (x === undefined || x === null || x === '') return null;
+  if (typeof x === 'string') x = /^\s*</.test(x) ? { svg: x } : { m: x };
+  if (typeof x !== 'object' || Array.isArray(x)) throw new HttpError(400, `${name}: некорректное изображение`);
+  const out = {};
+  const key = x.m || x.media || x.key;
+  if (key) { const k = String(key).trim().replace(/^.*\/media\//, ''); if (!MEDIA_KEY_RE.test(k)) throw new HttpError(400, `${name}: некорректный ключ изображения`); out.m = k; }
+  else if (x.svg) out.svg = sanitizeSvg(x.svg);
+  else throw new HttpError(400, `${name}: нужен ключ загруженного изображения или SVG-схема`);
+  const alt = str(x.alt || x.caption || '', 300, { name: 'подпись изображения' }); if (alt) out.alt = alt;
+  return out;
+}
+function mediaList(v, name, max = 6) {
+  if (v === undefined || v === null || v === '') return [];
+  const arr = Array.isArray(v) ? v : [v];
+  if (arr.length > max) throw new HttpError(400, `${name}: не больше ${max}`);
+  return arr.map((x, i) => mediaItem(x, `${name} ${i + 1}`)).filter(Boolean);
+}
+// Зоны изображения: [{x,y,w,h,label,correct}] в процентах или строки «x, y, w, h | подпись | *» (* — правильная зона).
+function zoneList(v, prev) {
+  let arr = v;
+  if (typeof v === 'string') arr = v.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => {
+    const [geo, label, mark] = l.split('|').map(x => (x || '').trim());
+    const [x, y, w, h] = geo.split(/[,;\s]+/).filter(Boolean);
+    return { x, y, w, h, label, correct: mark === '*' || /^(да|верно|correct|true|1)$/i.test(mark || '') };
+  });
+  if (!Array.isArray(arr) || arr.length < 2 || arr.length > 30) throw new HttpError(400, 'Зоны на изображении: от 2 до 30');
+  const seen = new Set();
+  const zs = arr.map((z, i) => {
+    const n = (k, min, max) => reqNum(z && z[k], `зона ${i + 1}: ${k}`, { min, max });
+    const o = { x: n('x', 0, 100), y: n('y', 0, 100), w: n('w', 0.5, 100), h: n('h', 0.5, 100) };
+    if (o.x + o.w > 100.01 || o.y + o.h > 100.01) throw new HttpError(400, `Зона ${i + 1} выходит за край изображения`);
+    o.label = str(z.label, 300, { required: true, name: `подпись зоны ${i + 1}` });
+    o.id = z && typeof z.id === 'string' && /^[a-z0-9]{1,16}$/i.test(z.id) && !seen.has(z.id) ? (seen.add(z.id), z.id) : reuseId(o.label, prev, seen);
+    o.correct = !!(z.correct === true || z.correct === 1 || z.correct === '1' || z.correct === 'true');
+    return o;
+  });
+  if (!zs.some(z => z.correct)) throw new HttpError(400, 'Отметьте хотя бы одну правильную зону');
+  return zs;
+}
 
 // Нормализует вопрос из API/импорта в строку таблицы. prev — текущая строка (для сохранения id вариантов при правке).
 function questionInput(b, prev) {
@@ -706,12 +795,14 @@ function questionInput(b, prev) {
   const meta = {};
   for (const k of ['article', 'explanation', 'quote', 'difficulty', 'source']) if (b[k] !== undefined && b[k] !== null && b[k] !== '') meta[k] = str(Array.isArray(b[k]) ? b[k].join('; ') : b[k], 3000, { name: k });
   if (Object.keys(meta).length) data.meta = meta;
+  const material = str(b.material, 20000, { name: 'фрагмент документа' }); if (material) data.material = material;
+  const media = mediaList(b.media !== undefined ? b.media : (b.image !== undefined ? b.image : b.svg), 'изображение'); if (media.length) data.media = media;
   const o = { type, text, reference: str(b.reference !== undefined ? b.reference : b.reference_answer, 10000, { name: 'эталонный ответ' }) };
   switch (type) {
     case 'single': case 'multi': case 'eliminate': {
       const opts = optList(b.options, b.correct_index !== undefined ? b.correct_index : (Array.isArray(b.correct) && b.correct.every(x => typeof x === 'number') ? b.correct : (typeof b.correct === 'number' ? [b.correct] : null)), 'вариант', pd._options);
       if (opts.length < 2 || opts.length > 20) throw new HttpError(400, 'Нужно от 2 до 20 вариантов ответа');
-      correct = opts.filter(x => x.correct).map(x => x.id); options = opts.map(({ id, text }) => ({ id, text }));
+      correct = opts.filter(x => x.correct).map(x => x.id); options = opts.map(({ id, text, media }) => (media ? { id, text, media } : { id, text }));
       if (type !== 'multi' && correct.length !== 1) throw new HttpError(400, type === 'single' ? 'В вопросе с одним ответом должен быть ровно один правильный вариант' : 'В «Последовательном исключении» должен быть ровно один правильный вариант (он должен остаться последним)');
       if (type === 'multi' && correct.length < 1) throw new HttpError(400, 'Отметьте хотя бы один правильный вариант');
       if (type === 'eliminate' && opts.length < 3) throw new HttpError(400, 'Для последовательного исключения нужно минимум 3 варианта');
@@ -721,6 +812,13 @@ function questionInput(b, prev) {
       data.answer = reqNum(b.answer, 'правильный ответ');
       data.tolerance = reqNum(b.tolerance, 'допуск', { min: 0, def: 0 });
       data.unit = str(b.unit, 40, { name: 'единица' });
+      if (b.answer_max !== undefined && b.answer_max !== null && b.answer_max !== '') { data.answer_max = reqNum(b.answer_max, 'верхняя граница диапазона'); if (data.answer_max < data.answer) throw new HttpError(400, 'Диапазон: верхняя граница меньше нижней'); }
+      break;
+    }
+    case 'hotspot': {
+      if (!data.media || !data.media.length) throw new HttpError(400, 'Вопрос по изображению: загрузите изображение или вставьте SVG-схему');
+      data.zones = zoneList(b.zones, pd.zones);
+      data.show_labels = !!bool(b.show_labels, false);
       break;
     }
     case 'slider': {
@@ -850,12 +948,16 @@ function questionInput(b, prev) {
       break;
     }
   }
-  if (PARTIAL_TYPES.has(type)) data.partial = !!bool(b.partial, false);
+  if (PARTIAL_TYPES.has(type)) {
+    data.partial = !!bool(b.partial, false);
+    if (b.partial_cap !== undefined && b.partial_cap !== null && b.partial_cap !== '') { const c = int(b.partial_cap, 0, 100, 'потолок частичного балла, %', 100); if (c < 100) data.partial_cap = c; }
+  }
   o.options = options; o.correct = correct; o.data = data;
   if (type === 'info') o.points = 0;
   else {
     let defPts = 1;
     if (type === 'case') defPts = b.max_score ? Number(b.max_score) : (data.criteria.reduce((s, c) => s + c.points, 0) || 5);
+    else if (b.base && diffInput(b.difficulty, false)) defPts = diffInput(b.difficulty, false);
     o.points = int(b.points !== undefined && b.points !== null && b.points !== '' ? Number(b.points) : (b.max_score && type !== 'case' ? Number(b.max_score) : defPts), 0, 1000, 'баллы', 1);
   }
   o.category = str(b.category, 100, { name: 'категория' });
@@ -867,6 +969,11 @@ function questionInput(b, prev) {
   o.ext_id = b.ext_id !== undefined ? (str(b.ext_id, 100, { name: 'ext_id' }) || null) : (b.id !== undefined && typeof b.id === 'string' ? str(b.id, 100, { name: 'id' }) || null : undefined);
   if (b.position !== undefined) o.position = int(b.position, 0, 1000000, 'порядок', 0);
   if (b.topic !== undefined) { const t = str(b.topic, 100, { name: 'topic (группа вариантов)' }); if (t && !/^[\p{L}\p{N}_.:-]+$/u.test(t)) throw new HttpError(400, 'topic: буквы, цифры, «-», «_», «.», «:» без пробелов'); o.topic = t || null; }
+  // переаттестации v2 (undefined — не менять при правке/импорте)
+  if (b.base !== undefined) { const v = str(b.base, 30, { name: 'база' }); if (v && !R6_BASES[v]) throw new HttpError(400, 'База: ' + Object.keys(R6_BASES).join(', ')); o.base = v || null; }
+  if (b.difficulty !== undefined) o.difficulty = diffInput(b.difficulty, !!(b.base || (prev && prev.base)));
+  if (b.source_doc !== undefined) { const v = str(b.source_doc, 40, { name: 'документ' }); if (v && !SOURCE_DOC_MAP.has(v)) throw new HttpError(400, `Документ «${v}» не загружен в проект. Допустимо: ${SOURCE_DOCS.map(d => d.id).join(', ')}`); o.source_doc = v || null; }
+  if (b.source_ref !== undefined) o.source_ref = str(b.source_ref, 300, { name: 'пункт / статья' }) || null;
   return o;
 }
 
@@ -876,8 +983,9 @@ function toNative(q) {
   const o = { id: q.id, ext_id: q.ext_id || undefined, type: q.type, category: q.category || '', kind: q.kind || 'question', active: q.active === undefined ? true : !!q.active,
     text: q.text, points: q.points, reference: q.reference || '', topic: q.topic || undefined };
   switch (q.type) {
-    case 'single': case 'multi': case 'eliminate': o.options = opts.map(x => ({ id: x.id, text: x.text, correct: corr.includes(x.id) })); break;
-    case 'number': Object.assign(o, { answer: d.answer, tolerance: d.tolerance || 0, unit: d.unit || '' }); break;
+    case 'single': case 'multi': case 'eliminate': o.options = opts.map(x => ({ id: x.id, text: x.text, correct: corr.includes(x.id), ...(x.media ? { media: x.media } : {}) })); break;
+    case 'number': Object.assign(o, { answer: d.answer, tolerance: d.tolerance || 0, unit: d.unit || '' }); if (d.answer_max !== undefined) o.answer_max = d.answer_max; break;
+    case 'hotspot': o.zones = (d.zones || []).map(z => ({ id: z.id, x: z.x, y: z.y, w: z.w, h: z.h, label: z.label, correct: !!z.correct })); o.show_labels = !!d.show_labels; break;
     case 'slider': Object.assign(o, { min: d.min, max: d.max, step: d.step, answer: d.answer, tolerance: d.tolerance || 0, unit: d.unit || '' }); break;
     case 'text': o.accepted = d.accepted || []; break;
     case 'param': Object.assign(o, { vars: d.vars || {}, formula: d.formula || '', tolerance: d.tolerance || 0, unit: d.unit || '' }); break;
@@ -890,8 +998,11 @@ function toNative(q) {
     case 'letters': Object.assign(o, { word: d.word, extra_letters: d.extra_letters || '', accepted: d.accepted || [] }); break;
     case 'words': Object.assign(o, { phrase: d.phrase, extra_words: d.extra_words || [] }); break;
   }
-  if (PARTIAL_TYPES.has(q.type)) o.partial = !!d.partial;
+  if (PARTIAL_TYPES.has(q.type)) { o.partial = !!d.partial; if (d.partial_cap !== undefined) o.partial_cap = d.partial_cap; }
   if (d.meta) Object.assign(o, d.meta);
+  if (d.material) o.material = d.material;
+  if (d.media) o.media = d.media;
+  o.base = q.base || ''; o.difficulty = q.difficulty || null; o.source_doc = q.source_doc || ''; o.source_ref = q.source_ref || '';
   return o;
 }
 function matchRights(d) { const seen = new Set(); return (d.pairs || []).map(p => p.r).concat(d.distractors || []).filter(x => x && !seen.has(x.id) && (seen.add(x.id), true)); }
@@ -935,9 +1046,13 @@ function orderBy(list, order) {
 function publicQuestion(q, st) {
   const d = parseJ(q.data, {});
   const o = { id: q.id, type: q.type, text: q.text, points: q.points, kind: q.kind || 'question', category: q.category || '' };
+  if (d.material) o.material = d.material;
+  if (d.media && d.media.length) o.media = d.media;
+  if (q.difficulty) o.difficulty = q.difficulty;
   switch (q.type) {
-    case 'single': case 'multi': case 'eliminate': o.options = orderBy(parseJ(q.options, []), Array.isArray(st) ? st : []).map(x => ({ id: x.id, text: x.text })); break;
+    case 'single': case 'multi': case 'eliminate': o.options = orderBy(parseJ(q.options, []), Array.isArray(st) ? st : []).map(x => (x.media ? { id: x.id, text: x.text, media: x.media } : { id: x.id, text: x.text })); break;
     case 'number': o.unit = d.unit || ''; break;
+    case 'hotspot': o.zones = (d.zones || []).map((z, i) => ({ id: z.id, x: z.x, y: z.y, w: z.w, h: z.h, label: d.show_labels ? z.label : String(i + 1) })); o.multi = (d.zones || []).filter(z => z.correct).length > 1; break;
     case 'slider': Object.assign(o, { min: d.min, max: d.max, step: d.step, unit: d.unit || '' }); break;
     case 'param': { const p = (st && st.p) || genParams(d.vars); o.text = renderTemplate(q.text, p); o.unit = d.unit || ''; break; }
     case 'order': o.items = orderBy(d.items || [], st && st.o).map(x => ({ id: x.id, text: x.text })); break;
@@ -968,7 +1083,15 @@ function validateAnswer(q, st, v) {
     case 'multi': case 'eliminate': { const opts = parseJ(q.options, []).map(o => o.id); if (!Array.isArray(v) || v.length > opts.length || v.some(x => typeof x !== 'string' || !opts.includes(x))) badAns(); return [...new Set(v)]; }
     case 'number': case 'slider': case 'param': {
       if (typeof v === 'string' && !v.trim()) return null;
-      const n = parseNum(v); if (n === null) throw new HttpError(400, 'Ответ должен быть числом'); return n;
+      let n = parseNum(v);
+      // «15 минут», «2 ч.», «30 %» — число с единицей измерения
+      if (n === null && typeof v === 'string') { const m = /^\s*([-+]?[\d\s\u00a0]*[.,]?\d+)\s*[A-Za-zА-Яа-яЁё.%°]*\s*$/.exec(v); if (m) n = parseNum(m[1]); }
+      if (n === null) throw new HttpError(400, 'Ответ должен быть числом'); return n;
+    }
+    case 'hotspot': {
+      const ids = (d.zones || []).map(z => z.id); const arr = typeof v === 'string' ? [v] : v;
+      if (!Array.isArray(arr) || arr.length > ids.length || arr.some(x => typeof x !== 'string' || !ids.includes(x))) badAns();
+      return [...new Set(arr)];
     }
     case 'text': case 'long': case 'case': {
       if (typeof v !== 'string') badAns();
@@ -1025,8 +1148,10 @@ function isEmptyAnswer(v) {
 }
 function frac(ok, total, partial) { if (!total) return 0; if (partial) return Math.max(0, Math.min(1, ok / total)); return ok >= total ? 1 : 0; }
 // Оценка ответа: { ap: баллы | null (ручная проверка), nr: 1 если нужна ручная проверка }.
-function gradeAnswer(q, st, v) {
-  const d = parseJ(q.data, {}); const P = q.points; const part = !!d.partial;
+// opt.partial: 'on' — частичные баллы для всех типов, где они возможны; 'off' — всё или ничего; иначе — как в вопросе.
+function gradeAnswer(q, st, v, opt) {
+  const d = parseJ(q.data, {}); const P = q.points;
+  const pm = opt && opt.partial; const part = pm === 'on' ? true : pm === 'off' ? false : !!d.partial;
   if (q.type === 'info') return { ap: 0, nr: 0 };
   if (isManual(q, d)) return isEmptyAnswer(v) ? { ap: 0, nr: 0 } : { ap: null, nr: 1 };
   if (isEmptyAnswer(v)) return { ap: 0, nr: 0 };
@@ -1046,7 +1171,13 @@ function gradeAnswer(q, st, v) {
         else { const wrong = all.filter(x => x !== c); const done = wrong.filter(x => el.has(x)).length; f = frac(done, wrong.length, part); }
         break;
       }
-      case 'number': case 'slider': f = Math.abs(v - d.answer) <= (d.tolerance || 0) + 1e-9 ? 1 : 0; break;
+      case 'number': case 'slider': f = (d.answer_max !== undefined ? (v >= d.answer - 1e-9 && v <= d.answer_max + 1e-9) : Math.abs(v - d.answer) <= (d.tolerance || 0) + 1e-9) ? 1 : 0; break;
+      case 'hotspot': {
+        const c = new Set((d.zones || []).filter(z => z.correct).map(z => z.id)); const s = new Set(v);
+        let good = 0, bad = 0; for (const x of s) (c.has(x) ? good++ : bad++);
+        f = part ? frac(good - bad, c.size, true) : (good === c.size && bad === 0 ? 1 : 0);
+        break;
+      }
       case 'param': { const exp = evalFormula(d.formula, (st && st.p) || {}); f = Math.abs(v - exp) <= (d.tolerance || 0) + 1e-9 ? 1 : 0; break; }
       case 'text': { const a = normText(v); f = (d.accepted || []).some(x => normText(x) === a) ? 1 : 0; break; }
       case 'order': { const c = (d.items || []).map(x => x.id); const ok = c.filter((id, i) => v[i] === id).length; f = frac(ok, c.length, part); break; }
@@ -1072,6 +1203,8 @@ function gradeAnswer(q, st, v) {
       }
     }
   } catch (_) { f = 0; }
+  if (f > 0 && f < 1 && d.partial_cap !== undefined) f = Math.min(f, d.partial_cap / 100);   // частичный балл не выше потолка
+  f = Math.max(0, Math.min(1, f));
   return { ap: Math.round(P * f * 100) / 100, nr: 0 };
 }
 // Человекочитаемые «ответ кандидата» и «правильный ответ» для проверяющего.
@@ -1085,7 +1218,9 @@ function describeQA(q, st, v) {
       case 'single': if (ans === null) ans = ot(v); exp = corr.map(ot).join('; '); break;
       case 'multi': if (ans === null) ans = v.map(ot).join('; '); exp = corr.map(ot).join('; '); break;
       case 'eliminate': if (ans === null) { const rest = opts.filter(o => !v.includes(o.id)); ans = 'Исключены по порядку: ' + v.map(ot).join(' → ') + (rest.length === 1 ? `\nОсталось: ${rest[0].text}` : `\nОсталось вариантов: ${rest.length}`); } exp = 'Должен остаться: ' + corr.map(ot).join(''); break;
-      case 'number': case 'slider': if (ans === null) ans = fmtNum(v) + unit; exp = fmtNum(d.answer) + unit + (d.tolerance ? ` (± ${fmtNum(d.tolerance)})` : ''); break;
+      case 'number': case 'slider': if (ans === null) ans = fmtNum(v) + unit; exp = d.answer_max !== undefined ? `от ${fmtNum(d.answer)} до ${fmtNum(d.answer_max)}${unit}` : fmtNum(d.answer) + unit + (d.tolerance ? ` (± ${fmtNum(d.tolerance)})` : ''); break;
+      case 'hotspot': { const zs = d.zones || []; const lab = (id) => { const i = zs.findIndex(z => z.id === id); return i < 0 ? '?' : `${i + 1}) ${zs[i].label}`; };
+        if (ans === null) ans = v.map(lab).join('; '); exp = zs.filter(z => z.correct).map(z => lab(z.id)).join('; '); break; }
       case 'param': { const p = (st && st.p) || {}; if (ans === null) ans = fmtNum(v) + unit; let e = '?'; try { e = fmtNum(evalFormula(d.formula, p)); } catch (_) {}
         exp = e + unit + (d.tolerance ? ` (± ${fmtNum(d.tolerance)})` : '') + `\nФормула: ${d.formula}; значения: ` + Object.entries(p).map(([k, x]) => `${k} = ${fmtNum(x)}`).join(', '); break; }
       case 'text': if (ans === null) ans = v; exp = (d.accepted || []).length ? 'Допустимо: ' + d.accepted.join(' | ') : ''; break;
@@ -1174,11 +1309,14 @@ async function saveAnswers(env, attempt, answers) {
 async function attemptCtx(env, a) {
   if (a.reatt) {
     const v = (await getReatt(env, a.reatt, true)) || {}; const m = parseJ(a.meta, {});
-    return { kind: 'reatt', id: null, reatt: a.reatt, title: v.title || m.title || ('Переаттестация (' + a.reatt + ')'), pass_pct: v.pass_pct ?? m.pass_pct ?? 70, description: v.description || '' };
+    return { kind: 'reatt', id: null, reatt: a.reatt, title: v.title || m.title || ('Переаттестация (' + a.reatt + ')'), pass_pct: v.pass_pct ?? m.pass_pct ?? 70, description: v.description || '',
+      pass_points: m.pass_points ?? null, partial: m.partial || null };
   }
   const e = await env.DB.prepare('SELECT * FROM exams WHERE id = ?1').bind(a.exam_id).first();
   return e ? { kind: 'exam', ...e } : { kind: 'exam', id: a.exam_id, title: '(экзамен удалён)', pass_pct: 70 };
 }
+// Сдано: процент не ниже проходного; если задан проходной балл в баллах — ещё и набрано не меньше него.
+function isPassed(ctx, score, pct) { return pct >= ctx.pass_pct && (ctx.pass_points == null || score >= ctx.pass_points - 1e-9); }
 async function finalizeAttempt(env, attempt, expired) {
   const ctx = await attemptCtx(env, attempt);
   const order = parseJ(attempt.q_order, []); const states = parseJ(attempt.opt_order, {});
@@ -1192,7 +1330,7 @@ async function finalizeAttempt(env, attempt, expired) {
     const q = qm.get(qid); if (!q) continue;
     max += q.points;
     const v = am.has(qid) ? am.get(qid) : null;
-    const g = gradeAnswer(q, stateFor(q, states), v);
+    const g = gradeAnswer(q, stateFor(q, states), v, { partial: ctx.partial });
     if (g.nr) needReview = true;
     if (g.ap) auto += g.ap;
     stmts.push(env.DB.prepare('INSERT INTO answers (attempt_id, question_id, answer, auto_points, needs_review) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(attempt_id, question_id) DO UPDATE SET auto_points = excluded.auto_points, needs_review = excluded.needs_review')
@@ -1200,7 +1338,7 @@ async function finalizeAttempt(env, attempt, expired) {
   }
   auto = Math.round(auto * 100) / 100;
   const pct = max ? Math.round(auto / max * 1000) / 10 : 0;
-  const status = needReview ? 'pending_review' : (pct >= ctx.pass_pct ? 'passed' : 'failed');
+  const status = needReview ? 'pending_review' : (isPassed(ctx, auto, pct) ? 'passed' : 'failed');
   stmts.push(env.DB.prepare(`UPDATE attempts SET status = ?1, submitted_at = ?2, expired = ?3, auto_score = ?4, max_score = ?5, score_pct = ?6 WHERE id = ?7 AND status = 'in_progress'`)
     .bind(status, Date.now(), expired ? 1 : 0, auto, max, pct, attempt.id));
   await env.DB.batch(stmts);
@@ -1218,7 +1356,7 @@ async function loadOwnAttempt(env, user, id) {
   if (await finalizeIfExpired(env, a)) a = await env.DB.prepare('SELECT * FROM attempts WHERE id = ?1').bind(id).first();
   return a;
 }
-function ctxPublic(ctx) { return ctx.kind === 'reatt' ? { id: null, reatt: ctx.reatt, title: ctx.title, pass_pct: ctx.pass_pct, description: ctx.description } : examPublic(ctx); }
+function ctxPublic(ctx) { return ctx.kind === 'reatt' ? { id: null, reatt: ctx.reatt, title: ctx.title, pass_pct: ctx.pass_pct, pass_points: ctx.pass_points ?? null, description: ctx.description } : examPublic(ctx); }
 async function getAttempt(env, user, id) {
   const a = await loadOwnAttempt(env, user, id);
   const ctx = await attemptCtx(env, a);
@@ -1241,6 +1379,7 @@ async function getAttempt(env, user, id) {
     base.saved_answers = saved;
   } else {
     base.score_pct = a.status === 'pending_review' ? null : a.score_pct;
+    if (a.status !== 'pending_review') { base.score = Math.round(((a.auto_score || 0) + (a.manual_score || 0)) * 100) / 100; base.max_score = a.max_score; }
     base.reviewer_comment = a.reviewer_comment || null;
     base.reviewed_at = a.reviewed_at;
   }
@@ -1332,7 +1471,121 @@ function reattRow(r) {
     time_limit_min: r.time_limit_min, pass_pct: r.pass_pct, cooldown_min: r.cooldown_min, max_attempts: r.max_attempts,
     q_points: r.q_points ?? null, c_points: r.c_points ?? null, position: r.position, deleted: !!r.deleted_at,
     groups: parseJ(r.groups, []).map(g => ({ label: g.label, categories: g.categories || [], questions: g.questions || 0, cases: g.cases || 0, pref_types: g.pref_types || [], pref_count: g.pref_count || 0 })),
+    mode: r.mode === 'bank' ? 'bank' : 'groups', cfg: r.mode === 'bank' ? reattCfgNorm(parseJ(r.cfg, {})) : null, level: r.level || 0, track: r.track || '',
     created_at: r.created_at, updated_at: r.updated_at };
+}
+// Настройки выборки по базе (mode = 'bank'). mix — доли лёгких/средних/сложных в %, pts — баллы за вопрос каждой сложности.
+const R6_DEFAULT_MIX = { simple: [50, 50, 0], medium: [30, 50, 20], full: [20, 45, 35], vp: [10, 35, 55], cases_int: [25, 50, 25], cases_gen: [15, 40, 45] };
+function reattCfgNorm(c) {
+  const base = R6_BASES[c.base] ? c.base : 'simple';
+  const mix = Array.isArray(c.mix) && c.mix.length === 3 ? c.mix.map(x => Number(x) || 0) : R6_DEFAULT_MIX[base];
+  return { base, count: Number(c.count) || 10, mix, pts: Array.isArray(c.pts) && c.pts.length === 3 ? c.pts.map(Number) : [1, 2, 3],
+    topics: c.topics && typeof c.topics === 'object' ? c.topics : {}, types: Array.isArray(c.types) ? c.types : [],
+    max_topic_pct: c.max_topic_pct ?? 40, max_type_pct: c.max_type_pct ?? 50, partial: ['on', 'off'].includes(c.partial) ? c.partial : 'question',
+    pass_points: c.pass_points ?? null, unique_ref: c.unique_ref !== false, avoid_repeat: c.avoid_repeat !== false };
+}
+function reattCfgInput(c) {
+  if (!c || typeof c !== 'object' || Array.isArray(c)) throw new HttpError(400, 'Настройки выборки: ожидается объект');
+  const base = str(c.base, 30, { required: true, name: 'база вопросов' });
+  if (!R6_BASES[base]) throw new HttpError(400, 'База вопросов: ' + R6_BASE_ORDER.join(', '));
+  const count = int(c.count, 1, 200, 'количество вопросов', 10);
+  const mixIn = Array.isArray(c.mix) ? c.mix : (c.mix && typeof c.mix === 'object' ? [c.mix[1], c.mix[2], c.mix[3]] : R6_DEFAULT_MIX[base]);
+  const mix = [0, 1, 2].map(i => int(mixIn[i] ?? 0, 0, 100, `доля сложности ${i + 1}, %`, 0));
+  if (mix[0] + mix[1] + mix[2] !== 100) throw new HttpError(400, `Доли лёгких / средних / сложных вопросов в сумме должны давать 100% (сейчас ${mix[0] + mix[1] + mix[2]}%)`);
+  const pts = [0, 1, 2].map(i => { const v = Array.isArray(c.pts) ? c.pts[i] : undefined; const n = v === undefined || v === null || v === '' ? i + 1 : Number(v);
+    if (!Number.isFinite(n) || n < 0 || n > 100) throw new HttpError(400, `Баллы за вопрос сложности ${i + 1}: от 0 до 100`); return Math.round(n * 100) / 100; });
+  const topics = {};
+  if (c.topics && typeof c.topics === 'object') for (const [k, v] of Object.entries(c.topics)) {
+    if (!R6_TOPICS[k]) throw new HttpError(400, `Неизвестная тема «${k}». Допустимо: ${Object.keys(R6_TOPICS).join(', ')}`);
+    if (v === '' || v === null || v === undefined) continue; topics[k] = int(v, 0, 1000, `вес темы ${R6_TOPICS[k]}`, 0);
+  }
+  const types = [...new Set((Array.isArray(c.types) ? c.types : String(c.types || '').split(',')).map(x => String(x).trim()).filter(Boolean))];
+  for (const t of types) if (!QTYPE_LIST.includes(t) || t === 'info') throw new HttpError(400, `Неизвестный тип «${t}»`);
+  let pass_points = null;
+  if (c.pass_points !== undefined && c.pass_points !== null && c.pass_points !== '') { pass_points = Number(c.pass_points); if (!Number.isFinite(pass_points) || pass_points < 0 || pass_points > 100000) throw new HttpError(400, 'Проходной балл в баллах: число ≥ 0 или пусто'); }
+  return { base, count, mix, pts, topics, types,
+    max_topic_pct: int(c.max_topic_pct ?? 40, 0, 100, 'макс. доля одной темы, %', 40), max_type_pct: int(c.max_type_pct ?? 50, 0, 100, 'макс. доля одного типа, %', 50),
+    partial: ['on', 'off', 'question'].includes(c.partial) ? c.partial : 'question', pass_points,
+    unique_ref: c.unique_ref === undefined ? true : !!bool(c.unique_ref, true), avoid_repeat: c.avoid_repeat === undefined ? true : !!bool(c.avoid_repeat, true) };
+}
+function largestRemainder(total, pcts) {
+  const raw = pcts.map(p => total * p / 100); const fl = raw.map(Math.floor);
+  let rest = total - fl.reduce((a, b) => a + b, 0);
+  const order = raw.map((r, i) => [r - fl[i], i]).filter(x => pcts[x[1]] > 0).sort((a, b) => b[0] - a[0] || pcts[b[1]] - pcts[a[1]]);
+  for (let k = 0; rest > 0 && order.length; k = (k + 1) % order.length) { fl[order[k][1]]++; rest--; }
+  return fl;
+}
+function wordSet(t) { return new Set(normText(t).replace(/[^a-zа-я0-9]+/g, ' ').split(' ').filter(w => w.length > 3)); }
+function nearDup(a, b) { if (a.size < 4 || b.size < 4) return false; let i = 0; for (const w of a) if (b.has(w)) i++; return i / (a.size + b.size - i) >= 0.75; }
+function refKey(q) { return q.source_doc && q.source_ref ? q.source_doc + '|' + normText(q.source_ref) : null; }
+// Выборка попытки из базы: число вопросов каждой сложности по долям (метод наибольших остатков), темы — по весам,
+// не больше max_topic_pct на тему и max_type_pct на тип, без повторов (id, topic-группы, пункта документа, почти одинакового текста).
+// seen — вопросы прошлых попыток этого кандидата (берутся в последнюю очередь).
+function sampleBank(pool, cfg, seen) {
+  seen = seen || new Set();
+  const list = pool.filter(q => !cfg.types.length || cfg.types.includes(q.type));
+  const D = (q) => q.difficulty || 2;
+  const want = largestRemainder(cfg.count, cfg.mix);
+  const have = [1, 2, 3].map(d => list.filter(q => D(q) === d).length);
+  const need = want.slice(); let lacking = 0; const moved = [];
+  for (let i = 0; i < 3; i++) {
+    if (need[i] <= have[i]) continue;
+    let extra = need[i] - have[i]; need[i] = have[i];
+    for (const j of (i === 0 ? [1, 2] : i === 2 ? [1, 0] : [2, 0])) { const t = Math.min(Math.max(0, have[j] - need[j]), extra); if (t > 0) { need[j] += t; extra -= t; moved.push({ from: i + 1, to: j + 1, n: t }); } }
+    lacking += extra;
+  }
+  const topicsAll = [...new Set(list.map(q => docTopic(q.source_doc)))];
+  const wts = {}; const explicit = Object.keys(cfg.topics || {}).length > 0;
+  for (const t of topicsAll) wts[t] = explicit ? (cfg.topics[t] || 0) : 1;
+  const sumW = Object.values(wts).reduce((a, b) => a + b, 0) || 1;
+  const total = need.reduce((a, b) => a + b, 0);
+  const target = {}; for (const t of topicsAll) target[t] = total * wts[t] / sumW;
+  const maxTopic = cfg.max_topic_pct ? Math.max(1, Math.ceil(cfg.count * cfg.max_topic_pct / 100)) : Infinity;
+  const maxType = cfg.max_type_pct ? Math.max(1, Math.ceil(cfg.count * cfg.max_type_pct / 100)) : Infinity;
+  const chosen = [], ids = new Set(), cntT = {}, cntY = {}, usedTk = new Set(), usedRef = new Set(), sets = [];
+  const slots = shuffle([].concat(...need.map((n, i) => Array(n).fill(i + 1))));
+  const ws = new Map();
+  const wsOf = (q) => { if (!ws.has(q.id)) ws.set(q.id, wordSet(q.text || '')); return ws.get(q.id); };
+  for (const d of slots) {
+    let pick = null;
+    for (let relax = 0; relax < 3 && !pick; relax++) {
+      const cand = [];
+      for (const q of list) {
+        if (D(q) !== d || ids.has(q.id)) continue;
+        const tk = q.topic ? String(q.topic).toLowerCase() : null; if (tk && usedTk.has(tk)) continue;
+        const T = docTopic(q.source_doc); if (!wts[T]) continue;
+        const rk = cfg.unique_ref ? refKey(q) : null; if (relax < 1 && rk && usedRef.has(rk)) continue;
+        if (relax < 2 && (cntY[q.type] || 0) >= maxType) continue;
+        if (relax < 2 && (cntT[T] || 0) >= maxTopic) continue;
+        cand.push({ q, sc: (target[T] - (cntT[T] || 0)) + Math.random() * 0.9 - (cfg.avoid_repeat && seen.has(q.id) ? 3 : 0) });
+      }
+      cand.sort((a, b) => b.sc - a.sc);
+      for (const c of cand) { const w = wsOf(c.q); if (relax < 1 && sets.some(s => nearDup(w, s))) continue; pick = c.q; break; }
+    }
+    if (!pick) { lacking++; continue; }
+    const T = docTopic(pick.source_doc);
+    chosen.push(pick); ids.add(pick.id); cntT[T] = (cntT[T] || 0) + 1; cntY[pick.type] = (cntY[pick.type] || 0) + 1;
+    if (pick.topic) usedTk.add(String(pick.topic).toLowerCase()); const rk = refKey(pick); if (rk) usedRef.add(rk); sets.push(wsOf(pick));
+  }
+  const byD = { 1: 0, 2: 0, 3: 0 }; for (const q of chosen) byD[D(q)]++;
+  return { ids: chosen.map(q => q.id), rows: chosen, want: { 1: want[0], 2: want[1], 3: want[2] }, got: byD, by_topic: cntT, by_type: cntY, short: Math.max(0, cfg.count - chosen.length), moved, repeated: chosen.filter(q => seen.has(q.id)).length };
+}
+async function baseIndex(env, base) {
+  const { results } = await env.DB.prepare("SELECT id, kind, type, topic, difficulty, source_doc, source_ref, points, substr(text, 1, 600) AS text FROM questions WHERE exam_id = 0 AND active = 1 AND base = ?1 AND type != 'info'").bind(base).all();
+  return results;
+}
+function baseAvailability(pool, cfg) {
+  const list = pool.filter(q => !cfg.types.length || cfg.types.includes(q.type));
+  const want = largestRemainder(cfg.count, cfg.mix);
+  const have = [1, 2, 3].map(d => list.filter(q => (q.difficulty || 2) === d).length);
+  return { base: cfg.base, total: list.length, want: { 1: want[0], 2: want[1], 3: want[2] }, have: { 1: have[0], 2: have[1], 3: have[2] },
+    ok: list.length >= cfg.count && want.every((w, i) => have[i] >= w), ratio: cfg.count ? Math.round(list.length / cfg.count * 10) / 10 : 0 };
+}
+// группы для сводки попытки: по темам (документам)
+function bankGroups(rows) {
+  const m = new Map();
+  for (const q of rows) { const t = docTopic(q.source_doc); const label = R6_TOPICS[t] || t; if (!m.has(label)) m.set(label, { label, q: [], c: [], short_q: 0, short_c: 0 }); (q.kind === 'case' ? m.get(label).c : m.get(label).q).push(q.id); }
+  return [...m.values()];
 }
 async function getReatt(env, key, withDeleted) {
   const r = await env.DB.prepare(`SELECT * FROM reattestations WHERE key = ?1${withDeleted ? '' : ' AND deleted_at IS NULL'}`).bind(key).first();
@@ -1363,6 +1616,18 @@ function optPoints(v, name) {
 function reattInput(b, cur) {
   if (!b || typeof b !== 'object') throw new HttpError(400, 'Некорректные данные');
   const g = (k, d) => b[k] !== undefined ? b[k] : (cur ? cur[k] : d);
+  const mode = g('mode', 'groups') === 'bank' ? 'bank' : 'groups';
+  const level = int(g('level', 0), 0, 100, 'уровень', 0);
+  const track = str(g('track', ''), 20, { name: 'линия' });
+  if (track && !['line', 'cases'].includes(track)) throw new HttpError(400, 'Линия: line (основная) или cases (кейсы)');
+  if (mode === 'bank') {
+    const cfg = reattCfgInput(g('cfg', null));
+    const gr = b.groups !== undefined && Array.isArray(b.groups) && b.groups.length ? reattGroupsInput(b.groups) : (cur ? cur.groups : []);
+    return { ...reattCommon(g), mode, cfg, level, track, groups: gr };
+  }
+  return { ...reattCommon(g), mode, cfg: cur && cur.cfg ? cur.cfg : {}, level, track, groups: reattGroupsInput(g('groups', null)) };
+}
+function reattCommon(g) {
   return {
     title: str(g('title', ''), 200, { required: true, name: 'название' }),
     description: str(g('description', ''), 5000, { name: 'описание' }),
@@ -1375,7 +1640,6 @@ function reattInput(b, cur) {
     q_points: optPoints(g('q_points', null), 'Баллы за вопрос'),
     c_points: optPoints(g('c_points', null), 'Баллы за кейс'),
     position: int(g('position', 0), 0, 1000000, 'порядок', 0),
-    groups: reattGroupsInput(g('groups', null)),
   };
 }
 async function bankIndex(env) {
@@ -1486,9 +1750,12 @@ async function listReatt(env, user) {
       if (!gs.length && !act) continue; // без выданного доступа переаттестация не видна
       grant = bestGrant(gs);
     }
+    const bank = v.mode === 'bank';
     out.push({ key: v.key, title: v.title, description: v.description, enabled: v.enabled, time_limit_min: v.time_limit_min, pass_pct: v.pass_pct,
-      cooldown_min: v.cooldown_min, max_attempts: v.max_attempts,
-      total_questions: v.groups.reduce((s, g) => s + g.questions, 0), total_cases: v.groups.reduce((s, g) => s + g.cases, 0),
+      cooldown_min: v.cooldown_min, max_attempts: v.max_attempts, level: v.level, track: v.track, mode: v.mode,
+      base: bank ? v.cfg.base : null, pass_points: bank ? v.cfg.pass_points : null,
+      total_questions: bank ? v.cfg.count : v.groups.reduce((s, g) => s + g.questions, 0), total_cases: bank ? 0 : v.groups.reduce((s, g) => s + g.cases, 0),
+      manual: bank ? !!(await env.DB.prepare("SELECT 1 FROM questions WHERE exam_id = 0 AND active = 1 AND base = ?1 AND type IN ('case','long','file','voice') LIMIT 1").bind(v.cfg.base).first()) : v.groups.some(g => g.cases > 0),
       ...(await reattState(env, user, v, grant)) });
   }
   return json({ versions: out });
@@ -1506,14 +1773,29 @@ async function startReatt(env, user, key) {
     throw new HttpError(409, 'Время предыдущей попытки истекло — она завершена автоматически. Обновите страницу.');
   }
   if (!st.can_start) throw new HttpError(403, st.reason || 'Переаттестация недоступна');
-  const groups = sampleReatt(await bankIndex(env), v.groups);
-  const ids = groups.flatMap(g => g.q.concat(g.c));
-  if (!ids.length) throw new HttpError(409, 'Банк вопросов пока пуст — обратитесь к учебному отделу');
-  const raw = await loadQs(env, ids);
+  let ids, raw, meta;
   const points = {};
-  for (const q of raw) { const w = q.kind === 'case' ? v.c_points : v.q_points; if (w !== null && w !== undefined) points[q.id] = w; }
-  const meta = { version: key, grant: grant ? grant.id : undefined, title: v.title, pass_pct: v.pass_pct, points: Object.keys(points).length ? points : undefined,
-    groups: groups.map(g => ({ label: g.label, q: g.q, c: g.c, short_q: g.short_q, short_c: g.short_c })) };
+  if (v.mode === 'bank') {
+    // вопросы прошлых попыток кандидата — в последнюю очередь (разнообразие попыток)
+    const { results: prev } = await env.DB.prepare('SELECT q_order FROM attempts WHERE user_id = ?1 AND reatt = ?2 ORDER BY id DESC LIMIT 5').bind(user.id, key).all();
+    const seen = new Set(prev.flatMap(a => parseJ(a.q_order, [])));
+    const sb = sampleBank(await baseIndex(env, v.cfg.base), v.cfg, seen);
+    ids = sb.ids;
+    if (!ids.length) throw new HttpError(409, 'База вопросов этой переаттестации пока пуста — обратитесь к учебному отделу');
+    raw = await loadQs(env, ids);
+    for (const q of raw) { const w = q.difficulty ? v.cfg.pts[q.difficulty - 1] : null; if (w !== null && w !== undefined) points[q.id] = w; }
+    meta = { version: key, grant: grant ? grant.id : undefined, title: v.title, pass_pct: v.pass_pct, pass_points: v.cfg.pass_points ?? undefined, partial: v.cfg.partial !== 'question' ? v.cfg.partial : undefined,
+      mode: 'bank', base: v.cfg.base, points: Object.keys(points).length ? points : undefined, comp: { want: sb.want, got: sb.got, short: sb.short, by_topic: sb.by_topic, by_type: sb.by_type, repeated: sb.repeated },
+      groups: bankGroups(sb.rows) };
+  } else {
+    const groups = sampleReatt(await bankIndex(env), v.groups);
+    ids = groups.flatMap(g => g.q.concat(g.c));
+    if (!ids.length) throw new HttpError(409, 'Банк вопросов пока пуст — обратитесь к учебному отделу');
+    raw = await loadQs(env, ids);
+    for (const q of raw) { const w = q.kind === 'case' ? v.c_points : v.q_points; if (w !== null && w !== undefined) points[q.id] = w; }
+    meta = { version: key, grant: grant ? grant.id : undefined, title: v.title, pass_pct: v.pass_pct, points: Object.keys(points).length ? points : undefined,
+      groups: groups.map(g => ({ label: g.label, q: g.q, c: g.c, short_q: g.short_q, short_c: g.short_c })) };
+  }
   const qs = applyWeights(raw, { reatt: key, meta: JSON.stringify(meta) });
   const order = shuffle(ids);
   const states = buildStates(qs, true);
@@ -1531,9 +1813,11 @@ async function adminReatt(env) {
   for (const q of bank) { const c = q.category || '(без категории)'; cats[c] = cats[c] || { category: c, questions: 0, cases: 0 }; if (q.kind === 'case') cats[c].cases++; else cats[c].questions++; }
   const { results: stats } = await env.DB.prepare("SELECT reatt, status, COUNT(*) AS c FROM attempts WHERE reatt IS NOT NULL GROUP BY reatt, status").all();
   const { results: ga } = await env.DB.prepare('SELECT reatt_key, COUNT(*) AS c, SUM(user_id IS NULL) AS g FROM reatt_access WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?1) GROUP BY reatt_key').bind(Date.now()).all();
-  const items = results.map(reattRow).map(v => ({ ...v, availability: availability(bank, v.groups), access: (() => { const x = ga.find(a => a.reatt_key === v.key); return { active: x ? x.c : 0, global: x ? x.g : 0 }; })(),
+  const pools = {};
+  for (const v of results.map(reattRow)) if (v.mode === 'bank' && !pools[v.cfg.base]) pools[v.cfg.base] = await baseIndex(env, v.cfg.base);
+  const items = results.map(reattRow).map(v => ({ ...v, availability: v.mode === 'bank' ? [] : availability(bank, v.groups), base_availability: v.mode === 'bank' ? baseAvailability(pools[v.cfg.base], v.cfg) : null, access: (() => { const x = ga.find(a => a.reatt_key === v.key); return { active: x ? x.c : 0, global: x ? x.g : 0 }; })(),
     attempts: stats.filter(s => s.reatt === v.key).reduce((o, s) => (o[s.status] = s.c, o), {}) }));
-  return json({ items, categories: Object.values(cats).sort((a, b) => a.category.localeCompare(b.category, 'ru')) });
+  return json({ items, categories: Object.values(cats).sort((a, b) => a.category.localeCompare(b.category, 'ru')), bases: await reattBaseStats(env), base_names: R6_BASES, topics: R6_TOPICS, docs: SOURCE_DOCS });
 }
 async function adminReattOne(env, id) {
   const r = reattRow(await env.DB.prepare('SELECT * FROM reattestations WHERE id = ?1 AND deleted_at IS NULL').bind(id).first());
@@ -1545,18 +1829,20 @@ async function createReatt(request, env, actor) {
   const now = Date.now();
   let key; for (let t = 0; t < 5; t++) { key = 'r' + [...crypto.getRandomValues(new Uint8Array(4))].map(x => x.toString(16).padStart(2, '0')).join(''); if (key.length > 3 && !(await env.DB.prepare('SELECT 1 FROM reattestations WHERE key = ?1').bind(key).first())) break; }
   const pos = o.position || ((await env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM reattestations').first()).m + 10);
-  const r = await env.DB.prepare(`INSERT INTO reattestations (key, title, description, enabled, visible, time_limit_min, pass_pct, cooldown_min, max_attempts, q_points, c_points, groups, position, created_at, updated_at)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14) RETURNING id`)
-    .bind(key, o.title, o.description, o.enabled, o.visible, o.time_limit_min, o.pass_pct, o.cooldown_min, o.max_attempts, o.q_points, o.c_points, JSON.stringify(o.groups), pos, now).first();
+  const r = await env.DB.prepare(`INSERT INTO reattestations (key, title, description, enabled, visible, time_limit_min, pass_pct, cooldown_min, max_attempts, q_points, c_points, groups, position, created_at, updated_at, mode, cfg, level, track)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17, ?18) RETURNING id`)
+    .bind(key, o.title, o.description, o.enabled, o.visible, o.time_limit_min, o.pass_pct, o.cooldown_min, o.max_attempts, o.q_points, o.c_points, JSON.stringify(o.groups), pos, now, o.mode, JSON.stringify(o.cfg || {}), o.level, o.track).first();
   await audit(env, actor, 'reatt.create', String(r.id), { title: o.title, key });
   return json({ item: await adminReattOne(env, r.id) }, 201);
 }
 async function updateReatt(request, env, actor, id) {
   const cur = await adminReattOne(env, id);
   const o = reattInput(await readJson(request), cur);
-  await env.DB.prepare(`UPDATE reattestations SET title = ?1, description = ?2, enabled = ?3, visible = ?4, time_limit_min = ?5, pass_pct = ?6, cooldown_min = ?7, max_attempts = ?8, q_points = ?9, c_points = ?10, groups = ?11, position = ?12, updated_at = ?13 WHERE id = ?14`)
-    .bind(o.title, o.description, o.enabled, o.visible, o.time_limit_min, o.pass_pct, o.cooldown_min, o.max_attempts, o.q_points, o.c_points, JSON.stringify(o.groups), o.position, Date.now(), id).run();
-  await audit(env, actor, 'reatt.update', String(id), { title: o.title, enabled: !!o.enabled, visible: !!o.visible, groups: o.groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(', ') });
+  await env.DB.prepare(`UPDATE reattestations SET title = ?1, description = ?2, enabled = ?3, visible = ?4, time_limit_min = ?5, pass_pct = ?6, cooldown_min = ?7, max_attempts = ?8, q_points = ?9, c_points = ?10, groups = ?11, position = ?12, updated_at = ?13,
+      mode = ?15, cfg = ?16, level = ?17, track = ?18 WHERE id = ?14`)
+    .bind(o.title, o.description, o.enabled, o.visible, o.time_limit_min, o.pass_pct, o.cooldown_min, o.max_attempts, o.q_points, o.c_points, JSON.stringify(o.groups), o.position, Date.now(), id, o.mode, JSON.stringify(o.cfg || {}), o.level, o.track).run();
+  await audit(env, actor, 'reatt.update', String(id), { title: o.title, enabled: !!o.enabled, visible: !!o.visible, mode: o.mode,
+    ...(o.mode === 'bank' ? { base: o.cfg.base, count: o.cfg.count, mix: o.cfg.mix.join('/'), pass_pct: o.pass_pct, pass_points: o.cfg.pass_points } : { groups: o.groups.map(g => `${g.label}:${g.questions}+${g.cases}`).join(', ') }) });
   return json({ item: await adminReattOne(env, id) });
 }
 async function deleteReatt(env, actor, id) {
@@ -1572,8 +1858,21 @@ async function deleteReatt(env, actor, id) {
 async function previewReatt(request, env, id) {
   const b = await readJson(request).catch(() => ({}));
   let groups, v = null;
+  const sv = id ? await adminReattOne(env, id) : null;
+  const mode = b && b.mode ? b.mode : (b && b.cfg ? 'bank' : (b && Array.isArray(b.groups) ? 'groups' : (sv ? sv.mode : 'groups')));
+  if (mode === 'bank') {
+    const cfg = b && b.cfg ? reattCfgInput(b.cfg) : sv && sv.cfg; if (!cfg) throw new HttpError(400, 'Нет настроек выборки');
+    const pool = await baseIndex(env, cfg.base);
+    const sb = sampleBank(pool, cfg, new Set());
+    const qs = await loadQs(env, sb.ids); const qm = new Map(qs.map(q => [q.id, q]));
+    const pts = (q) => (q.difficulty ? cfg.pts[q.difficulty - 1] : q.points);
+    const brief = (id) => { const q = qm.get(id); return { id, type: q.type, kind: q.kind, category: q.category, points: pts(q), difficulty: q.difficulty, source_doc: q.source_doc, source_ref: q.source_ref, text: q.text.slice(0, 200) }; };
+    return json({ mode: 'bank', groups: bankGroups(sb.rows).map(g => ({ ...g, need_q: g.q.length, need_c: g.c.length, q: g.q.map(brief), c: g.c.map(brief) })),
+      total: sb.ids.length, max_score: qs.reduce((s, q) => s + pts(q), 0), comp: { want: sb.want, got: sb.got, short: sb.short, by_topic: sb.by_topic, by_type: sb.by_type, moved: sb.moved },
+      availability: baseAvailability(pool, cfg) });
+  }
   if (b && Array.isArray(b.groups)) groups = reattGroupsInput(b.groups);
-  else { v = await adminReattOne(env, id); groups = v.groups; }
+  else { v = sv || await adminReattOne(env, id); groups = v.groups; }
   const qp = optPoints(b && b.q_points !== undefined ? b.q_points : v && v.q_points, 'Баллы за вопрос'), cp = optPoints(b && b.c_points !== undefined ? b.c_points : v && v.c_points, 'Баллы за кейс');
   const sg = sampleReatt(await bankIndex(env), groups);
   const qs = await loadQs(env, sg.flatMap(g => g.q.concat(g.c)));
@@ -1681,13 +1980,17 @@ async function importQuestions(request, env, user, examId) {
   return json({ report });
 }
 function insertQStmt(env, examId, o, now) {
-  return env.DB.prepare('INSERT INTO questions (exam_id, type, text, options, correct, reference, points, position, data, category, kind, easy, active, ext_id, created_at, updated_at, topic) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16)')
-    .bind(examId, o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position || 0, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now, o.topic || null);
+  return env.DB.prepare('INSERT INTO questions (exam_id, type, text, options, correct, reference, points, position, data, category, kind, easy, active, ext_id, created_at, updated_at, topic, base, difficulty, source_doc, source_ref) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16, ?17, ?18, ?19, ?20)')
+    .bind(examId, o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position || 0, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now, o.topic || null,
+      o.base || null, o.difficulty || null, o.source_doc || null, o.source_ref || null);
 }
 // topic: undefined — не трогать (правка без поля), null/'' — снять.
 function updateQStmt(env, id, o, now) {
-  return env.DB.prepare('UPDATE questions SET type = ?1, text = ?2, options = ?3, correct = ?4, reference = ?5, points = ?6, position = COALESCE(?7, position), data = ?8, category = ?9, kind = ?10, easy = ?11, active = ?12, ext_id = COALESCE(?13, ext_id), updated_at = ?14, topic = CASE WHEN ?16 = 1 THEN ?17 ELSE topic END WHERE id = ?15')
-    .bind(o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position ?? null, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now, id, o.topic !== undefined ? 1 : 0, o.topic || null);
+  const k = (v) => (v !== undefined ? 1 : 0);
+  return env.DB.prepare(`UPDATE questions SET type = ?1, text = ?2, options = ?3, correct = ?4, reference = ?5, points = ?6, position = COALESCE(?7, position), data = ?8, category = ?9, kind = ?10, easy = ?11, active = ?12, ext_id = COALESCE(?13, ext_id), updated_at = ?14, topic = CASE WHEN ?16 = 1 THEN ?17 ELSE topic END,
+      base = CASE WHEN ?18 = 1 THEN ?19 ELSE base END, difficulty = CASE WHEN ?20 = 1 THEN ?21 ELSE difficulty END, source_doc = CASE WHEN ?22 = 1 THEN ?23 ELSE source_doc END, source_ref = CASE WHEN ?24 = 1 THEN ?25 ELSE source_ref END WHERE id = ?15`)
+    .bind(o.type, o.text, JSON.stringify(o.options), JSON.stringify(o.correct), o.reference, o.points, o.position ?? null, JSON.stringify(o.data), o.category || '', o.kind, o.easy, o.active, o.ext_id || null, now, id, o.topic !== undefined ? 1 : 0, o.topic || null,
+      k(o.base), o.base || null, k(o.difficulty), o.difficulty || null, k(o.source_doc), o.source_doc || null, k(o.source_ref), o.source_ref || null);
 }
 async function adminBank(env, url) {
   const f = (k) => (url.searchParams.get(k) || '').trim();
@@ -1697,6 +2000,10 @@ async function adminBank(env, url) {
   if (f('kind')) add('kind = ?', f('kind'));
   if (f('type')) add('type = ?', f('type'));
   if (f('active') === '0') where.push('active = 0');
+  if (f('active') === '1') where.push('active = 1');
+  if (f('base') === '-') where.push('base IS NULL'); else if (f('base') === '*') where.push('base IS NOT NULL'); else if (f('base')) add('base = ?', f('base'));
+  if (f('difficulty')) add('difficulty = ?', Number(f('difficulty')) || 0);
+  if (f('source_doc') === '-') where.push("(source_doc IS NULL OR source_doc = '')"); else if (f('source_doc')) add('source_doc = ?', f('source_doc'));
   if (f('q')) { binds.push('%' + f('q').replace(/[%_\\]/g, m => '\\' + m) + '%'); const n = binds.length; where.push(`(text LIKE ?${n} ESCAPE '\\' OR ext_id LIKE ?${n} ESCAPE '\\')`); }
   const limit = Math.min(500, Math.max(1, Number(f('limit')) || 100)), offset = Math.max(0, Number(f('offset')) || 0);
   const w = where.join(' AND ');
@@ -1704,6 +2011,108 @@ async function adminBank(env, url) {
   const { results } = await env.DB.prepare(`SELECT * FROM questions WHERE ${w} ORDER BY category, kind, id LIMIT ${limit} OFFSET ${offset}`).bind(...binds).all();
   const { results: cats } = await env.DB.prepare("SELECT category, kind, COUNT(*) AS c FROM questions WHERE exam_id = 0 GROUP BY category, kind ORDER BY category").all();
   return json({ total: total.c, questions: results.map(q => toNative(q)), categories: cats });
+}
+// Сводка по базам переаттестаций: количество, распределение по сложности, типам и документам.
+async function reattBaseStats(env) {
+  const { results } = await env.DB.prepare("SELECT base, active, kind, type, difficulty, source_doc, COUNT(*) AS c FROM questions WHERE exam_id = 0 AND base IS NOT NULL GROUP BY base, active, kind, type, difficulty, source_doc").all();
+  const out = {};
+  for (const b of R6_BASE_ORDER) out[b] = { base: b, title: R6_BASES[b], active: 0, inactive: 0, by_difficulty: { 1: 0, 2: 0, 3: 0, '-': 0 }, by_type: {}, by_doc: {}, by_topic: {}, cases: 0 };
+  for (const r of results) {
+    const o = out[r.base]; if (!o) continue;
+    if (!r.active) { o.inactive += r.c; continue; }
+    o.active += r.c; o.by_difficulty[r.difficulty || '-'] += r.c;
+    o.by_type[r.type] = (o.by_type[r.type] || 0) + r.c;
+    const doc = r.source_doc || '-'; o.by_doc[doc] = (o.by_doc[doc] || 0) + r.c;
+    const t = docTopic(r.source_doc); o.by_topic[t] = (o.by_topic[t] || 0) + r.c;
+    if (r.kind === 'case') o.cases += r.c;
+  }
+  return out;
+}
+// Проверка привязки вопросов баз к документам и качества (для админки и тестов).
+function lintQuestion(q) {
+  const d = parseJ(q.data, {}); const issues = [];
+  const add = (level, code, msg) => issues.push({ level, code, msg });
+  if (!q.source_doc) add('err', 'no_doc', 'Не указан документ-источник');
+  else if (!SOURCE_DOC_MAP.has(q.source_doc)) add('err', 'unknown_doc', `Документ «${q.source_doc}» не загружен в проект`);
+  if (!q.source_ref) add('err', 'no_ref', 'Не указан пункт / статья');
+  if (!(d.meta && d.meta.quote)) add('warn', 'no_quote', 'Нет цитаты из документа');
+  if (!q.difficulty) add('err', 'no_difficulty', 'Не указана сложность');
+  if (q.type === 'blanks_select') (d.blanks || []).forEach((b, k) => { if ((b.opts || []).length !== 4) add('err', 'blank_opts', `Пропуск ${k + 1}: вариантов ${(b.opts || []).length}, нужно ровно 4`); });
+  if (q.type === 'text' && !(d.accepted || []).length) add('err', 'text_no_answer', 'Нет допустимых ответов');
+  if (q.type === 'hotspot' && !(d.media || []).length) add('err', 'no_media', 'Нет изображения');
+  if (q.type === 'single' || q.type === 'multi') {
+    const opts = parseJ(q.options, []), corr = new Set(parseJ(q.correct, []));
+    const L = (o) => o.text.length; const right = opts.filter(o => corr.has(o.id)), wrong = opts.filter(o => !corr.has(o.id));
+    if (q.type === 'single' && right.length === 1 && wrong.length) {
+      const r = L(right[0]), mw = Math.max(...wrong.map(L)), avg = wrong.reduce((s, o) => s + L(o), 0) / wrong.length;
+      if (r > mw && r > avg * 1.35 && r - mw > 8) add('warn', 'length_hint', 'Правильный вариант заметно длиннее остальных — угадывается по длине');
+    }
+    if (wrong.length < 2 && q.type === 'single') add('warn', 'few_options', 'Меньше трёх вариантов ответа');
+  }
+  return issues;
+}
+async function bankCheck(env, url) {
+  const base = (url.searchParams.get('base') || '').trim();
+  const { results } = await env.DB.prepare(`SELECT * FROM questions WHERE exam_id = 0 AND base IS NOT NULL AND active = 1${base ? ' AND base = ?1' : ''} ORDER BY base, id`).bind(...(base ? [base] : [])).all();
+  const { results: med } = await env.DB.prepare('SELECT key FROM media').all();
+  const mkeys = new Set(med.map(m => m.key));
+  const items = []; const sets = new Map();
+  for (const q of results) {
+    const issues = lintQuestion(q); const d = parseJ(q.data, {});
+    const refs = (d.media || []).concat(parseJ(q.options, []).map(o => o.media).filter(Boolean)).filter(m => m.m);
+    for (const m of refs) if (!mkeys.has(m.m)) issues.push({ level: 'err', code: 'media_missing', msg: 'Изображение не найдено: ' + m.m });
+    const ws = wordSet(q.text + ' ' + (d.content || ''));
+    for (const [oid, o] of sets) if (o.base === q.base && nearDup(ws, o.ws)) { issues.push({ level: 'warn', code: 'near_dup', msg: `Почти совпадает с #${oid}` }); break; }
+    sets.set(q.id, { base: q.base, ws });
+    if (issues.length) items.push({ id: q.id, ext_id: q.ext_id, base: q.base, type: q.type, source_doc: q.source_doc, source_ref: q.source_ref, text: q.text.slice(0, 200), issues });
+  }
+  const errors = items.reduce((s, x) => s + x.issues.filter(i => i.level === 'err').length, 0);
+  return json({ checked: results.length, errors, warnings: items.reduce((s, x) => s + x.issues.filter(i => i.level === 'warn').length, 0), items, docs: SOURCE_DOCS, bases: R6_BASES });
+}
+// ---------- изображения для вопросов (D1, base64, до 1 МБ; отдаются по неугадываемому ключу) ----------
+function b64Size(data) { return Math.floor(data.length * 3 / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0); }
+function mediaPayload(b) {
+  const mime = str(b.mime, 100, { required: true, name: 'тип файла' }).toLowerCase();
+  if (!MEDIA_MIMES.includes(mime)) throw new HttpError(400, 'Допустимы изображения PNG, JPEG, WEBP, GIF (схемы SVG вставляются в вопрос текстом)');
+  const data = typeof b.data === 'string' ? b.data.replace(/^data:[^,]*,/, '') : '';
+  if (!data || !/^[A-Za-z0-9+/]+=*$/.test(data)) throw new HttpError(400, 'Некорректные данные файла');
+  const size = b64Size(data);
+  if (size > UPLOAD_HARD_MAX) throw new HttpError(413, `Файл слишком большой: ${Math.ceil(size / 1024)} КБ (макс. ${UPLOAD_HARD_MAX / 1024} КБ)`);
+  return { mime, data, size, name: str(b.name, 200, { name: 'имя файла' }) || 'image' };
+}
+async function uploadMedia(request, env, user) {
+  const p = mediaPayload(await readJson(request, 1500000));
+  const key = randToken(24).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
+  const r = await env.DB.prepare('INSERT INTO media (key, name, mime, size, data, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id').bind(key, p.name, p.mime, p.size, p.data, user.id, Date.now()).first();
+  await audit(env, user, 'media.upload', String(r.id), { name: p.name, size: p.size });
+  return json({ media: { id: r.id, key, name: p.name, mime: p.mime, size: p.size } }, 201);
+}
+async function replaceMedia(request, env, user, id) {
+  const cur = await env.DB.prepare('SELECT id, key FROM media WHERE id = ?1').bind(id).first(); if (!cur) throw new HttpError(404, 'Изображение не найдено');
+  const p = mediaPayload(await readJson(request, 1500000));
+  await env.DB.prepare('UPDATE media SET name = ?1, mime = ?2, size = ?3, data = ?4, created_by = ?5, created_at = ?6 WHERE id = ?7').bind(p.name, p.mime, p.size, p.data, user.id, Date.now(), id).run();
+  await audit(env, user, 'media.replace', String(id), { name: p.name, size: p.size });
+  return json({ media: { id, key: cur.key, name: p.name, mime: p.mime, size: p.size } });
+}
+async function listMedia(env) {
+  const { results } = await env.DB.prepare('SELECT id, key, name, mime, size, created_at FROM media ORDER BY id DESC LIMIT 500').all();
+  const { results: qs } = await env.DB.prepare(`SELECT id, data, options FROM questions WHERE data LIKE '%"m":%' OR options LIKE '%"m":%'`).all();
+  return json({ media: results.map(m => ({ ...m, used_by: qs.filter(q => (q.data || '').includes(m.key) || (q.options || '').includes(m.key)).map(q => q.id) })) });
+}
+async function deleteMedia(env, user, id) {
+  const cur = await env.DB.prepare('SELECT id, key, name FROM media WHERE id = ?1').bind(id).first(); if (!cur) throw new HttpError(404, 'Изображение не найдено');
+  const used = await env.DB.prepare('SELECT id FROM questions WHERE data LIKE ?1 OR options LIKE ?1 LIMIT 1').bind('%' + cur.key + '%').first();
+  if (used) throw new HttpError(409, `Изображение используется в вопросе #${used.id} — сначала уберите его из вопроса или замените файл`);
+  await env.DB.prepare('DELETE FROM media WHERE id = ?1').bind(id).run();
+  await audit(env, user, 'media.delete', String(id), { name: cur.name });
+  return json({ ok: true });
+}
+async function serveMedia(env, key) {
+  if (!MEDIA_KEY_RE.test(key)) throw new HttpError(404, 'Не найдено');
+  const m = await env.DB.prepare('SELECT mime, data FROM media WHERE key = ?1').bind(key).first();
+  if (!m) throw new HttpError(404, 'Не найдено');
+  const bin = Uint8Array.from(atob(m.data), c => c.charCodeAt(0));
+  return new Response(bin, { status: 200, headers: { 'Content-Type': m.mime, 'Cache-Control': 'public, max-age=86400', 'Content-Security-Policy': "default-src 'none'", 'Cross-Origin-Resource-Policy': 'cross-origin' } });
 }
 async function exportQuestions(env, examId, url) {
   const cat = (url.searchParams.get('category') || '').trim();
@@ -2255,7 +2664,7 @@ async function reviewAttempt(request, env, actor, id) {
   const comment = str(b.comment, 5000, { name: 'комментарий' });
   const total = auto + manual;
   const pct = a.max_score ? Math.round(total / a.max_score * 1000) / 10 : 0;
-  const status = verdict === 'auto' ? (pct >= ctx.pass_pct ? 'passed' : 'failed') : verdict;
+  const status = verdict === 'auto' ? (isPassed(ctx, total, pct) ? 'passed' : 'failed') : verdict;
   stmts.push(env.DB.prepare('UPDATE attempts SET status = ?1, manual_score = ?2, score_pct = ?3, reviewer_id = ?4, reviewer_comment = ?5, reviewed_at = ?6 WHERE id = ?7')
     .bind(status, manual, pct, actor.id, comment || null, Date.now(), id));
   await env.DB.batch(stmts);
@@ -3400,6 +3809,7 @@ async function route(request, env, ctx) {
   if (p === '/api/promo-config' && M === 'GET') { const pc = await promoConfig(env); return json({ ...pc, items: (await premConfig(env)).items.map(i => ({ key: i.key, name: i.name, group: i.group })) }); }
 
   let m;
+  if ((m = /^\/media\/([A-Za-z0-9_-]{16,48})$/.exec(p)) && M === 'GET') return serveMedia(env, m[1]);
   if (!p.startsWith('/api/')) throw new HttpError(404, 'Не найдено');
   const user = await authUser(request, env);
 
@@ -3539,6 +3949,11 @@ async function route(request, env, ctx) {
     if (p === '/api/admin/bank/import' && M === 'POST') { A(); return importQuestions(request, env, user, 0); }
     if (p === '/api/admin/bank/export' && M === 'GET') { A(); return exportQuestions(env, 0, url); }
     if (p === '/api/admin/bank/delete-examples' && M === 'POST') { A(); return deleteExamples(request, env, user); }
+    if (p === '/api/admin/bank/check' && M === 'GET') { A(); return bankCheck(env, url); }
+    if (p === '/api/admin/bank/stats' && M === 'GET') { A(); return json({ bases: await reattBaseStats(env), base_names: R6_BASES, base_order: R6_BASE_ORDER, topics: R6_TOPICS, docs: SOURCE_DOCS }); }
+    if (p === '/api/admin/media' && M === 'GET') { A(); return listMedia(env); }
+    if (p === '/api/admin/media' && M === 'POST') { A(); return uploadMedia(request, env, user); }
+    if ((m = /^\/api\/admin\/media\/(\d+)$/.exec(p))) { A(); if (M === 'PUT') return replaceMedia(request, env, user, idParam(m[1])); if (M === 'DELETE') return deleteMedia(env, user, idParam(m[1])); }
     // переаттестация
     if (p === '/api/admin/reatt' && M === 'GET') { A(); return adminReatt(env); }
     if (p === '/api/admin/reatt' && M === 'POST') { A(); return createReatt(request, env, user); }
