@@ -12,7 +12,7 @@ function fmtTime(sec) { sec = Math.max(0, Math.floor(sec || 0)); const h = Math.
 function fmtDate(ms) { if (!ms) return '—'; return new Date(ms).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
 function toast(msg, isErr) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (isErr ? ' err' : ''); t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, isErr ? 9000 : 4000); }
 function token() { return localStorage.getItem(TOKEN_KEY); }
-function setView(html) { $('#app').innerHTML = html; window.scrollTo(0, 0); }
+function setView(html) { const el = $('#app'); el.innerHTML = html; el.classList.remove('view-in'); void el.offsetWidth; el.classList.add('view-in'); window.scrollTo(0, 0); }
 function onCleanup(fn) { App.cleanup.push(fn); }
 function userName(u) { return u ? (u.ic_name || u.global_name || u.username || u.id) : '—'; }
 const STATUS_RU = {
@@ -327,15 +327,26 @@ route('/attempt/:id', async (id) => {
   let num = 0;
   setView(`<p><a href="${back.href}">← ${esc(back.title)}</a></p>
     <div class="timer" id="timer"><span>${esc(a.exam.title)}</span><span>${a.deadline_at ? 'Осталось: <b id="tleft">—</b>' : '<span class="mut">Без ограничения времени</span>'}</span></div>
-    <div class="small mut" style="margin:-8px 0 12px">Вопросов: ${a.questions.filter(q => q.type !== 'info').length}. Ответы сохраняются автоматически.</div>
-    <form id="examForm" novalidate>${a.questions.map(q => `<div class="q ${q.type === 'info' ? 'info-q' : ''} ${q.kind === 'case' ? 'case-q' : ''}" data-qid="${q.id}" data-type="${esc(q.type)}"><div class="row between"><span class="small mut">${q.type === 'info' ? 'Информация' : (q.kind === 'case' ? 'Кейс' : 'Вопрос') + ' ' + (++num)}${q.category ? ' · ' + esc(q.category) : ''}</span>${q.type === 'info' ? '' : `<span class="small mut">${q.points} балл(ов)</span>`}</div><div class="qt">${esc(q.text)}</div></div>`).join('')}
+    <div class="small mut" style="margin:-8px 0 8px">Вопросов: ${a.questions.filter(q => q.type !== 'info').length}. Ответы сохраняются автоматически.</div>
+    <div class="aprog" aria-hidden="true"><i id="aprogBar"></i></div><div class="small mut" id="aprogTxt" style="margin:0 0 12px"></div>
+    <form id="examForm" novalidate>${a.questions.map(q => `<div class="q ${q.type === 'info' ? 'info-q' : ''} ${q.kind === 'case' ? 'case-q' : ''}" data-qid="${q.id}" data-type="${esc(q.type)}"><div class="row between"><span class="small mut">${q.type === 'info' ? 'Информация' : (q.kind === 'case' ? 'Кейс' : 'Вопрос') + ' ' + (++num)}${q.category ? ' · ' + esc(q.category) : ''}</span>${q.type === 'info' ? '' : `<span class="small mut">${q.points} балл(ов)</span>`}</div><div class="qt">${esc(q.text)}</div>${q.source ? `<div class="qsrc" title="Документ-источник вопроса">📄 ${esc(q.source.title)}</div>` : ''}</div>`).join('')}
     <div class="row"><button class="btn primary" type="submit" id="submitBtn">Завершить и отправить</button><span class="small mut" id="saveState"></span></div></form>`);
   const form = $('#examForm');
   let dirty = false, saving = false, finished = false;
   const ctl = {};
-  const onChange = () => { dirty = true; try { localStorage.setItem(lsKey, JSON.stringify(collect(true))); } catch (_) {} };
+  const onChange = () => { dirty = true; try { localStorage.setItem(lsKey, JSON.stringify(collect(true))); } catch (_) {} progress(); };
+  const isEmpty = (v) => v == null || v === '' || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && !Object.values(v).some(x => x != null && x !== '' && !(Array.isArray(x) && !x.length)));
+  function progress() {   // полоса «отвечено N из M» + отметка отвеченных карточек
+    const qs = a.questions.filter(q => q.type !== 'info'); if (!qs.length) return;
+    let done = 0;
+    for (const q of qs) { let v; try { v = ctl[q.id] && ctl[q.id].get(); } catch (_) { v = null; } const ok = !isEmpty(v); if (ok) done++; const el = form.querySelector(`.q[data-qid="${q.id}"]`); if (el) el.classList.toggle('answered', ok); }
+    const bar = $('#aprogBar'); if (bar) bar.style.width = Math.round(done / qs.length * 100) + '%';
+    const t = $('#aprogTxt'); if (t) t.textContent = `Отвечено: ${done} из ${qs.length}`;
+  }
   const ctx = { upload: (qid, f) => api('POST', `/api/attempts/${a.id}/upload`, { question_id: qid, ...f }) };
   for (const q of a.questions) ctl[q.id] = window.QT.mount(form.querySelector(`.q[data-qid="${q.id}"]`), q, answers[q.id], onChange, ctx);
+  progress(); form.addEventListener('input', progress); form.addEventListener('change', progress);
+  form.querySelectorAll('.q').forEach((el, i) => { el.classList.add('reveal'); el.style.setProperty('--d', Math.min(i, 12) * 40 + 'ms'); });
   function collect(forLocal) {
     const out = {};
     for (const q of a.questions) {
@@ -388,7 +399,18 @@ function attemptResult(a) {
       ${a.score_pct != null ? `<p>Результат: <b>${a.score_pct}%</b>${a.max_score ? ` — <b>${a.score}</b> из ${a.max_score} балл(ов)` : ''} (проходной — ${a.exam ? a.exam.pass_pct : '?'}%${a.exam && a.exam.pass_points != null ? ' и не меньше ' + a.exam.pass_points + ' балл(ов)' : ''})</p>` : '<p class="mut">Ваши развёрнутые ответы (кейсы, файлы, голосовые) проверит экзаменатор. Результат появится здесь.</p>'}
       ${a.reviewer_comment ? `<div class="alert info" style="text-align:left"><b>Комментарий проверяющего:</b><br><span class="welcome">${esc(a.reviewer_comment)}</span></div>` : ''}
       ${a.reviewed_at ? `<p class="small mut">Проверено ${fmtDate(a.reviewed_at)}</p>` : ''}
-    </div>`);
+    </div>${reviewHtml(a.review)}`);
+  const bigEl = document.querySelector('.result .big'); if (bigEl) bigEl.classList.add('pop');
+  document.querySelectorAll('.rv-item').forEach((el, i) => el.style.setProperty('--d', Math.min(i, 20) * 35 + 'ms'));
+}
+// Разбор переаттестации: верно / частично / неверно и источник (документ + пункт). Правильные варианты не показываются.
+function reviewHtml(list) {
+  if (!Array.isArray(list) || !list.length) return '';
+  const RS = { correct: ['✔', 'Верно', 'ok'], partial: ['◐', 'Частично', 'warn'], wrong: ['✘', 'Неверно', 'err'], pending: ['…', 'На проверке', 'info'] };
+  const cnt = { correct: 0, partial: 0, wrong: 0 }; for (const r of list) if (cnt[r.result] !== undefined) cnt[r.result]++;
+  return `<div class="card"><h3>Разбор ответов</h3><p class="small mut">Верно: ${cnt.correct} · частично: ${cnt.partial} · неверно: ${cnt.wrong}. Для каждого вопроса указан документ и пункт, по которому его стоит повторить.</p>
+    ${list.map(r => { const s = RS[r.result] || RS.pending; return `<div class="rv-item reveal rv-${s[2]}"><div class="row between"><span class="small mut">${r.kind === 'case' ? 'Кейс' : 'Вопрос'} ${r.n}</span><span class="badge ${s[2]}">${s[0]} ${s[1]}${r.got != null ? ` · ${r.got} из ${r.points}` : ''}</span></div>
+      <div class="qt">${esc(r.text)}</div>${r.source ? `<div class="qsrc">📄 ${esc(r.source.title)}${r.source.ref ? ` — <b>${esc(r.source.ref)}</b>` : ''}</div>` : ''}</div>`; }).join('')}</div>`;
 }
 
 route('/reatt', async () => {

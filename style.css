@@ -427,3 +427,40 @@ ol.tl li.err .tl-ic{border-color:#a04040}ol.tl li.ok .tl-ic{border-color:var(--o
 .reatt-lvl{display:inline-block;font-size:12px;border:1px solid var(--gold);color:var(--gold);border-radius:10px;padding:0 8px;margin-right:6px}
 .r6-stats td,.r6-stats th{font-size:13px}
 .lint-err{color:#e06666}.lint-warn{color:#d9a400}
+
+/* ---------- анимации (лёгкие, только CSS; отключаются при prefers-reduced-motion) ---------- */
+@keyframes vpFadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes vpPop{0%{opacity:0;transform:scale(.7)}60%{opacity:1;transform:scale(1.08)}100%{transform:scale(1)}}
+@keyframes vpShake{0%,100%{transform:none}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
+@keyframes vpGlow{0%{box-shadow:0 0 0 0 rgba(95,190,110,.55)}100%{box-shadow:0 0 0 14px rgba(95,190,110,0)}}
+@keyframes vpSlideIn{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+#app.view-in>*{animation:vpFadeUp .32s ease both}
+#app.view-in>*:nth-child(2){animation-delay:.04s}#app.view-in>*:nth-child(3){animation-delay:.08s}#app.view-in>*:nth-child(4){animation-delay:.12s}#app.view-in>*:nth-child(n+5){animation-delay:.16s}
+.card,.tile-card,.course-card,.topic-card{transition:border-color .15s,transform .15s,box-shadow .2s}
+.tile-card:hover,.course-card:hover,.topic-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.reveal{animation:vpFadeUp .35s ease both;animation-delay:var(--d,0ms)}
+.q{transition:border-color .2s,background-color .2s,box-shadow .2s}
+.q:focus-within{border-color:var(--gold);box-shadow:0 0 0 1px rgba(212,175,55,.25)}
+.q.answered{border-left:3px solid var(--gold)}
+.q .opt{transition:background-color .15s,border-color .15s,transform .1s}
+.q .opt:active{transform:scale(.99)}
+.q .opt:has(input:checked){border-color:var(--gold);background:#2a2614}
+.qsrc{margin-top:8px;font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.qsrc b{color:var(--gold2);font-weight:600}
+.aprog{height:6px;background:#1b2120;border:1px solid var(--line);border-radius:4px;overflow:hidden;margin:0 0 4px}
+.aprog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--gold),var(--gold2));transition:width .35s ease}
+.result .big.pop{animation:vpPop .5s cubic-bezier(.2,.9,.3,1.3) both}
+.result .big.ok.pop{animation:vpPop .5s cubic-bezier(.2,.9,.3,1.3) both,vpGlow 1.2s .4s ease-out 2}
+.result .big.err.pop{animation:vpPop .4s ease both,vpShake .45s .4s ease both}
+.rv-item{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px}
+.rv-item.rv-ok{border-left-color:#5fbe6e}.rv-item.rv-warn{border-left-color:var(--warn)}.rv-item.rv-err{border-left-color:var(--err)}
+.rv-item .qt{font-weight:600;margin:6px 0 0;white-space:pre-wrap}
+.o-correct{animation:vpFadeUp .3s ease both}
+body.drawer-open .drawer-nav a{animation:vpSlideIn .28s ease both}
+body.drawer-open .drawer-nav a:nth-child(2){animation-delay:.03s}body.drawer-open .drawer-nav a:nth-child(3){animation-delay:.06s}body.drawer-open .drawer-nav a:nth-child(4){animation-delay:.09s}body.drawer-open .drawer-nav a:nth-child(5){animation-delay:.12s}body.drawer-open .drawer-nav a:nth-child(n+6){animation-delay:.15s}
+.btn{transition:background-color .15s,border-color .15s,transform .1s,box-shadow .15s}
+.btn:active:not(:disabled){transform:translateY(1px)}
+.toast,#toast{animation:vpFadeUp .25s ease both}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+}

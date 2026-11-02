@@ -194,6 +194,7 @@ function synth(base, n, tag) {
   r = await call('POST', `/api/admin/reatt/${VP.id}/access`, A, { user_id: U.c1, attempts: 5 }); check('доступ к Полной ВП выдан', r.status < 300, r.d);
   r = await call('POST', '/api/reatt/full_vp/start', C1); const AT1 = r.d.attempt_id; check('кандидат начал Полную ВП', r.status === 200 && AT1, r.d);
   let at = (await call('GET', '/api/attempts/' + AT1, C1)).d.attempt;
+  check('при прохождении у вопроса виден документ-источник, но без номера пункта', at.questions.every(q => q.source && q.source.title && !q.source.ref), at.questions.map(q => q.source));
   check('попытка: 10 вопросов, баллы снимком по сложности', at.questions.length === 10 && at.questions.every(q => q.points === 1 && q.difficulty === 1), at.questions.map(q => [q.points, q.difficulty]));
   // отвечаем: 9 полностью верно, 1 — половина (частично не засчитывается в режиме «никогда»)
   const rows = await sql(`SELECT id, options, correct, data FROM questions WHERE id IN (${at.questions.map(q => q.id).join(',')})`);
@@ -202,6 +203,9 @@ function synth(base, n, tag) {
   at = (await call('GET', '/api/attempts/' + AT1, C1)).d.attempt;
   check('итог: 9 из 10 баллов, 90%, но проходной 10 баллов → НЕ СДАН', at.status === 'failed' && at.score === 9 && at.max_score === 10 && at.score_pct === 90, at);
   check('кандидат видит баллы и проходной в баллах', at.exam.pass_points === 10, at.exam);
+  check('разбор после отправки: по каждому вопросу итог и источник (документ + пункт)', Array.isArray(at.review) && at.review.length === 10 && at.review.every(x => x.source && x.source.title && x.source.ref && ['correct', 'wrong'].includes(x.result)), at.review && at.review.slice(0, 2));
+  check('разбор: множественный выбор — засчитывается только полностью верный набор (9 верно, 1 неверно)', at.review && at.review.filter(x => x.result === 'correct').length === 9 && at.review.filter(x => x.result === 'wrong').length === 1, at.review && at.review.map(x => x.result));
+  check('разбор не раскрывает правильные варианты', at.review && !/"correct":\[|"options"/.test(JSON.stringify(at.review)), at.review && at.review[0]);
   await call('PUT', `/api/admin/reatt/${VP.id}`, A, { mode: 'bank', cfg: { base: 'vp', count: 10, mix: [100, 0, 0], types: ['multi'], max_topic_pct: 0, max_type_pct: 0, partial: 'on', pass_points: 9 } });
   r = await call('POST', '/api/reatt/full_vp/start', C1); const AT2 = r.d.attempt_id; at = (await call('GET', '/api/attempts/' + AT2, C1)).d.attempt;
   const rows2 = await sql(`SELECT id, correct FROM questions WHERE id IN (${at.questions.map(q => q.id).join(',')})`);

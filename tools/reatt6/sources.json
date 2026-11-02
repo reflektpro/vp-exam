@@ -1,22 +1,159 @@
 {
-  "_comment": "Документы проекта для переаттестаций v2: id (как в worker SOURCE_DOCS) → исходный файл. Копия текста кладётся в content/reatt6/docs/<id>.md.",
-  "docs": {
-    "vu": "/workspace/vp_reatt_sources/ustavy/src/vu.txt",
-    "du": "/workspace/vp_reatt_sources/ustavy/src/du.txt",
-    "kps": "/workspace/vp_reatt_sources/ustavy/src/kps.txt",
-    "su": "/workspace/vp_reatt_sources/ustavy/src/su.txt",
-    "pk": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/processualnyj-kodeks-rossijskoj-federacii.md",
-    "uk": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/ugolovnyj-kodeks-rossijskoj-federacii.md",
-    "koap": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/kodeks-ob-administrativnyx-pravonarushenijax-rossijskoj-federacii.md",
-    "tk": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/trudovoj-kodeks-rossijskoj-federacii.md",
-    "fz_oborona": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-ob-oborone-no52-fz.md",
-    "fz_oruzhie": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-ob-oruzhii-no-34-fz.md",
-    "fz_territorii": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-sobstvennosti-zakrytyx-i-oxranjaemyx-territorijax-no-86-fz.md",
-    "fz_gostayna": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-tajne-no10-fz.md",
-    "fz_gossluzhba": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-sluzhbe-no-54-fz.md",
-    "fz_vozduh": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-zakon-o-vozdushnom-prostranstve-no-95-fz-poslednjaja-redakcija.md",
-    "fkz_rezhimy": "/workspace/rmrp_laws/text/obschee-zakonodatelstvo/federalnyj-konstitucionnyj-zakon-ob-osobyx-pravovyx-rezhimax-no-28-fkz.md"
+ "_comment": "Документы проекта для переаттестаций v2: content/reatt6/docs/<id>.md — канонические тексты (обновляются tools/update_laws.py --apply). docs: id → файл; forum: id → тема forum.rmrp.ru для автообновления.",
+ "docs": {
+  "vu": "content/reatt6/docs/vu.md",
+  "du": "content/reatt6/docs/du.md",
+  "kps": "content/reatt6/docs/kps.md",
+  "su": "content/reatt6/docs/su.md",
+  "pk": "content/reatt6/docs/pk.md",
+  "uk": "content/reatt6/docs/uk.md",
+  "koap": "content/reatt6/docs/koap.md",
+  "tk": "content/reatt6/docs/tk.md",
+  "fz_oborona": "content/reatt6/docs/fz_oborona.md",
+  "fz_oruzhie": "content/reatt6/docs/fz_oruzhie.md",
+  "fz_territorii": "content/reatt6/docs/fz_territorii.md",
+  "fz_gostayna": "content/reatt6/docs/fz_gostayna.md",
+  "fz_gossluzhba": "content/reatt6/docs/fz_gossluzhba.md",
+  "fz_vozduh": "content/reatt6/docs/fz_vozduh.md",
+  "fkz_rezhimy": "content/reatt6/docs/fkz_rezhimy.md",
+  "upk": "content/reatt6/docs/upk.md"
+ },
+ "law_files": {
+  "pk": "pk",
+  "uk": "uk",
+  "koap": "koap",
+  "tk": "tk",
+  "fz_oborona": "fz_oborona",
+  "fz_oruzhie": "fz_oruzhie",
+  "fz_territorii": "fz_territorii",
+  "fz_gostayna": "fz_gostayna",
+  "fz_gossluzhba": "fz_gossluzhba",
+  "fz_vozduh": "fz_vozduh",
+  "fkz_rezhimy": "fkz_rezhimy"
+ },
+ "pkc_law": {
+  "pk": "pk",
+  "uk": "uk",
+  "koap": "koap",
+  "fz86": "fz_territorii",
+  "fz52": "fz_oborona",
+  "fz34": "fz_oruzhie",
+  "ustav_vs": "vu",
+  "upk": "upk"
+ },
+ "forum": {
+  "pk": {
+   "thread": 58424,
+   "url": "https://forum.rmrp.ru/threads/processualnyj-kodeks-rossijskoj-federacii.58424/",
+   "title": "Процессуальный Кодекс Российской Федерации",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/processualnyj-kodeks-rossijskoj-federacii.md"
   },
-  "law_files": { "pk": "pk", "uk": "uk", "koap": "koap", "tk": "tk", "fz_oborona": "fz_oborona", "fz_oruzhie": "fz_oruzhie", "fz_territorii": "fz_territorii", "fz_gostayna": "fz_gostayna", "fz_gossluzhba": "fz_gossluzhba", "fz_vozduh": "fz_vozduh", "fkz_rezhimy": "fkz_rezhimy" },
-  "pkc_law": { "pk": "pk", "uk": "uk", "koap": "koap", "fz86": "fz_territorii", "fz52": "fz_oborona", "fz34": "fz_oruzhie", "ustav_vs": "vu" }
+  "uk": {
+   "thread": 58209,
+   "url": "https://forum.rmrp.ru/threads/ugolovnyj-kodeks-rossijskoj-federacii.58209/",
+   "title": "Уголовный Кодекс Российской Федерации",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/ugolovnyj-kodeks-rossijskoj-federacii.md"
+  },
+  "koap": {
+   "thread": 58229,
+   "url": "https://forum.rmrp.ru/threads/kodeks-ob-administrativnyx-pravonarushenijax-rossijskoj-federacii.58229/",
+   "title": "Кодекс об административных правонарушениях  Российской Федерации",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/kodeks-ob-administrativnyx-pravonarushenijax-rossijskoj-federacii.md"
+  },
+  "tk": {
+   "thread": 25050,
+   "url": "https://forum.rmrp.ru/threads/trudovoj-kodeks-rossijskoj-federacii.25050/",
+   "title": "Трудовой Кодекс Российской Федерации",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/trudovoj-kodeks-rossijskoj-federacii.md"
+  },
+  "fz_oborona": {
+   "thread": 25072,
+   "url": "https://forum.rmrp.ru/threads/federalnyj-zakon-ob-oborone-no52-fz.25072/",
+   "title": "Федеральный закон «Об обороне» №52-ФЗ",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/federalnyj-zakon-ob-oborone-no52-fz.md"
+  },
+  "fz_oruzhie": {
+   "thread": 25068,
+   "url": "https://forum.rmrp.ru/threads/federalnyj-zakon-ob-oruzhii-no-34-fz.25068/",
+   "title": "Федеральный закон «Об оружии» № 34-ФЗ",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/federalnyj-zakon-ob-oruzhii-no-34-fz.md"
+  },
+  "fz_territorii": {
+   "thread": 26625,
+   "url": "https://forum.rmrp.ru/threads/federalnyj-zakon-o-gosudarstvennoj-sobstvennosti-zakrytyx-i-oxranjaemyx-territorijax-no-86-fz.26625/",
+   "title": "Федеральный закон «О государственной собственности, закрытых и охраняемых территориях» № 86-ФЗ",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-sobstvennosti-zakrytyx-i-oxranjaemyx-territorijax-no-86-fz.md"
+  },
+  "fz_gostayna": {
+   "thread": 25062,
+   "url": "https://forum.rmrp.ru/threads/federalnyj-zakon-o-gosudarstvennoj-tajne-no10-fz.25062/",
+   "title": "Федеральный закон «О государственной тайне» №10-ФЗ",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-tajne-no10-fz.md"
+  },
+  "fz_gossluzhba": {
+   "thread": 25075,
+   "url": "https://forum.rmrp.ru/threads/federalnyj-zakon-o-gosudarstvennoj-sluzhbe-no-54-fz.25075/",
+   "title": "Федеральный закон «О государственной службе» № 54-ФЗ",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/federalnyj-zakon-o-gosudarstvennoj-sluzhbe-no-54-fz.md"
+  },
+  "fz_vozduh": {
+   "thread": 25057,
+   "url": "https://forum.rmrp.ru/threads/federalnyj-zakon-o-vozdushnom-prostranstve-no-95-fz-poslednjaja-redakcija.25057/",
+   "title": "Федеральный закон «О воздушном пространстве» № 95-ФЗ (последняя редакция)",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/federalnyj-zakon-o-vozdushnom-prostranstve-no-95-fz-poslednjaja-redakcija.md"
+  },
+  "fkz_rezhimy": {
+   "thread": 25066,
+   "url": "https://forum.rmrp.ru/threads/federalnyj-konstitucionnyj-zakon-ob-osobyx-pravovyx-rezhimax-no-28-fkz.25066/",
+   "title": "Федеральный конституционный закон «Об особых правовых режимах» № 28-ФКЗ",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/federalnyj-konstitucionnyj-zakon-ob-osobyx-pravovyx-rezhimax-no-28-fkz.md"
+  },
+  "upk": {
+   "thread": 90218,
+   "url": "https://forum.rmrp.ru/threads/ugolovno-processualnyj-kodeks-rossijskoj-federacii.90218/",
+   "title": "Уголовно-процессуальный Кодекс Российской Федерации",
+   "section": "obschee-zakonodatelstvo",
+   "offline": "text/obschee-zakonodatelstvo/ugolovno-processualnyj-kodeks-rossijskoj-federacii.md"
+  },
+  "vu": {
+   "thread": 267901,
+   "url": "https://forum.rmrp.ru/threads/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-vnutrennij-ustav-1-j-motostrelkovoj-brigady-moskovskoj-oblasti.267901/",
+   "title": "Вооружённые силы Российской Федерации (ВС РФ) | Внутренний устав 1-й мотострелковой бригады Московской области",
+   "section": "patriki/armija",
+   "offline": "text/patriki/armija/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-vnutrennij-ustav-1-j-motostrelkovoj-brigady-moskovskoj-oblasti.md"
+  },
+  "du": {
+   "thread": 292503,
+   "url": "https://forum.rmrp.ru/threads/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-disciplinarnyj-ustav-vooruzhennyx-sil-rossijskoj-federacii.292503/",
+   "title": "Вооружённые силы Российской Федерации (ВС РФ) | Дисциплинарный Устав Вооруженных Сил Российской Федерации",
+   "section": "patriki/armija",
+   "offline": "text/patriki/armija/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-disciplinarnyj-ustav-vooruzhennyx-sil-rossijskoj-federacii.md",
+   "manual": "на форуме (тема 292503) текст устава выложен только презентацией на Яндекс.Диске (редакция 06.10.2026), скачивание запрещено владельцем — сверять вручную; в проекте — редакция 27.09.2026"
+  },
+  "kps": {
+   "thread": 267914,
+   "url": "https://forum.rmrp.ru/threads/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-ustav-karaulno-postovoj-sluzhby-1-oj-motostrelkovoj-brigady-moskovskoj-oblasti.267914/",
+   "title": "Вооружённые силы Российской Федерации (ВС РФ) | Устав караульно-постовой службы 1-ой мотострелковой бригады Московской области",
+   "section": "patriki/armija",
+   "offline": "text/patriki/armija/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-ustav-karaulno-postovoj-sluzhby-1-oj-motostrelkovoj-brigady-moskovskoj-oblasti.md"
+  },
+  "su": {
+   "thread": 267911,
+   "url": "https://forum.rmrp.ru/threads/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-stroevoj-ustav-1-j-motostrelkovoj-brigady-moskovskoj-oblasti.267911/",
+   "title": "Вооружённые силы Российской Федерации (ВС РФ) | Строевой устав 1-й мотострелковой бригады Московской области",
+   "section": "patriki/armija",
+   "offline": "text/patriki/armija/vooruzhjonnye-sily-rossijskoj-federacii-vs-rf-stroevoj-ustav-1-j-motostrelkovoj-brigady-moskovskoj-oblasti.md"
+  }
+ }
 }

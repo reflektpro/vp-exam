@@ -16,7 +16,9 @@ const norm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/
 (async () => {
   const A = (await (await fetch(`${API}/__test/login?id=417660389723996170&name=admin`)).json()).token;
   const exp = JSON.parse(fs.readFileSync(path.join(ROOT, 'content/reatt6/bases.json'), 'utf8')).bases;
-  const rows = await sql("SELECT id, ext_id, type, kind, base, difficulty, source_doc, source_ref, text, data, active FROM questions WHERE ext_id LIKE 'r6-%'");
+  const rows = await sql("SELECT id, ext_id, type, kind, base, difficulty, source_doc, source_ref, text, options, data, active FROM questions WHERE ext_id LIKE 'r6-%' AND active = 1");
+  const old = await sql("SELECT COUNT(*) AS c FROM questions WHERE ext_id LIKE 'r6-%' AND active = 0");
+  check('прежние версии изменённых вопросов отключены (active = 0), а не удалены — старые попытки не ломаются', old[0].c > 0, old);
   const docsDir = path.join(ROOT, 'content/reatt6/docs');
   const docIds = fs.readdirSync(docsDir).map(f => f.replace(/\.md$/, ''));
   const docN = Object.fromEntries(docIds.map(d => [d, norm(fs.readFileSync(path.join(docsDir, d + '.md'), 'utf8'))]));
@@ -45,7 +47,27 @@ const norm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/
   check('у каждого вопроса — сложность 1/2/3', !bad.diff.length, bad.diff);
   check('у каждого вопроса (кроме кейсов) — цитата, дословно найденная в документе', !bad.quote.length, bad.quote);
   check('нет внешних источников (ссылок) в тексте и пояснениях', !bad.ext.length, bad.ext);
-  check('все документы баз — из перечня SOURCE_DOCS (15)', docIds.length === 15);
+  check('все документы баз — из перечня SOURCE_DOCS (16, с УПК)', docIds.length === 16 && docIds.includes('upk'));
+  check('в базах есть вопросы по УПК (полная общая, полная ВП, средняя, общие кейсы)', ['full', 'vp', 'medium', 'cases_gen'].every(b => rows.some(r => r.base === b && r.source_doc === 'upk')), ['full', 'vp', 'medium', 'cases_gen'].map(b => rows.filter(r => r.base === b && r.source_doc === 'upk').length));
+  // п. 5: в формулировках и вариантах нет ссылок на номера пунктов/статей (номер — только в source_ref / цитате)
+  const { REF_RE } = require('../tools/reatt6/refre');
+  const refBad = [];
+  for (const r of rows) {
+    if (r.kind === 'case') continue;
+    const d = JSON.parse(r.data || '{}');
+    const texts = [r.text, ...JSON.parse(r.options || '[]').map(o => o.text), ...(d.items || []).map(x => x.text), ...(d.pairs || []).flatMap(p => [p.l && p.l.text, p.r && p.r.text]), ...(d.distractors || []).map(x => x.text || x)];
+    const hit = texts.find(t => typeof t === 'string' && REF_RE.test(t)); if (hit) refBad.push(r.ext_id + ': ' + hit.slice(0, 80));
+  }
+  check('нет ссылок на номера пунктов/статей в формулировках и вариантах (регэксп REF_RE)', !refBad.length, refBad.slice(0, 5));
+  check('регэксп REF_RE ловит типовые ссылки', ['Что гласит п. 4.6 ВУ?', 'по ст. 62 УК', 'согласно ч. 2.3', 'пункт 2 устава', 'Статья 12.1'].every(t => REF_RE.test(t)) && !['Штраф 10 000 руб.', 'Губернатор ФО', '5 минут'].some(t => REF_RE.test(t)));
+  // п. 3: правильный вариант не угадывается по длине
+  const lenBad = [];
+  for (const r of rows.filter(r => r.type === 'single' || r.type === 'multi')) {
+    const o = JSON.parse(r.options), c = new Set(JSON.parse((await sql('SELECT correct FROM questions WHERE id = ?1', [r.id]))[0].correct));
+    const R = o.filter(x => c.has(x.id)).map(x => x.text.length), Wl = o.filter(x => !c.has(x.id)).map(x => x.text.length); const av = a => a.reduce((x, y) => x + y, 0) / a.length;
+    if (r.type === 'single' ? (R[0] > Math.max(...Wl) && R[0] > av(Wl) * 1.35 && R[0] - Math.max(...Wl) > 8) : (Math.min(...R) > Math.max(...Wl) && av(R) > av(Wl) * 1.35)) lenBad.push(r.ext_id);
+  }
+  check('правильные варианты не выделяются длиной (single и multi)', !lenBad.length, lenBad.slice(0, 5));
   const types = new Set(rows.map(r => r.type));
   check('в базах есть все механики: single, multi, number, match, order, text, blanks_select, blanks_input, find, hotspot, case',
     ['single', 'multi', 'number', 'match', 'order', 'text', 'blanks_select', 'blanks_input', 'find', 'hotspot', 'case'].every(t => types.has(t)), [...types]);
@@ -65,6 +87,13 @@ const norm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/
     const r = await call('POST', `/api/admin/reatt/${K(k).id}/preview`, A, {});
     const ids = r.d.groups.flatMap(g => g.q.concat(g.c || []).map(x => x.id));
     check(`пробная выборка «${k}»: ${n} вопросов, без повторов, база не меньше попытки ×3`, r.d.total === n && new Set(ids).size === n && exp[K(k).cfg.base].total >= n * 3, { total: r.d.total, comp: r.d.comp });
+    if (!['cases_int', 'cases'].includes(k)) for (let rep = 0; rep < 5; rep++) {
+      const rr = rep ? await call('POST', `/api/admin/reatt/${K(k).id}/preview`, A, {}) : r;
+      const ids2 = rr.d.groups.flatMap(g => g.q.concat(g.c || []).map(x => x.id));
+      const ty = await sql(`SELECT type FROM questions WHERE id IN (${ids2.join(',')})`);
+      const ns = ty.filter(x => x.type === 'single').length, nm = ty.filter(x => x.type === 'multi').length;
+      if (rep === 0 || Math.abs(ns - nm) > 1) check(`«${k}»: вопросов с одним и с несколькими ответами поровну (${ns}/${nm})`, nm > 0 && Math.abs(ns - nm) <= 1, { ns, nm });
+    }
   }
   const fail = results.filter(x => !x.ok).length;
   console.log(`\nИТОГО: ${results.length - fail}/${results.length} PASS`);

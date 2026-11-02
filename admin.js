@@ -495,9 +495,9 @@ route('/admin/reatt/:id', async (id) => {
   const isNew = id === 'new';
   const [list, one] = await Promise.all([api('GET', '/api/admin/reatt'), isNew ? null : api('GET', '/api/admin/reatt/' + id)]);
   const v = isNew ? { title: '', description: '', enabled: true, visible: true, time_limit_min: 60, pass_pct: 70, cooldown_min: 0, max_attempts: 0, q_points: null, c_points: null, position: 0,
-    mode: 'groups', level: 0, track: '', cfg: { base: 'simple', count: 12, mix: [50, 50, 0], pts: [1, 2, 3], topics: {}, types: [], max_topic_pct: 40, max_type_pct: 50, partial: 'question', pass_points: null, unique_ref: true, avoid_repeat: true },
+    mode: 'groups', level: 0, track: '', cfg: { base: 'simple', count: 12, mix: [50, 50, 0], pts: [1, 2, 3], topics: {}, types: [], max_topic_pct: 40, max_type_pct: 50, partial: 'question', pass_points: null, unique_ref: true, avoid_repeat: true, choice_balance: true },
     groups: [{ label: 'Блок 1', categories: [], questions: 5, cases: 0 }] } : one.item;
-  const cfg = v.cfg || { base: 'simple', count: 12, mix: [50, 50, 0], pts: [1, 2, 3], topics: {}, types: [], max_topic_pct: 40, max_type_pct: 50, partial: 'question', pass_points: null, unique_ref: true, avoid_repeat: true };
+  const cfg = v.cfg || { base: 'simple', count: 12, mix: [50, 50, 0], pts: [1, 2, 3], topics: {}, types: [], max_topic_pct: 40, max_type_pct: 50, partial: 'question', pass_points: null, unique_ref: true, avoid_repeat: true, choice_balance: true };
   const B = list.bases, BN = list.base_names, TOP = list.topics;
   if (!v.groups.length) v.groups = [{ label: 'Блок 1', categories: [], questions: 5, cases: 0 }];
   const R6_TYPES = ['single', 'multi', 'number', 'text', 'order', 'match', 'blanks_input', 'blanks_select', 'find', 'hotspot', 'case', 'long'];
@@ -545,7 +545,7 @@ route('/admin/reatt/:id', async (id) => {
           <label class="f"><span>Частичные баллы</span><select class="c-partial"><option value="question" ${cfg.partial === 'question' ? 'selected' : ''}>как настроено в вопросе</option><option value="on" ${cfg.partial === 'on' ? 'selected' : ''}>всегда (где возможно)</option><option value="off" ${cfg.partial === 'off' ? 'selected' : ''}>никогда (всё или ничего)</option></select></label>
           <label class="f"><span>Проходной балл в баллах (необязательно, дополнительно к %)</span><input class="c-pp" inputmode="decimal" value="${cfg.pass_points ?? ''}"></label>
         </div>
-        <div class="row"><label class="chk"><input type="checkbox" class="c-uref" ${cfg.unique_ref ? 'checked' : ''}> Не больше одного вопроса на один пункт документа</label><label class="chk"><input type="checkbox" class="c-arep" ${cfg.avoid_repeat ? 'checked' : ''}> Вопросы прошлых попыток кандидата — в последнюю очередь</label></div>
+        <div class="row"><label class="chk"><input type="checkbox" class="c-uref" ${cfg.unique_ref ? 'checked' : ''}> Не больше одного вопроса на один пункт документа</label><label class="chk"><input type="checkbox" class="c-arep" ${cfg.avoid_repeat ? 'checked' : ''}> Вопросы прошлых попыток кандидата — в последнюю очередь</label><label class="chk"><input type="checkbox" class="c-cbal" ${cfg.choice_balance !== false ? 'checked' : ''}> Вопросы с одним и с несколькими ответами — поровну</label></div>
         <div class="small c-info"></div>
         <details class="c-topics-w"><summary>Веса тем (пусто во всех — равномерно по темам базы; 0 — тема исключена)</summary><div class="c-topics"></div></details>
         <details><summary>Типы вопросов (ничего не отмечено — все типы)</summary>${R6_TYPES.map(t => `<label class="chk small"><input type="checkbox" class="c-type" value="${t}" ${(cfg.types || []).includes(t) ? 'checked' : ''}> ${esc(QTYPE_RU[t] || t)}</label>`).join('')}</details>
@@ -583,7 +583,7 @@ route('/admin/reatt/:id', async (id) => {
     const topics = {}; $$('.c-tw', form).forEach(x => { if (x.value !== '') topics[x.dataset.k] = Number(x.value); });
     return { base: form.querySelector('.c-base').value, count: Number(form.querySelector('.c-count').value) || 0, mix: $$('.c-mix', form).map(x => Number(x.value) || 0), pts: $$('.c-pts', form).map(x => numOrNull(x.value) ?? 0),
       topics, types: $$('.c-type:checked', form).map(x => x.value), max_topic_pct: Number(form.querySelector('.c-mtp').value) || 0, max_type_pct: Number(form.querySelector('.c-myp').value) || 0,
-      partial: form.querySelector('.c-partial').value, pass_points: numOrNull(form.querySelector('.c-pp').value), unique_ref: form.querySelector('.c-uref').checked, avoid_repeat: form.querySelector('.c-arep').checked };
+      partial: form.querySelector('.c-partial').value, pass_points: numOrNull(form.querySelector('.c-pp').value), unique_ref: form.querySelector('.c-uref').checked, avoid_repeat: form.querySelector('.c-arep').checked, choice_balance: form.querySelector('.c-cbal').checked };
   };
   const collect = () => { const o = formObj(form); delete o['']; for (const k of Object.keys(o)) if (k.startsWith('rmode_')) delete o[k]; o.q_points = String(o.q_points).trim() === '' ? null : Number(String(o.q_points).replace(',', '.')); o.c_points = String(o.c_points).trim() === '' ? null : Number(String(o.c_points).replace(',', '.'));
     o.mode = mode(); if (o.mode === 'bank') { o.cfg = collectCfg(); return o; }

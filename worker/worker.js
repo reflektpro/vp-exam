@@ -720,9 +720,10 @@ const SOURCE_DOCS = [
   { id: 'fz_gossluzhba', short: 'ФЗ о госслужбе', topic: 'fz', title: 'Федеральный закон о государственной службе', group: 'law' },
   { id: 'fz_vozduh', short: 'ФЗ о воздушном пространстве', topic: 'fz', title: 'Федеральный закон об использовании воздушного пространства', group: 'law' },
   { id: 'fkz_rezhimy', short: 'ФКЗ об особых правовых режимах', topic: 'fkz', title: 'Федеральный конституционный закон об особых правовых режимах', group: 'law' },
+  { id: 'upk', short: 'УПК', topic: 'upk', title: 'Уголовно-процессуальный кодекс', group: 'law' },
 ];
 const SOURCE_DOC_MAP = new Map(SOURCE_DOCS.map(d => [d.id, d]));
-const R6_TOPICS = { vu: 'ВУ', du: 'ДУ', kps: 'КПС', su: 'СУ', pk: 'ПК', uk: 'УК', koap: 'КоАП', tk: 'ТК', fz: 'ФЗ', fkz: 'ФКЗ' };
+const R6_TOPICS = { vu: 'ВУ', du: 'ДУ', kps: 'КПС', su: 'СУ', pk: 'ПК', uk: 'УК', koap: 'КоАП', tk: 'ТК', fz: 'ФЗ', fkz: 'ФКЗ', upk: 'УПК' };
 function docTopic(id) { const d = SOURCE_DOC_MAP.get(id); return d ? d.topic : (id || '—'); }
 function diffInput(v, strict) {
   if (v === undefined || v === null || v === '') return null;
@@ -1042,6 +1043,14 @@ function orderBy(list, order) {
   for (const x of m.values()) out.push(x);
   return out;
 }
+// Источник вопроса для кандидата: название документа; withRef — ещё пункт/статья (только в разборе после отправки).
+function sourceInfo(q, withRef) {
+  if (!q.source_doc) return null;
+  const d = SOURCE_DOC_MAP.get(q.source_doc);
+  const o = { doc: q.source_doc, title: d ? d.title : q.source_doc, short: d ? d.short : q.source_doc };
+  if (withRef && q.source_ref) o.ref = q.source_ref;
+  return o;
+}
 // Что видит кандидат. Никаких правильных ответов.
 function publicQuestion(q, st) {
   const d = parseJ(q.data, {});
@@ -1049,6 +1058,7 @@ function publicQuestion(q, st) {
   if (d.material) o.material = d.material;
   if (d.media && d.media.length) o.media = d.media;
   if (q.difficulty) o.difficulty = q.difficulty;
+  const src = sourceInfo(q, false); if (src) o.source = src;   // документ-источник (без номера пункта — он показывается в разборе)
   switch (q.type) {
     case 'single': case 'multi': case 'eliminate': o.options = orderBy(parseJ(q.options, []), Array.isArray(st) ? st : []).map(x => (x.media ? { id: x.id, text: x.text, media: x.media } : { id: x.id, text: x.text })); break;
     case 'number': o.unit = d.unit || ''; break;
@@ -1382,8 +1392,24 @@ async function getAttempt(env, user, id) {
     if (a.status !== 'pending_review') { base.score = Math.round(((a.auto_score || 0) + (a.manual_score || 0)) * 100) / 100; base.max_score = a.max_score; }
     base.reviewer_comment = a.reviewer_comment || null;
     base.reviewed_at = a.reviewed_at;
+    if (a.reatt && a.status !== 'pending_review') base.review = await attemptReview(env, a);
   }
   return json({ attempt: base });
+}
+// Разбор завершённой переаттестации для кандидата: по каждому вопросу — верно / частично / неверно и источник
+// (документ + пункт). Правильные варианты не раскрываются.
+async function attemptReview(env, a) {
+  const order = parseJ(a.q_order, []), states = parseJ(a.opt_order, {});
+  const qs = await loadAttemptQs(env, a, order); const qm = new Map(qs.map(q => [q.id, q]));
+  const { results: ans } = await env.DB.prepare('SELECT question_id, auto_points, manual_points FROM answers WHERE attempt_id = ?1').bind(a.id).all();
+  const am = new Map(ans.map(r => [r.question_id, r]));
+  return order.filter(qid => qm.has(qid) && qm.get(qid).type !== 'info').map((qid, i) => {
+    const q = qm.get(qid), x = am.get(qid); const max = q.points || 0;
+    const got = x ? (x.manual_points ?? x.auto_points) : 0; const g = got == null ? null : Math.round(got * 100) / 100;
+    const result = g == null ? 'pending' : (max > 0 && g >= max - 1e-9 ? 'correct' : g > 0 ? 'partial' : 'wrong');
+    const text = q.type === 'param' ? renderTemplate(q.text, (stateFor(q, states) || {}).p || {}) : q.text;
+    return { n: i + 1, id: qid, type: q.type, kind: q.kind || 'question', text: String(text || '').slice(0, 600), points: max, got: g, result, source: sourceInfo(q, true) };
+  });
 }
 async function putAnswers(request, env, user, id) {
   await rateLimit(env, 'ans:' + user.id, 60, 60);
@@ -1482,7 +1508,7 @@ function reattCfgNorm(c) {
   return { base, count: Number(c.count) || 10, mix, pts: Array.isArray(c.pts) && c.pts.length === 3 ? c.pts.map(Number) : [1, 2, 3],
     topics: c.topics && typeof c.topics === 'object' ? c.topics : {}, types: Array.isArray(c.types) ? c.types : [],
     max_topic_pct: c.max_topic_pct ?? 40, max_type_pct: c.max_type_pct ?? 50, partial: ['on', 'off'].includes(c.partial) ? c.partial : 'question',
-    pass_points: c.pass_points ?? null, unique_ref: c.unique_ref !== false, avoid_repeat: c.avoid_repeat !== false };
+    pass_points: c.pass_points ?? null, unique_ref: c.unique_ref !== false, avoid_repeat: c.avoid_repeat !== false, choice_balance: c.choice_balance !== false };
 }
 function reattCfgInput(c) {
   if (!c || typeof c !== 'object' || Array.isArray(c)) throw new HttpError(400, 'Настройки выборки: ожидается объект');
@@ -1506,7 +1532,8 @@ function reattCfgInput(c) {
   return { base, count, mix, pts, topics, types,
     max_topic_pct: int(c.max_topic_pct ?? 40, 0, 100, 'макс. доля одной темы, %', 40), max_type_pct: int(c.max_type_pct ?? 50, 0, 100, 'макс. доля одного типа, %', 50),
     partial: ['on', 'off', 'question'].includes(c.partial) ? c.partial : 'question', pass_points,
-    unique_ref: c.unique_ref === undefined ? true : !!bool(c.unique_ref, true), avoid_repeat: c.avoid_repeat === undefined ? true : !!bool(c.avoid_repeat, true) };
+    unique_ref: c.unique_ref === undefined ? true : !!bool(c.unique_ref, true), avoid_repeat: c.avoid_repeat === undefined ? true : !!bool(c.avoid_repeat, true),
+    choice_balance: c.choice_balance === undefined ? true : !!bool(c.choice_balance, true) };
 }
 function largestRemainder(total, pcts) {
   const raw = pcts.map(p => total * p / 100); const fl = raw.map(Math.floor);
@@ -1521,6 +1548,7 @@ function refKey(q) { return q.source_doc && q.source_ref ? q.source_doc + '|' + 
 // Выборка попытки из базы: число вопросов каждой сложности по долям (метод наибольших остатков), темы — по весам,
 // не больше max_topic_pct на тему и max_type_pct на тип, без повторов (id, topic-группы, пункта документа, почти одинакового текста).
 // seen — вопросы прошлых попыток этого кандидата (берутся в последнюю очередь).
+const CHOICE_PAIR = { single: 'multi', multi: 'single' };
 function sampleBank(pool, cfg, seen) {
   seen = seen || new Set();
   const list = pool.filter(q => !cfg.types.length || cfg.types.includes(q.type));
@@ -1548,6 +1576,9 @@ function sampleBank(pool, cfg, seen) {
   const wsOf = (q) => { if (!ws.has(q.id)) ws.set(q.id, wordSet(q.text || '')); return ws.get(q.id); };
   for (const d of slots) {
     let pick = null;
+    // choice_balance: вопросы с одним и с несколькими ответами — поровну (разница не больше 1), пока в базе есть вопросы второго типа этой сложности
+    const otherLeft = {};
+    if (cfg.choice_balance !== false) for (const t of ['single', 'multi']) otherLeft[t] = list.some(x => D(x) === d && x.type === CHOICE_PAIR[t] && !ids.has(x.id));
     for (let relax = 0; relax < 3 && !pick; relax++) {
       const cand = [];
       for (const q of list) {
@@ -1556,6 +1587,7 @@ function sampleBank(pool, cfg, seen) {
         const T = docTopic(q.source_doc); if (!wts[T]) continue;
         const rk = cfg.unique_ref ? refKey(q) : null; if (relax < 1 && rk && usedRef.has(rk)) continue;
         if (relax < 2 && (cntY[q.type] || 0) >= maxType) continue;
+        if (relax < 2 && CHOICE_PAIR[q.type] && otherLeft[q.type] && (cntY[q.type] || 0) > (cntY[CHOICE_PAIR[q.type]] || 0)) continue;
         if (relax < 2 && (cntT[T] || 0) >= maxTopic) continue;
         cand.push({ q, sc: (target[T] - (cntT[T] || 0)) + Math.random() * 0.9 - (cfg.avoid_repeat && seen.has(q.id) ? 3 : 0) });
       }
