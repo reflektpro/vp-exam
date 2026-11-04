@@ -211,7 +211,9 @@ function synth(base, n, tag) {
   const rows2 = await sql(`SELECT id, correct FROM questions WHERE id IN (${at.questions.map(q => q.id).join(',')})`);
   const ans2 = {}; rows2.forEach((q, i) => { const c = JSON.parse(q.correct); ans2[q.id] = i === 0 ? [c[0]] : c; });
   await call('POST', `/api/attempts/${AT2}/submit`, C1, { answers: ans2 }); at = (await call('GET', '/api/attempts/' + AT2, C1)).d.attempt;
-  check('частичные «всегда»: 9,5 из 10, 95%, проходной 9 б. → СДАН', at.status === 'passed' && at.score === 9.5 && at.score_pct === 95, at);
+  // в выборку могут попасть и вопросы базы (не только синтетические с двумя верными) — доля частичного балла = 1 / число верных вариантов первого вопроса
+  const part = Math.round((9 + 1 / JSON.parse(rows2[0].correct).length) * 100) / 100;
+  check(`частичные «всегда»: ${part} из 10, проходной 9 б. → СДАН`, at.status === 'passed' && Math.abs(at.score - part) < 0.011 && Math.abs(at.score_pct - part * 10) < 0.11, at);
   const ov = at.id && (await sql(`SELECT q_order FROM attempts WHERE id IN (${AT1}, ${AT2})`)).map(x => JSON.parse(x.q_order));
   const inter = ov[0].filter(x => ov[1].includes(x)).length;
   check('разнообразие: во второй попытке вопросы первой — в последнюю очередь (пересечение ≤ 2 из 10)', inter <= 2, inter);
