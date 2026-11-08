@@ -228,26 +228,45 @@ function renderRail() {
   if (index < 0) index = 0;
   rail.innerHTML = items.map(tileHtml).join('');
   rail.querySelectorAll('.rail-item').forEach(el => {
-    el.addEventListener('click', () => select(Number(el.dataset.i), { focus: false }));
+    el.addEventListener('click', () => select(Number(el.dataset.i), { focus: false, dir: 0 }));
   });
   renderStage();
 }
 
-function reveal(node) {
+function tileBox(node) {
+  const railBox = rail.getBoundingClientRect();
+  const box = node.getBoundingClientRect();
+  const left = box.left - railBox.left + rail.scrollLeft;
+  return { left, right: left + box.width, width: box.width };
+}
+
+function reveal(node, dir) {
   if (!node) return;
-  const left = node.offsetLeft;
-  const right = left + node.offsetWidth;
-  const viewL = rail.scrollLeft;
-  const viewR = viewL + rail.clientWidth;
-  let next = null;
-  if (left < viewL + 4) next = Math.max(0, left - 8);
-  else if (right > viewR - 4) next = right - rail.clientWidth + 8;
-  if (next === null) return;
-  rail.scrollTo({ left: next, behavior: REDUCE.matches ? 'auto' : 'smooth' });
+  const pad = 8;
+  const gap = 10;
+  const tile = tileBox(node);
+  const view = rail.clientWidth;
+  const max = Math.max(0, rail.scrollWidth - view);
+  let next = rail.scrollLeft;
+  if (dir < 0) {
+    next = Math.max(0, next - (tile.width + gap));
+    if (tile.left < next) next = Math.max(0, tile.left - pad);
+    else if (tile.left >= next + view) next = Math.min(max, Math.max(0, tile.left - pad));
+  } else if (tile.left < next + pad) {
+    next = Math.max(0, tile.left - pad);
+  } else if (tile.right > next + view - pad) {
+    next = Math.min(max, tile.right - view + pad);
+  } else {
+    return;
+  }
+  next = Math.max(0, Math.min(max, next));
+  if (Math.abs(next - rail.scrollLeft) < 1) return;
+  rail.scrollLeft = next;
 }
 
 function select(i, opts = {}) {
   const n = visible().length;
+  const prev = index;
   index = ((i % n) + n) % n;
   rail.querySelectorAll('.rail-item').forEach(el => {
     const on = Number(el.dataset.i) === index;
@@ -257,7 +276,13 @@ function select(i, opts = {}) {
   renderStage();
   const node = rail.querySelector('[aria-selected="true"]');
   if (opts.focus && node) node.focus({ preventScroll: true });
-  if (opts.reveal !== false) reveal(node);
+  if (opts.reveal === false) return;
+  let dir = opts.dir;
+  if (dir === undefined) {
+    if (index === prev) dir = 0;
+    else dir = ((index - prev + n) % n) <= ((prev - index + n) % n) ? 1 : -1;
+  }
+  reveal(node, dir);
 }
 
 function setMode(next) {
@@ -297,8 +322,8 @@ document.getElementById('homeMark').addEventListener('click', () => {
   rail.scrollTo({ left: 0, behavior: 'auto' });
   window.scrollTo(0, 0);
 });
-document.getElementById('chevL').addEventListener('click', () => select(index - 1, { focus: true }));
-document.getElementById('chevR').addEventListener('click', () => select(index + 1, { focus: true }));
+document.getElementById('chevL').addEventListener('click', () => select(index - 1, { focus: true, dir: -1 }));
+document.getElementById('chevR').addEventListener('click', () => select(index + 1, { focus: true, dir: 1 }));
 
 document.addEventListener('keydown', (e) => {
   const t = e.target;
@@ -309,7 +334,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
     if (!(onRail || onPage)) return;
     e.preventDefault();
-    select(fromIndex(t) + (e.key === 'ArrowRight' ? 1 : -1), { focus: true });
+    const step = e.key === 'ArrowRight' ? 1 : -1;
+    select(fromIndex(t) + step, { focus: true, dir: step });
   } else if (e.key === 'ArrowDown' && t && t.closest && t.closest('.rail')) {
     const act = stage.querySelector('.act');
     if (act && t.id === 'sec-' + current().id) {
@@ -323,24 +349,74 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-function endPointer(e) {
-  if (!pointer || e.pointerId !== pointer.id) return;
-  const dx = e.clientX - pointer.x;
-  const dy = e.clientY - pointer.y;
-  pointer = null;
-  if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.25) {
+let drag = null;
+
+function clearDrag() {
+  drag = null;
+  rail.classList.remove('is-grabbing');
+}
+
+rail.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (!(e.target && e.target.closest && e.target.closest('#rail'))) return;
+  drag = {
+    id: e.pointerId,
+    originX: e.clientX,
+    originY: e.clientY,
+    originScroll: rail.scrollLeft,
+    moved: false,
+    captured: false
+  };
+});
+
+function moveDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const dx = e.clientX - drag.originX;
+  const dy = e.clientY - drag.originY;
+  if (!drag.moved) {
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+    if (Math.abs(dy) > Math.abs(dx)) {
+      clearDrag();
+      return;
+    }
+    drag.moved = true;
+    rail.classList.add('is-grabbing');
+    try {
+      rail.setPointerCapture(e.pointerId);
+      drag.captured = true;
+    } catch (err) { /* указатель уже ушёл */ }
+  }
+  rail.scrollLeft = drag.originScroll - dx;
+  if (e.cancelable) e.preventDefault();
+}
+
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const dx = e.clientX - drag.originX;
+  const dy = e.clientY - drag.originY;
+  const horizontal = drag.moved || (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.25);
+  if (horizontal) {
+    rail.scrollLeft = drag.originScroll - dx;
     swallowNextClick();
-    select(index + (dx < 0 ? 1 : -1), { focus: false });
+  }
+  const id = drag.id;
+  const captured = drag.captured;
+  clearDrag();
+  if (captured) {
+    try { rail.releasePointerCapture(id); } catch (err) { /* захват уже снят */ }
   }
 }
-document.addEventListener('pointerdown', (e) => {
-  if (e.pointerType === 'mouse' && e.button !== 0) return;
-  const area = rail.getBoundingClientRect();
-  if (e.clientX < area.left || e.clientX > area.right || e.clientY < area.top || e.clientY > area.bottom) return;
-  pointer = { x: e.clientX, y: e.clientY, id: e.pointerId };
+
+window.addEventListener('pointermove', moveDrag);
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', (e) => {
+  if (!drag || e.pointerId !== drag.id) return;
+  clearDrag();
 });
-window.addEventListener('pointerup', endPointer);
-window.addEventListener('pointercancel', (e) => { if (pointer && e.pointerId === pointer.id) pointer = null; });
+rail.addEventListener('lostpointercapture', (e) => {
+  if (!drag || e.pointerId !== drag.id) return;
+  clearDrag();
+});
 
 const BACKGROUNDS = [
   { id: 'kremlin' },
