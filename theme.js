@@ -8,28 +8,16 @@ function currentBg() {
   try { const id = localStorage.getItem('vp_bg') || document.documentElement.dataset.bg || BG_FALLBACK; return bgIdOk(id) ? id : BG_FALLBACK; }
   catch (_) { return BG_FALLBACK; }
 }
-function bgUrl(item, kind) {
-  const rel = kind === 'thumb' ? item.thumb : kind === 'avif' ? item.avif : item.webp;
-  return rel;
-}
-function paintBg(id, animate) {
-  const item = (BgCatalog && BgCatalog.items || []).find(x => x.id === id) || null;
+function paintBg(id) {
+  if (!bgIdOk(id)) return;
   const photo = document.getElementById('scenePhoto');
-  if (!photo) return;
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const apply = () => {
-    document.documentElement.dataset.bg = id;
-    if (item) photo.style.backgroundImage = `image-set(url("${bgUrl(item, 'avif')}") type("image/avif"), url("${bgUrl(item, 'webp')}") type("image/webp"))`;
-    else photo.style.backgroundImage = '';
-  };
-  if (!animate || reduce) { apply(); return; }
-  photo.style.opacity = '0';
-  window.setTimeout(() => { apply(); photo.style.opacity = ''; }, 220);
+  if (photo) photo.style.backgroundImage = '';
+  document.documentElement.dataset.bg = id;
 }
 function rememberBg(id) {
   if (!bgIdOk(id)) return;
   try { localStorage.setItem('vp_bg', id); } catch (_) {}
-  paintBg(id, true);
+  paintBg(id);
 }
 
 async function loadCatalog() {
@@ -95,7 +83,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const id = currentBg();
   document.documentElement.dataset.bg = id;
   loadCatalog().then(data => {
-    if (!data.items.some(x => x.id === currentBg())) { rememberBg(data.default || BG_FALLBACK); return; }
-    paintBg(currentBg(), false);
+    if (!data.items.some(x => x.id === currentBg())) rememberBg(data.default || BG_FALLBACK);
   }).catch(() => {});
 });

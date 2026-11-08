@@ -68,14 +68,17 @@ route('/admin/laws', async () => {
       <span class="small mut">Ждут решения: ${d.pending_count}. Открытых цитат: ${d.open_flags}. Проверок в базе: ${d.checks_total}.</span>
     </div>
     <div id="lawErr"></div>
-    <div class="law-grid">${d.documents.map(doc => `<a class="law-card" href="#/admin/laws/doc/${esc(doc.id)}">
-      <div class="row between"><b>${esc(doc.short)}</b>${lawBadge(LAW_ST, doc.monitor_status)}</div>
-      <span>${esc(doc.title)}</span>
-      <small>${doc.mode === 'manual' ? 'Автопроверка недоступна' : 'Успешное чтение: ' + lawWhen(doc.last_ok_at)}</small>
-      ${doc.last_error ? `<small class="err-t">${esc(doc.last_error)}</small>` : ''}
-      ${doc.pending_proposal_id ? '<small>Есть карточка на решение</small>' : ''}
-      ${doc.open_flags ? `<small>Открытых цитат: ${doc.open_flags}</small>` : ''}
-    </a>`).join('')}</div>`);
+    ${(() => {
+      const hot = d.documents.filter(doc => doc.pending_proposal_id || doc.open_flags || ['changed', 'error', 'unavailable', 'manual'].includes(doc.monitor_status));
+      const rest = d.documents.filter(doc => !hot.includes(doc));
+      const card = doc => `<a class="law-card" href="#/admin/laws/doc/${esc(doc.id)}">
+        <div class="row between"><b>${esc(doc.short)}</b>${lawBadge(LAW_ST, doc.monitor_status)}</div>
+        <span>${esc(doc.title)}</span>
+        <small>${doc.mode === 'manual' ? 'Сверять вручную' : doc.last_error ? esc(doc.last_error) : 'Ждёт решения'}</small>
+      </a>`;
+      return `${hot.length ? `<div class="law-grid">${hot.map(card).join('')}</div>` : '<div class="alert ok">Нет документов, которые ждут решения.</div>'}
+        ${rest.length ? `<p class="law-rest"><span class="mut">Без расхождений: </span>${rest.map(doc => `<a href="#/admin/laws/doc/${esc(doc.id)}">${esc(doc.short)}</a>`).join('')}</p>` : ''}`;
+    })()}`);
   $('#lawFile').onchange = async (ev) => {
     const file = ev.target.files && ev.target.files[0];
     const box = $('#lawErr');

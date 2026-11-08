@@ -12,7 +12,13 @@ function fmtTime(sec) { sec = Math.max(0, Math.floor(sec || 0)); const h = Math.
 function fmtDate(ms) { if (!ms) return '—'; return new Date(ms).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
 function toast(msg, isErr) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (isErr ? ' err' : ''); t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, isErr ? 9000 : 4000); }
 function token() { return localStorage.getItem(TOKEN_KEY); }
-function setView(html) { const el = $('#app'); el.innerHTML = html; el.classList.remove('view-in'); void el.offsetWidth; el.classList.add('view-in'); window.scrollTo(0, 0); }
+let navEpoch = 0;
+function setView(html) {
+  const el = $('#app');
+  el.innerHTML = html;
+  App.painted = navEpoch;
+  window.scrollTo(0, 0);
+}
 function onCleanup(fn) { App.cleanup.push(fn); }
 function userName(u) { return u ? (u.ic_name || u.global_name || u.username || u.id) : '—'; }
 const STATUS_RU = {
@@ -31,8 +37,12 @@ async function api(method, path, body) {
   const t = token(); if (t) h.Authorization = 'Bearer ' + t;
   if (body !== undefined) h['Content-Type'] = 'application/json';
   let res;
-  try { res = await fetch(CFG.API_BASE + path, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined }); }
-  catch (e) { throw new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.'); }
+  const signal = App.navSignal || undefined;
+  try { res = await fetch(CFG.API_BASE + path, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined, signal }); }
+  catch (e) {
+    if (e && e.name === 'AbortError') { const err = new Error('Навигация прервана'); err.abort = true; throw err; }
+    throw new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.');
+  }
   let data = null; try { data = await res.json(); } catch (_) {}
   if (res.status === 401 && path.startsWith('/api/')) { localStorage.removeItem(TOKEN_KEY); App.me = null; renderHeader(); if (location.hash !== '#/') location.hash = '#/'; }
   if (!res.ok) { const e = new Error((data && data.error) || ('Ошибка ' + res.status)); e.status = res.status; e.data = data; throw e; }
@@ -42,25 +52,35 @@ async function api(method, path, body) {
 // ---------- роутер ----------
 function route(pattern, fn, opts = {}) { App.routes.push({ p: pattern, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '([^/]+)') + '$'), fn, opts }); }
 async function render() {
+  if (App.navAbort) App.navAbort.abort();
+  const ac = new AbortController();
+  App.navAbort = ac;
+  App.navSignal = ac.signal;
+  const my = ++navEpoch;
+  App.painted = 0;
+  if (App.slow) clearTimeout(App.slow);
+  const slow = setTimeout(() => { if (my === navEpoch && App.painted !== my) setView('<p class="loading">Открываю…</p>'); }, 140);
+  App.slow = slow;
   App.cleanup.forEach(f => { try { f(); } catch (_) {} }); App.cleanup = [];
   const path = (location.hash || '#/').slice(1) || '/';
   document.body.classList.toggle('calm', /^\/(attempt|exam|lecture)(\/|$)/.test(path.split('?')[0]));
   renderHeader();
-  if (!App.me && path.split('?')[0] !== '/' && path.split('?')[0] !== '/theme') { location.hash = '#/'; return; }
+  if (!App.me && path.split('?')[0] !== '/' && path.split('?')[0] !== '/theme') { location.hash = '#/'; clearTimeout(slow); if (App.navAbort === ac) App.navSignal = null; return; }
   for (const r of App.routes) {
     const m = r.re.exec(path.split("?")[0]);
     if (!m) continue;
-    if (r.opts.role && !hasRole(r.opts.role)) { setView('<div class="alert err">Недостаточно прав для этого раздела.</div>'); return; }
-    if (r.opts.cap && !can(r.opts.cap)) { setView(noAccess(r.opts.cap)); return; }
+    if (r.opts.role && !hasRole(r.opts.role)) { setView('<div class="alert err">Недостаточно прав для этого раздела.</div>'); clearTimeout(slow); if (App.navAbort === ac) App.navSignal = null; return; }
+    if (r.opts.cap && !can(r.opts.cap)) { setView(noAccess(r.opts.cap)); clearTimeout(slow); if (App.navAbort === ac) App.navSignal = null; return; }
     const mine = ++App.seq;
     try { await r.fn(...m.slice(1).map(decodeURIComponent)); }
-    catch (e) { if (mine === App.seq) setView(`<div class="alert err">${esc(e.message)}</div><a class="btn" href="#/">На главную</a>`); }
-    // Устаревшая отрисовка (пользователь уже перешёл на другую страницу) могла затереть новую — перерисовать актуальную.
-    if (mine !== App.seq && App.doneSeq > mine) { render(); return; }
-    App.doneSeq = Math.max(App.doneSeq, mine);
+    catch (e) { if (e && e.abort) break; if (mine === App.seq && my === navEpoch) setView(`<div class="alert err">${esc(e.message)}</div><a class="btn" href="#/">На главную</a>`); }
+    clearTimeout(slow);
+    if (App.navAbort === ac) App.navSignal = null;
     return;
   }
-  setView('<div class="alert warn">Страница не найдена.</div><a class="btn" href="#/">На главную</a>');
+  clearTimeout(slow);
+  if (App.navAbort === ac) App.navSignal = null;
+  if (my === navEpoch) setView('<div class="alert warn">Страница не найдена.</div><a class="btn" href="#/">На главную</a>');
 }
 function hasRole(role) { const l = { candidate: 0, examiner: 1, admin: 2 }; return App.me && (l[App.me.role] || 0) >= l[role]; }
 function noAccess(c) { return `<div class="card noacc"><h2>Раздел недоступен</h2><p>Этот раздел открывается с ролью ${CAP_RU[c] || ''}. Роли назначает администратор — обратитесь к руководству ГУ ВП.</p>
@@ -102,9 +122,16 @@ function renderHeader() {
   const cur = MENU.find(m => m[0] === act);
   $('#secTitle').textContent = cur && cur[0] !== '/' ? cur[1] : 'Главное управление Военной полиции';
   const u = App.me;
+  const groupOf = { '/study': 'Учёба', '/reatt': 'Учёба', '/reports': 'Служба', '/premiums': 'Служба', '/promo': 'Служба', '/docs': 'Справочник', '/people': 'Управление', '/lead': 'Управление', '/admin': 'Управление' };
+  let navHtml = '', prevGroup = '';
+  for (const m of items) {
+    const g = groupOf[m[0]] || '';
+    if (g && g !== prevGroup) { navHtml += `<div class="nav-label">${g}</div>`; prevGroup = g; }
+    navHtml += `<a href="#${m[0]}" class="${m[0] === act ? 'on' : ''}"><span>${esc(m[1])}</span></a>`;
+  }
   drawer.innerHTML = `<div class="drawer-head"><img src="assets/emblem.png" alt=""><div><b>ГУ ВП</b><div class="small mut">${esc(userName(u))}${u.rank ? ' · ' + esc(u.rank) : ''}</div></div>
       <button type="button" class="drawer-x" id="drawerX" aria-label="Закрыть меню">✕</button></div>
-    <nav class="drawer-nav">${items.map(m => `<a href="#${m[0]}" class="${m[0] === act ? 'on' : ''}"><i>${m[2]}</i><span>${esc(m[1])}${m[4] ? `<small>${esc(m[4])}</small>` : ''}</span></a>`).join('')}</nav>
+    <nav class="drawer-nav">${navHtml}</nav>
     <div class="drawer-foot"><a href="#/theme">Фон</a>${can('vp') ? `<a href="${esc(CFG.REPORTS_URL.replace(/otchet\.html$/, ''))}" target="_blank" rel="noopener">Сайт бланков ↗</a>` : ''}
       <div class="small mut">${rolesText(u)}</div></div>`;
   burger.hidden = false;
@@ -122,6 +149,14 @@ function rolesText(u) {
   return r.length ? 'Роли: ' + r.join(', ') : 'Ролей пока нет';
 }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) { openDrawer(false); $('#burger').focus(); } });
+document.addEventListener('pointerdown', (e) => {
+  const el = e.target.closest && e.target.closest('a[href^="#"], button');
+  if (!el) return;
+  document.querySelectorAll('.is-down').forEach(n => n.classList.remove('is-down'));
+  el.classList.add('is-down');
+}, true);
+document.addEventListener('pointerup', () => { document.querySelectorAll('.is-down').forEach(n => n.classList.remove('is-down')); }, true);
+document.addEventListener('pointercancel', () => { document.querySelectorAll('.is-down').forEach(n => n.classList.remove('is-down')); }, true);
 
 // ---------- старт ----------
 async function boot() {

@@ -12,22 +12,35 @@ function profileMissing(u) { return [!u.ic_name && 'Имя Фамилия', !u.r
 // ---------- главная ----------
 async function homePage() {
   const u = App.me, s = App.config ? App.config.settings : {};
-  const tiles = MENU.filter(m => m[0] !== '/' && (!m[3] || can(m[3])));
   const anyRole = can('vp') || can('reatt') || can('examiner') || can('lead');
   const miss = profileMissing(u);
   let rep = null, courses = null;
-  try { [rep, courses] = await Promise.all([can('vp') ? api('GET', '/api/reports/my') : null, can('vp') ? api('GET', '/api/courses') : null]); } catch (_) {}
-  const TILE_TXT = { '/study': courses ? (() => { const c = courses.courses; const done = c.filter(x => x.complete).length; return c.length ? `Курсов: ${c.length}, пройдено: ${done}` : 'Курсы пока не опубликованы'; })() : 'Курсы, лекции и экзамены',
-    '/reports': rep ? (rep.report ? `Отчёт за неделю: ${(REP_ST[rep.report.status] || ['—'])[0].toLowerCase()}` : `Отчёт за неделю не сдан · срок ${fmtDate(rep.deadline)}`) : 'Еженедельный отчёт',
-    '/premiums': 'Премии недели: кто, за что, сколько', '/promo': 'Ступени, баллы и требования', '/docs': 'Документация и инструкции', '/people': 'Досье сотрудников ГУ ВП',
-    '/reatt': 'Тесты по законам и уставам', '/lead': 'Проверка отчётов, фонд, бюджет', '/admin': 'Лекции, экзамены, проверка, пользователи', '/profile': 'Имя, звание, статик, должность' };
-  setView(`<div class="card hero"><div class="row"><div style="flex:1;min-width:240px"><h1>${esc(s.site_title || 'ГУ ВП')}</h1>
-      <div class="mut">Здравствуйте, <b>${esc(userName(u))}</b>${u.rank ? ' · ' + esc(u.rank) : ''}</div>
-      ${s.welcome_text ? `<div class="welcome small mut" style="margin-top:8px">${esc(s.welcome_text)}</div>` : '<div class="welcome" hidden></div>'}</div></div></div>
-    ${!anyRole ? `<div class="alert info"><b>У вас пока нет ролей.</b> Учебный отдел, отчёты и премии открываются с ролью «ВП», переаттестация — с ролью «Переаттестация». Роли назначает администратор — обратитесь к руководству ГУ ВП. Сейчас доступны «База данных» и профиль.</div>` : ''}
-    ${miss.length ? `<div class="alert warn">Заполните профиль: ${miss.join(', ')}. Эти данные подставляются в отчёты и документы. <a href="#/profile">Открыть профиль</a></div>` : ''}
-    ${rep && !rep.report && rep.deadline > rep.now ? `<div class="alert info">Еженедельный отчёт за эту неделю ещё не отправлен. Срок — <b>${fmtDate(rep.deadline)}</b> МСК. <a href="${esc(CFG.REPORTS_URL)}">Заполнить отчёт</a></div>` : ''}
-    <div class="tiles-grid">${tiles.map(m => `<a class="tile-card" href="#${m[0]}"><i>${m[2]}</i><b>${esc(m[1])}</b><span class="small mut">${esc(TILE_TXT[m[0]] || m[4] || '')}</span></a>`).join('')}</div>`);
+  try { [rep, courses] = await Promise.all([can('vp') ? api('GET', '/api/reports/my') : null, can('vp') ? api('GET', '/api/courses') : null]); } catch (e) { if (e && e.abort) throw e; }
+  const list = courses && courses.courses || [];
+  const next = list.find(c => !c.complete);
+  let primary;
+  if (can('vp') && next) primary = { href: '#/course/' + next.id, kicker: 'Дальше', title: next.title, text: `Тема ${next.topics_done + 1} из ${next.topics_total || next.topics.length || 1}. Откройте курс и продолжите.` };
+  else if (can('vp')) primary = { href: '#/study', kicker: 'Учёба', title: 'Учебный отдел', text: 'Курсы, затем экзамен.' };
+  else if (can('reatt')) primary = { href: '#/reatt', kicker: 'Сейчас', title: 'Переаттестация', text: 'Только тесты, к которым вам открыли доступ.' };
+  else if (can('examiner')) primary = { href: '#/admin/attempts', kicker: 'Сейчас', title: 'Проверка работ', text: 'Ответы, которые ждут вашего решения.' };
+  else primary = { href: '#/docs', kicker: 'Справочник', title: 'База данных', text: 'Инструкции и документы.' };
+  const blocks = [];
+  const learn = [];
+  if (can('vp') && primary.href !== '#/study') learn.push(['#/study', 'Все курсы']);
+  if (can('reatt') && primary.href !== '#/reatt') learn.push(['#/reatt', 'Переаттестация']);
+  if (learn.length) blocks.push(['Учёба', learn]);
+  const manage = [];
+  if (can('admin') || (can('examiner') && primary.href !== '#/admin/attempts')) manage.push(['#/admin', can('admin') ? 'Админка' : 'Проверка и люди']);
+  if (can('lead')) manage.push(['#/lead', 'Руководство']);
+  if (can('ss') && !can('admin') && !can('lead')) manage.push(['#/people', 'Личные дела']);
+  if (manage.length) blocks.push(['Управление', manage]);
+  setView(`<p class="hub-hello">Здравствуйте, <b>${esc(userName(u))}</b>${u.rank ? ' · ' + esc(u.rank) : ''}</p>
+    <a class="hub-main" href="${primary.href}"><span class="kicker">${esc(primary.kicker)}</span><h1>${esc(primary.title)}</h1><p>${esc(primary.text)}</p></a>
+    ${!anyRole ? `<div class="alert info"><b>У вас пока нет ролей.</b> Учебный отдел открывается с ролью «ВП», переаттестация — с ролью «Переаттестация». Сейчас доступна база данных.</div>` : ''}
+    ${miss.length ? `<div class="alert warn">Заполните профиль: ${miss.join(', ')}. <a href="#/profile">Открыть профиль</a></div>` : ''}
+    ${rep && !rep.report && rep.deadline > rep.now ? `<div class="alert info">Отчёт за неделю не отправлен. Срок — <b>${fmtDate(rep.deadline)}</b> МСК. <a href="${esc(CFG.REPORTS_URL)}">Заполнить</a></div>` : ''}
+    ${blocks.map(([title, links]) => `<section class="hub-block"><h2>${title}</h2><div class="hub-links">${links.map(([href, name]) => `<a href="${href}">${esc(name)}</a>`).join('')}</div></section>`).join('')}
+    ${s && s.welcome_text ? `<div class="welcome" hidden></div>` : ''}`);
 }
 
 // ---------- учебный отдел: курсы ----------
@@ -48,8 +61,7 @@ async function studyPage() {
     const pct = c.topics_total ? Math.round(c.topics_done / c.topics_total * 100) : 0;
     return `<a class="course-card ${c.complete ? 'done' : ''}" href="#/course/${c.id}">
       <div class="row between"><h2>${esc(c.title)}</h2>${c.complete ? '<span class="badge ok">✔ пройден</span>' : ''}</div>
-      ${c.description ? `<p class="small mut cdesc">${esc(c.description.slice(0, 220))}</p>` : ''}
-      <div class="tchips">${c.topics.map(t => `<span class="tchip ${t.done ? 'done' : ''} ${t.status === 'placeholder' ? 'ph' : ''}" title="${esc(t.title)}">${t.done ? '✔ ' : ''}${esc(t.title)}</span>`).join('')}</div>
+      ${c.description ? `<p class="small mut cdesc">${esc(c.description.slice(0, 160))}</p>` : ''}
       <div class="small">Тем: <b>${c.topics_total}</b> · пройдено <b>${c.topics_done}</b> · экзаменов: <b>${c.exams.length}</b></div>
       <div class="bar"><i style="width:${pct}%"></i></div><div class="row between small" style="margin-top:8px"><span class="mut">${pct}%</span>${exState(c.exams)}</div></a>`;
   };
@@ -61,9 +73,9 @@ async function studyPage() {
   };
   const list = withT.filter(c => (c.track || 'rank') === track);
   const tinfo = TRACKS.find(t => t[0] === track) || TRACKS[0];
-  setView(`<h1>Учебный отдел</h1>
+  setView(`<p class="crumb"><a href="#/">Главная</a><span>Учёба</span></p><h1>Учебный отдел</h1>
     <div class="tracktabs" role="tablist">${TRACKS.map(t => `<a role="tab" aria-selected="${t[0] === track}" class="${t[0] === track ? 'on' : ''}" href="#/study?track=${t[0]}">${t[1]}</a>`).join('')}</div>
-    <p class="mut small">${esc(tinfo[2])} Курс состоит из тем: выберите тему — в ней короткие лекции по порядку${track === 'rank' ? ', после них открываются полная выгрузка материалов и видео' : ''}; экзамен открывается, когда пройдены лекции его тем.</p>
+    <p class="mut">${esc(tinfo[2])}</p>
     ${list.length ? `<div class="course-grid">${list.map(card).join('')}</div>` : '<div class="alert info">Курсы этой системы пока не опубликованы.</div>'}
     ${track === 'rank' && legacy.length ? `<h2 style="margin-top:22px">Другие курсы</h2><div class="course-grid">${legacy.map(oldCard).join('')}</div>` : ''}`);
 }
