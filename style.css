@@ -464,3 +464,93 @@ body.drawer-open .drawer-nav a:nth-child(2){animation-delay:.03s}body.drawer-ope
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
 }
+
+/* ---------- консольный слой: тёмный кадр, холодный синий, крупные карточки ---------- */
+:root{
+  --bg:#07090e;--panel:rgba(14,18,26,.9);--panel2:#141a24;--line:rgba(158,186,220,.2);
+  --gold:#3d8bfd;--gold2:#d5e6ff;--txt:#eef3f8;--mut:#93a0b3;
+  --accent:#3d8bfd;--accent-2:#9ec5ff;
+}
+html{background:#07090e}
+body{background:transparent;font-family:"Manrope","Golos Text",system-ui,sans-serif;color:var(--txt)}
+h1,h2,h3{font-family:"Manrope","Golos Text",sans-serif;font-weight:600;letter-spacing:-.03em;text-transform:none;color:#f5f8fc}
+h1{font-size:40px;line-height:1.1;margin-bottom:16px;text-shadow:0 2px 16px rgba(0,0,0,.55)}
+h2{font-size:26px}h3{font-size:18px;color:#d5e6ff}
+.scene{position:fixed;inset:0;z-index:-1;pointer-events:none;background:#07090e}
+.scene-photo{position:absolute;inset:0;background:#10141c center/cover no-repeat;opacity:1;transition:opacity .45s ease}
+.scene-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,9,14,.86) 0%,rgba(7,9,14,.5) 20%,rgba(7,9,14,.32) 46%,rgba(7,9,14,.7) 100%)}
+body.calm .scene{visibility:hidden}
+body.calm{background:#0c1016}
+.topbar{background:rgba(8,11,16,.86);border-bottom:1px solid rgba(158,197,255,.28);padding:14px 28px;backdrop-filter:none}
+.brand img{height:42px}
+.t1{font-family:"Manrope",sans-serif;letter-spacing:.08em;color:#f5f8fc;font-weight:600}
+.t2{letter-spacing:.14em;color:var(--mut)}
+main{max-width:1180px;padding:40px 28px 72px}
+.card,.tile-card,.course-card,.topic-card,.doccard,.pcard,.stat{border-radius:18px}
+.card{padding:28px 28px 24px;background:#141b27;border:1px solid rgba(158,186,220,.22);border-top:1px solid rgba(158,186,220,.22);box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.tile-card,.course-card,.topic-card{padding:22px;background:#141b27;min-height:148px}
+.tile-card b,.course-card h2,.topic-card h3{color:#f5f8fc}
+.tile-card i{font-size:22px;color:var(--accent-2)}
+.btn{border-radius:999px;font-family:"Manrope",sans-serif;letter-spacing:0;text-transform:none;padding:10px 18px;background:#182232;border-color:rgba(158,197,255,.35)}
+.btn:hover{border-color:#9ec5ff;background:#1d2c44}
+.btn.gold{background:linear-gradient(180deg,#4c94ff,#2463d8);border-color:#9ec5ff;color:#fff}
+.btn.gold:hover{filter:brightness(1.06)}
+.btn.primary{background:#16324f;border-color:#3d8bfd;color:#eef3f8}
+.btn:focus-visible,a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #9ec5ff;outline-offset:3px}
+.subnav{background:#10161f;border:1px solid rgba(158,186,220,.16);border-radius:18px;padding:10px}
+.subnav a{border-radius:999px;background:#1a2333;color:#e8eef6}
+.subnav a.on{border-color:#3d8bfd;color:#d5e6ff;background:#15263a}
+.drawer{background:#0c1118;border-right:1px solid rgba(158,197,255,.28);width:320px}
+.drawer-nav a.on{background:#15263a;border-left-color:#3d8bfd;color:#d5e6ff}
+.drawer-nav a:hover{background:#121a26}
+.q{background:#141922;border-radius:14px}
+.q .opt:hover{background:#1a2433}
+.q .opt:has(input:checked){background:#17304a;border-color:#3d8bfd}
+.timer,.lecture-text,.reader-bar{background:#121820}
+.lecture-text{border-radius:16px}
+.kicker{font:600 12px/1 "Manrope",sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#9ec5ff;margin:0 0 8px}
+.lead{font-size:18px;line-height:1.5;max-width:46rem;color:#d5deea}
+.law-note p{margin:0 0 10px}
+.law-grid,.bg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.law-card{display:flex;flex-direction:column;gap:8px;min-height:168px;padding:20px;border-radius:18px;text-decoration:none;color:#eef3f8;background:#141b27;border:1px solid rgba(158,186,220,.22);transition:transform .18s ease,border-color .18s ease}
+.law-card:hover{transform:translateY(-3px);border-color:#3d8bfd}
+.law-card small{color:var(--mut)}
+.err-t{color:#ffb3ab}
+.diffbox{margin-top:8px}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+pre.legal,.dlines{white-space:pre-wrap;word-break:break-word;background:#0e141d;border:1px solid rgba(158,186,220,.16);border-radius:12px;padding:12px;font:13px/1.45 ui-monospace,monospace;max-height:280px;overflow:auto}
+.dline.add{color:#b7f0c4}.dline.del{color:#ffb3ab}.dline.ctx{color:#c5d0de}
+.law-decide{margin-top:16px}
+.law-past{list-style:none;padding:0}
+.law-past li{padding:8px 0;border-bottom:1px solid rgba(158,186,220,.14)}
+.bgopt{display:flex;flex-direction:column;gap:8px;text-align:left;padding:8px;border-radius:18px;border:1px solid rgba(158,186,220,.2);background:#121820;color:inherit;cursor:pointer;font:inherit}
+.bgopt img{width:100%;height:140px;object-fit:cover;border-radius:12px;background:#0c1016}
+.bgopt[aria-checked="true"]{border-color:#3d8bfd;box-shadow:0 0 0 1px #3d8bfd}
+.bgopt:hover{border-color:#9ec5ff}
+.bgt{display:flex;flex-direction:column;gap:2px;padding:0 6px 6px}
+.bgt small{color:var(--mut)}
+.credit{color:var(--mut);max-width:46rem}
+.theme-page{max-width:1080px}
+html[data-bg="quebec-night"] .scene-photo{background-image:image-set(url("assets/bg/quebec-night.avif") type("image/avif"), url("assets/bg/quebec-night.webp") type("image/webp"))}
+html[data-bg="kolkata-rain"] .scene-photo{background-image:image-set(url("assets/bg/kolkata-rain.avif") type("image/avif"), url("assets/bg/kolkata-rain.webp") type("image/webp"))}
+html[data-bg="mekong-dusk"] .scene-photo{background-image:image-set(url("assets/bg/mekong-dusk.avif") type("image/avif"), url("assets/bg/mekong-dusk.webp") type("image/webp"))}
+html[data-bg="nz-fog"] .scene-photo{background-image:image-set(url("assets/bg/nz-fog.avif") type("image/avif"), url("assets/bg/nz-fog.webp") type("image/webp"))}
+html[data-bg="albert-bridge"] .scene-photo{background-image:image-set(url("assets/bg/albert-bridge.avif") type("image/avif"), url("assets/bg/albert-bridge.webp") type("image/webp"))}
+html[data-bg="quebec-snow"] .scene-photo{background-image:image-set(url("assets/bg/quebec-snow.avif") type("image/avif"), url("assets/bg/quebec-snow.webp") type("image/webp"))}
+html[data-bg="mojave"] .scene-photo{background-image:image-set(url("assets/bg/mojave.avif") type("image/avif"), url("assets/bg/mojave.webp") type("image/webp"))}
+html[data-bg="sea-rocks"] .scene-photo{background-image:image-set(url("assets/bg/sea-rocks.avif") type("image/avif"), url("assets/bg/sea-rocks.webp") type("image/webp"))}
+html[data-bg="moscow-night"] .scene-photo{background-image:image-set(url("assets/bg/moscow-night.avif") type("image/avif"), url("assets/bg/moscow-night.webp") type("image/webp"))}
+html[data-bg="bay-bridge"] .scene-photo{background-image:image-set(url("assets/bg/bay-bridge.avif") type("image/avif"), url("assets/bg/bay-bridge.webp") type("image/webp"))}
+html[data-bg="rooftop"] .scene-photo{background-image:image-set(url("assets/bg/rooftop.avif") type("image/avif"), url("assets/bg/rooftop.webp") type("image/webp"))}
+html[data-bg="utah-dunes"] .scene-photo{background-image:image-set(url("assets/bg/utah-dunes.avif") type("image/avif"), url("assets/bg/utah-dunes.webp") type("image/webp"))}
+html[data-bg="highway"] .scene-photo{background-image:image-set(url("assets/bg/highway.avif") type("image/avif"), url("assets/bg/highway.webp") type("image/webp"))}
+@media(max-width:700px){
+  h1{font-size:30px}main{padding:22px 14px 48px}
+  .split{grid-template-columns:1fr}
+  .law-grid,.bg-grid{grid-template-columns:1fr}
+  .bgopt img{height:180px}
+  .topbar{padding:10px 12px}
+}
+@media (prefers-reduced-motion: reduce){
+  .scene-photo,.law-card,.bgopt{transition:none}
+}

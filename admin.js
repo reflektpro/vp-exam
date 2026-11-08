@@ -2,7 +2,7 @@
 'use strict';
 function adminNav(active) {
   const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Пользователи и роли', 'examiner'],
-    ['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/bases', 'Базы и источники', 'admin'], ['/admin/media', 'Изображения', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
+    ['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/bases', 'Базы и источники', 'admin'], ['/admin/laws', 'Законодательство', 'admin'], ['/admin/media', 'Изображения', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
   return `<div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
 }
 function formObj(form) {

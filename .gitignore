@@ -13,4 +13,5 @@ tests/e2e-course-pk-results.json
 tests/e2e-dossier-results.json
 tests/*-results.json
 content/build/
+content/reatt6/laws_report.json
 tests/node_modules

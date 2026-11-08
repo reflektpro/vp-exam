@@ -9,10 +9,12 @@
 <link rel="icon" href="assets/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Oswald:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css?v=b46c0c4">
+<script>document.documentElement.dataset.bg = (function(){ try { return localStorage.getItem('vp_bg') || 'quebec-night'; } catch (e) { return 'quebec-night'; } })();</script>
 </head>
 <body>
+<div class="scene" aria-hidden="true"><div class="scene-photo" id="scenePhoto"></div><div class="scene-veil"></div></div>
 <header class="topbar">
   <button type="button" class="burger" id="burger" aria-label="Открыть меню" aria-controls="drawer" aria-expanded="false" hidden><span></span><span></span><span></span></button>
   <a href="#/" class="brand"><img src="assets/emblem.png" alt="ГУ ВП"><div><div class="t1" id="siteTitle">ГУ ВП — портал</div><div class="t2" id="secTitle">Главное управление Военной полиции</div></div></a>
@@ -32,5 +34,7 @@
 <script src="reports.js?v=b46c0c4"></script>
 <script src="portal.js?v=b46c0c4"></script>
 <script src="dossier.js?v=b46c0c4"></script>
+<script src="theme.js?v=b46c0c4"></script>
+<script src="laws-ui.js?v=b46c0c4"></script>
 </body>
 </html>
