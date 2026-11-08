@@ -129,7 +129,7 @@ function shell(over, opt = {}) {
   let dialog = false;
   page.on('dialog', () => { dialog = true; });
   await page.goto(SITE + '#/', { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.tile-card');
+  await page.waitForSelector('.hub-main');
   check('главная: заголовок портала и фото на фоне', /ГУ ВП — портал/.test(await page.textContent('body')) && await page.locator('.scene-photo').count() === 1);
   await page.screenshot({ path: SHOTS + 'home-desktop.png' });
   await page.click('#burger');
@@ -150,7 +150,7 @@ function shell(over, opt = {}) {
   check('админка показывает офлайн-пометку, а не живой успех форума', /офлайн/.test(await page.textContent('body')) && /не скачивает/.test(await page.textContent('body')));
   await page.locator('.law-grid').scrollIntoViewIfNeeded();
   await page.screenshot({ path: SHOTS + 'laws-desktop.png' });
-  await page.click('a.law-card[href="#/admin/laws/doc/pk"]');
+  await page.click('a[href="#/admin/laws/doc/pk"]');
   await page.waitForSelector('.diffbox');
   const html = await page.content();
   check('diff экранирован, скрипт из фикстуры не вставлен узлом', html.includes('&lt;img') && !html.includes('<img src=x onerror'));

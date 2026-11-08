@@ -434,10 +434,10 @@ ol.tl li.err .tl-ic{border-color:#a04040}ol.tl li.ok .tl-ic{border-color:var(--o
 @keyframes vpShake{0%,100%{transform:none}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
 @keyframes vpGlow{0%{box-shadow:0 0 0 0 rgba(95,190,110,.55)}100%{box-shadow:0 0 0 14px rgba(95,190,110,0)}}
 @keyframes vpSlideIn{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
-#app.view-in>*{animation:vpFadeUp .32s ease both}
+#app.view-in>*{animation:none}
 #app.view-in>*:nth-child(2){animation-delay:.04s}#app.view-in>*:nth-child(3){animation-delay:.08s}#app.view-in>*:nth-child(4){animation-delay:.12s}#app.view-in>*:nth-child(n+5){animation-delay:.16s}
 .card,.tile-card,.course-card,.topic-card{transition:border-color .15s,transform .15s,box-shadow .2s}
-.tile-card:hover,.course-card:hover,.topic-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.tile-card:hover,.course-card:hover,.topic-card:hover{transform:none;box-shadow:none}
 .reveal{animation:vpFadeUp .35s ease both;animation-delay:var(--d,0ms)}
 .q{transition:border-color .2s,background-color .2s,box-shadow .2s}
 .q:focus-within{border-color:var(--gold);box-shadow:0 0 0 1px rgba(212,175,55,.25)}
@@ -474,11 +474,11 @@ body.drawer-open .drawer-nav a:nth-child(2){animation-delay:.03s}body.drawer-ope
 html{background:#07090e}
 body{background:transparent;font-family:"Manrope","Golos Text",system-ui,sans-serif;color:var(--txt)}
 h1,h2,h3{font-family:"Manrope","Golos Text",sans-serif;font-weight:600;letter-spacing:-.03em;text-transform:none;color:#f5f8fc}
-h1{font-size:40px;line-height:1.1;margin-bottom:16px;text-shadow:0 2px 16px rgba(0,0,0,.55)}
+h1{font-size:40px;line-height:1.1;margin-bottom:16px}
 h2{font-size:26px}h3{font-size:18px;color:#d5e6ff}
 .scene{position:fixed;inset:0;z-index:-1;pointer-events:none;background:#07090e}
-.scene-photo{position:absolute;inset:0;background:#10141c center/cover no-repeat;opacity:1;transition:opacity .45s ease}
-.scene-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,9,14,.86) 0%,rgba(7,9,14,.5) 20%,rgba(7,9,14,.32) 46%,rgba(7,9,14,.7) 100%)}
+.scene-photo{position:absolute;inset:0;background:#10141c center/cover no-repeat;opacity:.3;transition:none}
+.scene-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,9,14,.94) 0%,rgba(7,9,14,.84) 22%,rgba(7,9,14,.9) 100%)}
 body.calm .scene{visibility:hidden}
 body.calm{background:#0c1016}
 .topbar{background:rgba(8,11,16,.86);border-bottom:1px solid rgba(158,197,255,.28);padding:14px 28px;backdrop-filter:none}
@@ -487,7 +487,7 @@ body.calm{background:#0c1016}
 .t2{letter-spacing:.14em;color:var(--mut)}
 main{max-width:1180px;padding:40px 28px 72px}
 .card,.tile-card,.course-card,.topic-card,.doccard,.pcard,.stat{border-radius:18px}
-.card{padding:28px 28px 24px;background:#141b27;border:1px solid rgba(158,186,220,.22);border-top:1px solid rgba(158,186,220,.22);box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.card{padding:28px 28px 24px;background:#141b27;border:1px solid rgba(158,186,220,.22);border-top:1px solid rgba(158,186,220,.22);box-shadow:none}
 .tile-card,.course-card,.topic-card{padding:22px;background:#141b27;min-height:148px}
 .tile-card b,.course-card h2,.topic-card h3{color:#f5f8fc}
 .tile-card i{font-size:22px;color:var(--accent-2)}
@@ -513,7 +513,21 @@ main{max-width:1180px;padding:40px 28px 72px}
 .law-note p{margin:0 0 10px}
 .law-grid,.bg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
 .law-card{display:flex;flex-direction:column;gap:8px;min-height:168px;padding:20px;border-radius:18px;text-decoration:none;color:#eef3f8;background:#141b27;border:1px solid rgba(158,186,220,.22);transition:transform .18s ease,border-color .18s ease}
-.law-card:hover{transform:translateY(-3px);border-color:#3d8bfd}
+.law-card:hover{transform:none;border-color:#3d8bfd}
+.hub-hello{margin:0 0 14px;color:#d5deea}
+.hub-main{display:block;max-width:640px;padding:28px 32px;border-radius:20px;background:#161d2b;border:1px solid rgba(158,186,220,.3);color:inherit;text-decoration:none}
+.hub-main h1{margin:8px 0 8px}
+.hub-main p{margin:0;color:#c5d0de;font-size:18px}
+.hub-block{margin-top:28px}
+.hub-block h2{font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:#9ec5ff}
+.hub-links{display:flex;flex-wrap:wrap;gap:12px}
+.hub-links a,.hub-link{display:flex;flex-direction:column;gap:4px;min-width:220px;padding:16px 18px;border-radius:16px;background:#161d2b;border:1px solid rgba(158,186,220,.24);color:#eef3f8;text-decoration:none}
+.hub-main:active,.hub-link:active,.hub-links a:active,.is-down,.drawer-nav a:active{background:#24344c}
+.nav-label{padding:16px 12px 4px;font:600 11px/1 "Manrope",sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#8eb0de}
+.crumb{display:flex;gap:8px;align-items:center;color:#93a0b3;margin:0 0 10px}
+.crumb a{color:#d5e6ff;text-decoration:none}
+.law-rest{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
+.law-rest a{color:#d5e6ff}
 .law-card small{color:var(--mut)}
 .err-t{color:#ffb3ab}
 .diffbox{margin-top:8px}
@@ -546,6 +560,7 @@ html[data-bg="utah-dunes"] .scene-photo{background-image:image-set(url("assets/b
 html[data-bg="highway"] .scene-photo{background-image:image-set(url("assets/bg/highway.avif") type("image/avif"), url("assets/bg/highway.webp") type("image/webp"))}
 @media(max-width:700px){
   h1{font-size:30px}main{padding:22px 14px 48px}
+  .hub-main,.hub-links a,.hub-link{width:100%;min-width:0}
   .split{grid-template-columns:1fr}
   .law-grid,.bg-grid{grid-template-columns:1fr}
   .bgopt img{height:180px}

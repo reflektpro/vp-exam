@@ -1,9 +1,25 @@
 /* Панель управления (администратор / проверяющий). Права проверяются на сервере. */
 'use strict';
+function adminArea(path) {
+  const p = (path || '').split('?')[0];
+  if (/^\/admin\/(attempts|attempt|users)(\/|$)/.test(p)) return 'review';
+  if (/^\/admin\/(courses|course|lectures|lecture|exams|exam)(\/|$)/.test(p)) return 'learn';
+  if (/^\/admin\/(bank|reatt|bases|laws)(\/|$)/.test(p)) return 'reatt';
+  if (/^\/admin\/(media|settings|audit)(\/|$)/.test(p)) return 'system';
+  return null;
+}
 function adminNav(active) {
-  const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Пользователи и роли', 'examiner'],
-    ['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/bases', 'Базы и источники', 'admin'], ['/admin/laws', 'Законодательство', 'admin'], ['/admin/media', 'Изображения', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
-  return `<div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
+  const path = (location.hash || '#/').slice(1);
+  const area = adminArea(path);
+  if (!area) return '';
+  const groups = {
+    review: ['Проверка', [['/admin/attempts', 'Работы', 'examiner'], ['/admin/users', 'Люди и роли', 'examiner']]],
+    learn: ['Учёба', [['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin']]],
+    reatt: ['Переаттестация', [['/admin/reatt', 'Доступ', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/laws', 'Законодательство', 'admin'], ['/admin/bases', 'Сводка баз', 'admin']]],
+    system: ['Настройки', [['/admin/settings', 'Параметры', 'admin'], ['/admin/media', 'Изображения', 'admin'], ['/admin/audit', 'Журнал', 'admin']]],
+  };
+  const [title, items] = groups[area];
+  return `<p class="crumb"><a href="#/admin">Админка</a><span>${title}</span></p><div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
 }
 function formObj(form) {
   const o = {};
@@ -68,25 +84,11 @@ async function quickPublish(kind, id, pub, errBox) {
 
 route('/admin', async () => {
   const s = await api('GET', '/api/admin/stats');
-  setView(`<h1>Админка</h1>${adminNav('/admin')}
-    <div class="grid">
-      <div class="stat"><b>${s.pending_review}</b>попыток ждут проверки</div>
-      <div class="stat"><b>${s.users}</b>пользователей</div>
-      <div class="stat"><b>${s.passed}</b>сдали экзамен</div>
-      <div class="stat"><b>${s.in_progress}</b>экзаменов идёт сейчас</div>
-      <div class="stat"><b>${s.lectures_published} / ${s.lectures}</b>лекций опубликовано</div>
-      <div class="stat"><b>${s.exams}</b>экзаменов</div>
-      <div class="stat"><b>${s.bank_questions} + ${s.bank_cases}</b>вопросов + кейсов в банке</div>
-      <div class="stat"><b>${s.reatt_pending} / ${s.reatt_total}</b>переаттестаций ждут проверки / всего</div>
-    </div>
-    ${hasRole('admin') ? `<div class="card flat" style="margin-top:18px"><h3>Как наполнить сайт</h3><ol class="small">
-      <li>«Курсы» → «Создать курс»: название, описание, какие лекции (по порядку) и какой экзамен входят в курс. В «Учебном отделе» курс — это лекции и экзамен в конце.</li>
-      <li>«Лекции» → «Добавить лекцию»: название, курс, ссылка на видео (YouTube или mp4/webm), длительность (кнопка «Определить по видео»), «Опубликована».</li>
-      <li>«Экзамены» → «Создать экзамен»: курс, параметры, затем вопросы. Опубликуйте экзамен. По умолчанию экзамен курса открывается после обязательных лекций своего курса.</li>
-      <li>«Пользователи и роли»: роли «ВП» (учебный отдел, отчёты, премирование), «Переаттестация», «Руководство ГУ ВП», «Проверяющий», «Администратор»; профиль сотрудника (имя, звание, статик).</li>
-      <li>Попытки с ответами на ручную проверку (свободная форма, кейсы, файлы, голосовые) попадают в «Проверка».</li>
-      <li>«Банк вопросов» — вопросы и кейсы переаттестации по категориям (ПК, УК, ВУ…), импорт JSON. «Переаттестация» — квоты обеих версий.</li></ol></div>` : ''}`);
-});
+  const tasks = [['#/admin/attempts', 'Проверка', s.pending_review ? `${s.pending_review} работ ждут решения` : 'Новых работ нет'], ['#/admin/users', 'Люди', `${s.users} в списке`]];
+  if (hasRole('admin')) { tasks.push(['#/admin/courses', 'Учёба', 'Курсы, лекции и экзамены'], ['#/admin/laws', 'Законы', 'Редакции, банк и доступ к переаттестации']); }
+  setView(`<p class="crumb"><a href="#/">Главная</a><span>Админка</span></p><h1>Админка</h1>
+    <div class="hub-links">${tasks.map(([href, name, text]) => `<a class="hub-link" href="${href}"><b>${name}</b><span>${esc(text)}</span></a>`).join('')}</div>`);
+}, { role: 'examiner' });
 
 // ---------- лекции ----------
 route('/admin/lectures', async () => {
