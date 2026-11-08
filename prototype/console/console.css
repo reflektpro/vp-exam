@@ -108,31 +108,45 @@ button, a { font: inherit; color: inherit; }
   display: flex;
   flex-wrap: nowrap;
   gap: 10px;
-  align-items: stretch;
+  align-items: center;
+  height: 80px;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  padding: 8px 4px 12px;
+  padding: 8px 4px;
   touch-action: pan-x pan-y;
+  cursor: grab;
+  user-select: none;
 }
+.rail.is-grabbing { cursor: grabbing; }
 .rail::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .rail-item {
   flex: 0 0 auto;
-  width: 148px;
+  width: 156px;
+  height: 64px;
   display: flex;
   align-items: center;
   text-align: left;
   text-decoration: none;
-  cursor: pointer;
+  cursor: grab;
   border-radius: 16px;
   border: 1px solid var(--line);
   background: rgba(16, 22, 34, .88);
-  padding: 14px;
+  padding: 8px 12px;
   color: var(--txt);
   opacity: .72;
+  user-select: none;
 }
-.rail-item .label { font-size: 15px; font-weight: 650; }
+.rail.is-grabbing .rail-item { cursor: grabbing; }
+.rail-item .label {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+  max-height: 2.5em;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .rail-item[aria-selected="true"] {
   opacity: 1;
   border-color: #9ec5ff;
@@ -175,7 +189,8 @@ button, a { font: inherit; color: inherit; }
   #app { padding: 16px 14px 40px; }
   .modes { margin-left: 0; width: 100%; }
   .mode { flex: 1; }
-  .rail-item { width: 132px; }
+  .rail { height: 80px; }
+  .rail-item { width: 156px; height: 64px; }
   .stage h1 { font-size: 34px; }
   .act { width: 100%; justify-content: center; }
 }

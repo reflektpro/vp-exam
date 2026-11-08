@@ -146,12 +146,26 @@ function railInfo(page) {
     return window.scrollY === 0 && top > 0 && top < 240;
   });
   const swipe = await page.locator('#rail').boundingBox();
-  await page.mouse.move(swipe.x + swipe.width * 0.75, swipe.y + swipe.height / 2);
+  const scrollOf = () => page.evaluate(() => document.getElementById('rail').scrollLeft);
+  const y = swipe.y + swipe.height / 2;
+  const x0 = swipe.x + swipe.width * 0.72;
+  await page.mouse.move(x0, y);
   await page.mouse.down();
-  await page.mouse.move(swipe.x + swipe.width * 0.75 - 180, swipe.y + swipe.height / 2 - 4, { steps: 10 });
+  await page.mouse.move(x0 - 180, y, { steps: 12 });
+  const grabbing = await page.evaluate(() => document.getElementById('rail').classList.contains('is-grabbing'));
   await page.mouse.up();
-  await page.waitForTimeout(80);
-  check('горизонтальный жест меняет раздел', (await page.textContent('h1')) !== before);
+  await page.waitForTimeout(40);
+  const scrolledRight = await scrollOf();
+  const headingAfterDrag = await page.textContent('h1');
+  check('мышь тащит ленту вправо и не выбирает плитку', grabbing && scrolledRight > 80 && headingAfterDrag === before, scrolledRight + ' ' + headingAfterDrag);
+  check('после протяжки нет залипшего захвата', await page.evaluate(() => !document.getElementById('rail').classList.contains('is-grabbing')));
+  await page.mouse.move(x0 - 180, y);
+  await page.mouse.down();
+  await page.mouse.move(x0 - 40, y, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(40);
+  const scrolledBack = await scrollOf();
+  check('обратное протягивание возвращает ленту влево', scrolledBack < scrolledRight - 60, scrolledRight + ' -> ' + scrolledBack);
   const beforeChev = await page.textContent('h1');
   await page.click('#chevR');
   check('кнопка следующего раздела работает', (await page.textContent('h1')) !== beforeChev);
@@ -162,11 +176,6 @@ function railInfo(page) {
   const staleId = await page.evaluate(() => document.activeElement.id);
   await page.click('.mode[data-mode="admin"]');
   await page.waitForSelector('#sec-users');
-  const adminLabels = await labels(page);
-  check('админ без разделов сотрудника', EMPLOYEE.every(t => !adminLabels.includes(t)), adminLabels.join('|'));
-  check('лента администратора', adminLabels.join('|') === ADMIN.join('|'), adminLabels.join('|'));
-  const adminRail = await railInfo(page);
-  check('админ тоже одна строка', adminRail.wrap === 'nowrap' && adminRail.oneRow && adminRail.overflow && adminRail.scrollbar === 'none', JSON.stringify(adminRail));
   const focusInfo = await page.evaluate((stale) => {
     const el = document.activeElement;
     const r = el.getBoundingClientRect();
@@ -174,11 +183,79 @@ function railInfo(page) {
   }, staleId);
   check('фокус на первом инструменте администратора', focusInfo.staleGone && focusInfo.id === 'sec-users' && focusInfo.scroll === 0 && focusInfo.rail === 0 && focusInfo.top >= 0 && focusInfo.top < 500, JSON.stringify(focusInfo));
   check('панель администратора объясняет раздел', (await page.textContent('h1')) === 'Люди и роли' && /Роли/.test(await page.textContent('.lead')));
+  await page.screenshot({ path: SHOT + '/desktop-admin.png' });
+  const adminLabels = await labels(page);
+  check('админ без разделов сотрудника', EMPLOYEE.every(t => !adminLabels.includes(t)), adminLabels.join('|'));
+  check('лента администратора', adminLabels.join('|') === ADMIN.join('|'), adminLabels.join('|'));
+  const adminRail = await railInfo(page);
+  check('админ тоже одна строка', adminRail.wrap === 'nowrap' && adminRail.oneRow && adminRail.overflow && adminRail.scrollbar === 'none', JSON.stringify(adminRail));
+  const geom = await page.evaluate(() => {
+    const box = (el) => {
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return { w: Math.round(r.width), h: Math.round(r.height), pad: cs.padding, gap: cs.gap || '' };
+    };
+    const rail = document.getElementById('rail');
+    const labelsOk = [...rail.querySelectorAll('.rail-item')].every(el => {
+      const label = el.querySelector('.label');
+      return label && label.scrollHeight <= label.clientHeight + 1 && label.textContent.length > 0;
+    });
+    return { nav: box(document.querySelector('.nav')), rail: box(rail), tile: box(rail.querySelector('.rail-item')), chev: box(document.querySelector('.chev')), labelsOk };
+  });
+  await page.click('.mode[data-mode="staff"]');
+  const geomStaff = await page.evaluate(() => {
+    const box = (el) => {
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return { w: Math.round(r.width), h: Math.round(r.height), pad: cs.padding };
+    };
+    const rail = document.getElementById('rail');
+    return { nav: box(document.querySelector('.nav')), rail: box(rail), tile: box(rail.querySelector('.rail-item')), chev: box(document.querySelector('.chev')) };
+  });
+  check('у сотрудника и администратора одна геометрия ленты',
+    geom.nav.w === geomStaff.nav.w && geom.nav.h === geomStaff.nav.h &&
+    geom.rail.w === geomStaff.rail.w && geom.rail.h === geomStaff.rail.h &&
+    geom.tile.w === geomStaff.tile.w && geom.tile.h === geomStaff.tile.h &&
+    geom.tile.pad === geomStaff.tile.pad && geom.chev.w === geomStaff.chev.w && geom.chev.h === geomStaff.chev.h &&
+    geom.labelsOk,
+    JSON.stringify({ geom, geomStaff }));
+  await page.click('.mode[data-mode="admin"]');
+  await page.focus('#sec-users');
+  for (let i = 0; i < 17; i++) await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => {
+    const rail = document.getElementById('rail');
+    return rail.scrollLeft > rail.scrollWidth - rail.clientWidth - 30;
+  });
+  const atEnd = await page.evaluate(() => Math.round(document.getElementById('rail').scrollLeft));
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction((end) => document.getElementById('rail').scrollLeft < end - 20, atEnd);
+  const afterLeftKey = await page.evaluate(() => {
+    const rail = document.getElementById('rail');
+    const sel = document.querySelector('[aria-selected="true"]');
+    const rr = rail.getBoundingClientRect();
+    const er = sel.getBoundingClientRect();
+    return { scroll: rail.scrollLeft, vis: er.left >= rr.left - 2 && er.right <= rr.right + 2, label: sel.textContent };
+  });
+  check('стрелка влево уводит ленту от правого края и оставляет плитку в кадре', afterLeftKey.scroll < atEnd - 20 && afterLeftKey.vis, JSON.stringify({ atEnd, afterLeftKey }));
+  const beforeCancel = await page.evaluate(() => {
+    const rail = document.getElementById('rail');
+    rail.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 500, clientY: 140, pointerId: 7 }));
+    window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 420, clientY: 140, pointerId: 7 }));
+    return { grabbing: rail.classList.contains('is-grabbing'), scroll: rail.scrollLeft };
+  });
+  await page.evaluate(() => {
+    window.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, clientX: 420, clientY: 140, pointerId: 7 }));
+    window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 200, clientY: 140, pointerId: 7 }));
+  });
+  const afterCancel = await page.evaluate(() => ({
+    grabbing: document.getElementById('rail').classList.contains('is-grabbing'),
+    scroll: document.getElementById('rail').scrollLeft
+  }));
+  check('отмена указателя снимает захват', beforeCancel.grabbing && !afterCancel.grabbing && afterCancel.scroll === beforeCancel.scroll, JSON.stringify({ beforeCancel, afterCancel }));
   check('фон не сменился', (await page.evaluate(() => document.documentElement.dataset.bg)) === bgBefore && bgHits.length === 1, bgHits.join(' '));
   check('наружу не ходим', hits.length === 0, hits.join(' '));
   const gone = await page.evaluate(async () => (await fetch('bg/mp-mrzr.webp')).status);
   check('старый файл фона не отдаётся', gone === 404, gone);
-  await page.screenshot({ path: SHOT + '/desktop-admin.png' });
 
   await page.click('.mode[data-mode="staff"]');
   check('сотрудник возвращается', (await labels(page)).join('|') === STAFF.join('|') && (await page.evaluate(() => document.activeElement.id)) === 'sec-study' && (await page.textContent('h1')) === 'Учёба');
@@ -238,13 +315,20 @@ function railInfo(page) {
   check('телефон: кадр из трёх, узкий вариант', allowedIds.includes(mobileRail.bg) && mobileRail.photo.includes(mobileRail.bg + '-m.webp'), mobileRail.bg + ' ' + mobileRail.photo);
   await mp.screenshot({ path: SHOT + '/mobile-staff.png' });
   const mb = await mp.locator('#rail').boundingBox();
-  const hBefore = await mp.textContent('h1');
-  await mp.evaluate(({ x, y }) => {
-    const rail = document.getElementById('rail');
-    rail.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: x, clientY: y, pointerId: 1 }));
-    window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: x - 120, clientY: y + 4, pointerId: 1 }));
-  }, { x: mb.x + mb.width * 0.8, y: mb.y + 28 });
-  check('телефон: сдвиг меняет раздел и панель', (await mp.textContent('h1')) !== hBefore && (await mp.locator('.lead').textContent()).length > 10);
+  const touch = async (x1, x2) => {
+    const y = mb.y + mb.height / 2;
+    await mp.evaluate(({ x1, x2, y }) => {
+      const rail = document.getElementById('rail');
+      rail.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: x1, clientY: y, pointerId: 3, pointerType: 'touch' }));
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x2, clientY: y, pointerId: 3, pointerType: 'touch' }));
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: x2, clientY: y, pointerId: 3, pointerType: 'touch' }));
+    }, { x1, x2, y });
+  };
+  await touch(mb.x + mb.width * 0.8, mb.x + mb.width * 0.8 - 110);
+  const touchRight = await mp.evaluate(() => document.getElementById('rail').scrollLeft);
+  await touch(mb.x + 40, mb.x + 140);
+  const touchLeft = await mp.evaluate(() => document.getElementById('rail').scrollLeft);
+  check('телефон: сдвиг вправо и обратно двигает ленту', touchRight > 40 && touchLeft < touchRight - 30, touchRight + ' -> ' + touchLeft);
   await mp.click('.mode[data-mode="admin"]');
   await mp.waitForSelector('#sec-users');
   const mobileAdmin = await labels(mp);
