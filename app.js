@@ -44,8 +44,9 @@ function route(pattern, fn, opts = {}) { App.routes.push({ p: pattern, re: new R
 async function render() {
   App.cleanup.forEach(f => { try { f(); } catch (_) {} }); App.cleanup = [];
   const path = (location.hash || '#/').slice(1) || '/';
+  document.body.classList.toggle('calm', /^\/(attempt|exam|lecture)(\/|$)/.test(path.split('?')[0]));
   renderHeader();
-  if (!App.me && path !== '/') { location.hash = '#/'; return; }
+  if (!App.me && path.split('?')[0] !== '/' && path.split('?')[0] !== '/theme') { location.hash = '#/'; return; }
   for (const r of App.routes) {
     const m = r.re.exec(path.split("?")[0]);
     if (!m) continue;
@@ -104,7 +105,7 @@ function renderHeader() {
   drawer.innerHTML = `<div class="drawer-head"><img src="assets/emblem.png" alt=""><div><b>ГУ ВП</b><div class="small mut">${esc(userName(u))}${u.rank ? ' · ' + esc(u.rank) : ''}</div></div>
       <button type="button" class="drawer-x" id="drawerX" aria-label="Закрыть меню">✕</button></div>
     <nav class="drawer-nav">${items.map(m => `<a href="#${m[0]}" class="${m[0] === act ? 'on' : ''}"><i>${m[2]}</i><span>${esc(m[1])}${m[4] ? `<small>${esc(m[4])}</small>` : ''}</span></a>`).join('')}</nav>
-    <div class="drawer-foot">${can('vp') ? `<a href="${esc(CFG.REPORTS_URL.replace(/otchet\.html$/, ''))}" target="_blank" rel="noopener">Сайт бланков ↗</a>` : ''}
+    <div class="drawer-foot"><a href="#/theme">Фон</a>${can('vp') ? `<a href="${esc(CFG.REPORTS_URL.replace(/otchet\.html$/, ''))}" target="_blank" rel="noopener">Сайт бланков ↗</a>` : ''}
       <div class="small mut">${rolesText(u)}</div></div>`;
   burger.hidden = false;
   burger.onclick = () => openDrawer(!document.body.classList.contains('drawer-open'));
@@ -175,6 +176,7 @@ function loginPage() {
       ${s && s.welcome_text ? `<p class="welcome mut">${esc(s.welcome_text)}</p>` : ''}
       ${msg}
       <p><button class="btn discord" id="loginBtn" ${oauthOk ? '' : 'disabled'}>Войти через Discord</button></p>
+      <p><a class="btn sm" href="#/theme">Фон</a></p>
       <p class="login-note small mut"><svg class="login-note-ic" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 11V8a6 6 0 0 1 12 0v3M5 11h14v10H5z"/></svg><span>Вход идёт через официальную авторизацию Discord. Сайт получает только ваш ник, аватар и Discord ID — пароль, почта, серверы и сообщения нам недоступны.</span></p>
     </div>`);
   $('#loginBtn').onclick = () => {

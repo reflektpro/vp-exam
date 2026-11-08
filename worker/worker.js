@@ -1,5 +1,6 @@
 // ГУ ВП — портал. API (Cloudflare Worker + D1).
-// Без внешних зависимостей, один ES-модуль. См. README.md.
+// Без внешних npm-зависимостей. См. README.md.
+import { assertLawWrite, parseLawReport, lawOverview, lawHistory, lawProposal, lawDocument, ingestLawReport, decideProposal, acknowledgeFlag } from './laws.js';
 
 const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -4017,6 +4018,47 @@ async function route(request, env, ctx) {
     }
     if ((m = /^\/api\/admin\/attempts\/(\d+)\/review$/.exec(p)) && M === 'POST') return reviewAttempt(request, env, user, idParam(m[1]));
     // настройки и журнал
+    if (p === '/api/admin/laws' && M === 'GET') { A(); return json(await lawOverview(env)); }
+    if (p === '/api/admin/laws/history' && M === 'GET') { A(); return json(await lawHistory(env, url)); }
+    if (p === '/api/admin/laws/reports' && M === 'POST') {
+      A();
+      const gate = assertLawWrite(request, allowedOrigins(env), new URL(request.url).origin);
+      if (!gate.ok) throw new HttpError(gate.status, gate.error);
+      await rateLimit(env, 'laws-ingest:' + user.id, 30, 600);
+      const parsed = parseLawReport(await readJson(request, 1500000));
+      if (!parsed.ok) throw new HttpError(parsed.status, parsed.error);
+      const saved = await ingestLawReport(env, user, parsed.report, sha256);
+      await audit(env, user, 'laws.ingest', saved.check && saved.check.id, { duplicate: !!saved.duplicate, status: saved.check && saved.check.status, offline: parsed.report.offline });
+      return json(saved, saved.duplicate ? 200 : 201);
+    }
+    if ((m = /^\/api\/admin\/laws\/docs\/([a-z0-9_]{1,40})$/.exec(p)) && M === 'GET') {
+      A(); const doc = await lawDocument(env, m[1]); if (!doc) throw new HttpError(404, 'Документ не найден'); return json(doc);
+    }
+    if ((m = /^\/api\/admin\/laws\/proposals\/(\d+)$/.exec(p)) && M === 'GET') {
+      A(); const item = await lawProposal(env, idParam(m[1])); if (!item) throw new HttpError(404, 'Предложение не найдено'); return json(item);
+    }
+    if ((m = /^\/api\/admin\/laws\/proposals\/(\d+)\/decision$/.exec(p)) && M === 'POST') {
+      A();
+      const gate = assertLawWrite(request, allowedOrigins(env), new URL(request.url).origin);
+      if (!gate.ok) throw new HttpError(gate.status, gate.error);
+      await rateLimit(env, 'laws-decide:' + user.id, 60, 600);
+      const b = await readJson(request);
+      const result = await decideProposal(env, user, idParam(m[1]), b.action, Number(b.generation), b.note);
+      if (!result.ok) throw new HttpError(result.status, result.error);
+      await audit(env, user, result.proposal.status === 'approved' ? 'laws.approve' : 'laws.reject', m[1], { doc: undefined, note: String(b.note || '').slice(0, 300) });
+      return json(result);
+    }
+    if ((m = /^\/api\/admin\/laws\/flags\/(\d+)\/ack$/.exec(p)) && M === 'POST') {
+      A();
+      const gate = assertLawWrite(request, allowedOrigins(env), new URL(request.url).origin);
+      if (!gate.ok) throw new HttpError(gate.status, gate.error);
+      await rateLimit(env, 'laws-ack:' + user.id, 60, 600);
+      const b = await readJson(request);
+      const result = await acknowledgeFlag(env, user, idParam(m[1]), b.note);
+      if (!result.ok) throw new HttpError(result.status, result.error);
+      await audit(env, user, 'laws.flag.ack', m[1], { note: String(b.note || '').slice(0, 300) });
+      return json(result);
+    }
     if (p === '/api/admin/settings' && M === 'GET') { A(); return json({ settings: await getSettings(env) }); }
     if (p === '/api/admin/settings' && M === 'PUT') { A(); return putSettings(request, env, user); }
     if (p === '/api/admin/audit' && M === 'GET') { A(); return adminAudit(env, url); }
