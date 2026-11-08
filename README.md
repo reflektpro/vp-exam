@@ -405,4 +405,4 @@ python3 tools/publish_law_report.py
 
 ## Прототип главной
 
-`prototype/console/` — отдельная страница, боевой портал она не заменяет. Заголовок: «Прототип — ГУ ВП». Ссылка «Бланки» ведёт на https://reflektpro.github.io/vp-raport-offline/ (корень `REPORTS_URL` из `config.js`). Фон пока без фотографии. Эмблема и границы макета — в `prototype/console/README.md`. Проверка: `node tests/e2e-console-proto.js`.
+`prototype/console/` — отдельная страница, боевой портал она не заменяет. Заголовок: «Прототип — ГУ ВП». Ссылка «Бланки» ведёт на https://reflektpro.github.io/vp-raport-offline/ (корень `REPORTS_URL` из `config.js`). Фон — один из трёх переданных кадров, выбирается при открытии страницы. Эмблема и границы макета — в `prototype/console/README.md`. Проверка: `node tests/e2e-console-proto.js`.

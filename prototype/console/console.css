@@ -26,14 +26,15 @@ button, a { font: inherit; color: inherit; }
 .scene-photo {
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(900px 420px at 78% 0%, #1a2740 0%, transparent 58%),
-    #090c12;
+  background-color: #07090e;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
 }
 .scene-veil {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(7, 9, 14, .72), rgba(7, 9, 14, .28) 36%, rgba(7, 9, 14, .78));
+  background: linear-gradient(180deg, rgba(5, 7, 12, .84), rgba(5, 7, 12, .5) 46%, rgba(5, 7, 12, .82));
 }
 #app { max-width: 1120px; margin: 0 auto; padding: 22px 20px 64px; }
 .top { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; }
