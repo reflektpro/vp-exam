@@ -342,10 +342,34 @@ document.addEventListener('pointerdown', (e) => {
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', (e) => { if (pointer && e.pointerId === pointer.id) pointer = null; });
 
-function installBackground() {
-  if (document.documentElement.dataset.bg) return;
-  document.documentElement.dataset.bg = 'neutral';
+const BACKGROUNDS = [
+  { id: 'kremlin' },
+  { id: 'formation' },
+  { id: 'tanks' }
+];
+
+function vpPickBackground(random) {
+  const n = BACKGROUNDS.length;
+  const raw = typeof random === 'function' ? random() : random;
+  const r = Number(raw);
+  let i = Math.floor((Number.isFinite(r) ? r : 0) * n);
+  if (i < 0) i = 0;
+  if (i >= n) i = n - 1;
+  return BACKGROUNDS[i];
 }
 
-installBackground();
+let chosenBackground = null;
+function installBackground(randomFn) {
+  if (chosenBackground) return chosenBackground.id;
+  chosenBackground = vpPickBackground(randomFn || Math.random);
+  const variant = window.matchMedia('(max-width: 720px)').matches ? 'm' : 'd';
+  document.documentElement.dataset.bg = chosenBackground.id;
+  document.documentElement.dataset.bgVariant = variant;
+  document.querySelector('.scene-photo').style.backgroundImage = 'url("bg/' + chosenBackground.id + '-' + variant + '.webp")';
+  return chosenBackground.id;
+}
+
+window.vpPickBackground = vpPickBackground;
+window.vpBackgrounds = BACKGROUNDS;
+installBackground(Math.random);
 renderRail();

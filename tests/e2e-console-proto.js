@@ -46,7 +46,9 @@ function railInfo(page) {
   });
 }
 (async () => {
-  check('чужих файлов фона нет в папке', !fs.existsSync(path.join(ROOT, 'bg')));
+  const bgFiles = fs.existsSync(path.join(ROOT, 'bg')) ? fs.readdirSync(path.join(ROOT, 'bg')).sort() : [];
+  const allowedBg = ['formation-d.avif', 'formation-d.webp', 'formation-m.avif', 'formation-m.webp', 'kremlin-d.avif', 'kremlin-d.webp', 'kremlin-m.avif', 'kremlin-m.webp', 'tanks-d.avif', 'tanks-d.webp', 'tanks-m.avif', 'tanks-m.webp'];
+  check('в папке фона только три переданных кадра', bgFiles.join('|') === allowedBg.join('|'), bgFiles.join('|'));
   const formsStatus = await head(FORMS);
   const reportStatus = await head(REPORT);
   check('сайт бланков отвечает', formsStatus === 200, formsStatus);
@@ -61,7 +63,7 @@ function railInfo(page) {
   const bgHits = [];
   page.on('request', req => {
     const u = req.url();
-    if (/\/bg\/|mp-mrzr|mp-sinai|mp-nv|quebec/.test(u)) bgHits.push(u);
+    if (/\/bg\//.test(u)) bgHits.push(u);
     else if (!u.startsWith(SITE)) hits.push(u);
   });
   await page.goto(SITE, { waitUntil: 'domcontentloaded' });
@@ -73,7 +75,15 @@ function railInfo(page) {
   check('лента сотрудника', (await labels(page)).join('|') === STAFF.join('|'), (await labels(page)).join('|'));
   let info = await railInfo(page);
   check('одна строка без переноса и без серой полосы', info.display === 'flex' && info.wrap === 'nowrap' && info.oneRow && info.scrollbar === 'none' && info.overflow && info.pageDelta <= 1, JSON.stringify(info));
-  check('фон нейтральный и без картинки', info.bg === 'neutral' && !/url\(/.test(info.photo), info.photo);
+  const allowedIds = ['kremlin', 'formation', 'tanks'];
+  check('фон — один из трёх кадров', allowedIds.includes(info.bg) && info.photo.includes('/bg/' + info.bg + '-d.webp'), info.bg + ' ' + info.photo);
+  const fx = await page.evaluate(() => {
+    const s = getComputedStyle(document.querySelector('.scene-photo'));
+    const v = getComputedStyle(document.querySelector('.scene-veil'));
+    return s.filter + '|' + s.backdropFilter + '|' + v.backdropFilter;
+  });
+  check('размытие не считается на весь экран', fx === 'none|none|none', fx);
+  check('запрошен только выбранный фон', bgHits.length === 1 && bgHits[0].includes(info.bg + '-d.webp'), bgHits.join(' '));
   check('шапка бланков', (await page.getAttribute('#formsLink', 'href')) === FORMS && (await page.getAttribute('#formsLink', 'target')) === '_blank');
   check('сразу видно, что внутри учёбы', (await page.textContent('h1')) === 'Учёба' && /лекции/.test(await page.textContent('.lead')) && /Открыть учебный отдел/.test(await page.textContent('.acts')));
 
@@ -164,7 +174,7 @@ function railInfo(page) {
   }, staleId);
   check('фокус на первом инструменте администратора', focusInfo.staleGone && focusInfo.id === 'sec-users' && focusInfo.scroll === 0 && focusInfo.rail === 0 && focusInfo.top >= 0 && focusInfo.top < 500, JSON.stringify(focusInfo));
   check('панель администратора объясняет раздел', (await page.textContent('h1')) === 'Люди и роли' && /Роли/.test(await page.textContent('.lead')));
-  check('фон не сменился', (await page.evaluate(() => document.documentElement.dataset.bg)) === bgBefore && bgHits.length === 0, bgHits.join(' '));
+  check('фон не сменился', (await page.evaluate(() => document.documentElement.dataset.bg)) === bgBefore && bgHits.length === 1, bgHits.join(' '));
   check('наружу не ходим', hits.length === 0, hits.join(' '));
   const gone = await page.evaluate(async () => (await fetch('bg/mp-mrzr.webp')).status);
   check('старый файл фона не отдаётся', gone === 404, gone);
@@ -186,8 +196,38 @@ function railInfo(page) {
   await page.waitForSelector('.rail-item');
   const dur = await page.evaluate(() => getComputedStyle(document.querySelector('.rail-item')).transitionDuration);
   check('reduced motion убирает анимацию', dur === '0s' || parseFloat(dur) === 0, dur);
-  check('после перезагрузки фон тот же', (await page.evaluate(() => document.documentElement.dataset.bg)) === 'neutral');
+  check('после перезагрузки фон снова из трёх', allowedIds.includes(await page.evaluate(() => document.documentElement.dataset.bg)));
+  const picked = await page.evaluate(() => ({
+    zero: window.vpPickBackground(() => 0).id,
+    mid: window.vpPickBackground(() => 0.5).id,
+    high: window.vpPickBackground(() => 0.999).id
+  }));
+  check('порядок кадров: Кремль, построение, техника', picked.zero === 'kremlin' && picked.mid === 'formation' && picked.high === 'tanks', JSON.stringify(picked));
   await context.close();
+
+  async function seeded(value, width) {
+    const ctx = await browser.newContext({ viewport: { width, height: width > 700 ? 800 : 844 } });
+    await ctx.addInitScript(v => { Math.random = () => v; }, value);
+    const p = await ctx.newPage();
+    const seen = [];
+    p.on('request', req => { if (/\/bg\//.test(req.url())) seen.push(req.url()); });
+    await p.goto(SITE, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('.rail-item');
+    const id = await p.evaluate(() => document.documentElement.dataset.bg);
+    await p.click('.mode[data-mode="admin"]');
+    await p.click('#sec-laws');
+    const later = await p.evaluate(() => document.documentElement.dataset.bg);
+    const variant = await p.evaluate(() => document.documentElement.dataset.bgVariant);
+    await ctx.close();
+    return { id, later, seen, variant };
+  }
+  const sameA = await seeded(0.01, 1280);
+  const sameB = await seeded(0.01, 1280);
+  const other = await seeded(0.99, 1280);
+  const phone = await seeded(0.01, 390);
+  check('один жребий держит один кадр', sameA.id === 'kremlin' && sameA.id === sameB.id && sameA.later === sameA.id && sameA.seen.length === 1 && sameA.variant === 'd' && /kremlin-d\.webp/.test(sameA.seen[0]), JSON.stringify(sameA));
+  check('другой жребий может выбрать технику', other.id === 'tanks' && other.later === other.id && other.seen.length === 1 && /tanks-d\.webp/.test(other.seen[0]), JSON.stringify(other));
+  check('узкий экран берёт мобильный кроп и только его', phone.id === 'kremlin' && phone.variant === 'm' && phone.seen.length === 1 && /kremlin-m\.webp/.test(phone.seen[0]), JSON.stringify(phone));
 
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const mp = await mobile.newPage();
@@ -195,6 +235,7 @@ function railInfo(page) {
   await mp.waitForSelector('.rail-item');
   const mobileRail = await railInfo(mp);
   check('телефон: одна строка', mobileRail.wrap === 'nowrap' && mobileRail.oneRow && mobileRail.overflow && mobileRail.pageDelta <= 1, JSON.stringify(mobileRail));
+  check('телефон: кадр из трёх, узкий вариант', allowedIds.includes(mobileRail.bg) && mobileRail.photo.includes(mobileRail.bg + '-m.webp'), mobileRail.bg + ' ' + mobileRail.photo);
   await mp.screenshot({ path: SHOT + '/mobile-staff.png' });
   const mb = await mp.locator('#rail').boundingBox();
   const hBefore = await mp.textContent('h1');
