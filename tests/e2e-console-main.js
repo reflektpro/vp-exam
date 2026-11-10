@@ -1,14 +1,18 @@
-// Прототип главной: локальный файл, без API и без боевого входа.
+// Главная-консоль на настоящем портале: лента разделов, режимы, фон, переходы во все разделы (тестовый сервер, вход — /__test/login).
+// Запуск: bash /tmp/reset.sh (wrangler dev :8787 + serve.js :8080), сайт бланков на :8081.
 const { chromium } = require('playwright');
-const { spawn } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
-const ROOT = path.join(__dirname, '..', 'prototype', 'console');
-const SITE = 'http://127.0.0.1:8095/';
-const FORMS = 'https://reflektpro.github.io/vp-raport-offline/';
-const REPORT = 'https://reflektpro.github.io/vp-raport-offline/otchet.html';
-const SHOT = '/tmp/console-proto';
+const ROOT = path.join(__dirname, '..', 'assets');
+const SITE = 'http://localhost:8080/';
+const API = 'http://localhost:8787';
+const FORMS_PROD = 'https://reflektpro.github.io/vp-raport-offline/';
+const REPORT_PROD = 'https://reflektpro.github.io/vp-raport-offline/otchet.html';
+const FORMS = 'http://localhost:8081/';
+const REPORT = 'http://localhost:8081/otchet.html';
+const SUPER = '417660389723996170';
+const SHOT = process.env.MAIN_SHOTS || process.env.SHOTS || '/tmp/console-main';
 const STAFF = ['Учёба', 'Экзамены', 'Переаттестация', 'Отчёты', 'Бланки', 'Премии', 'Повышение', 'База'];
 const ADMIN = ['Люди и роли', 'Проверка', 'Курсы', 'Лекции', 'Конструктор', 'Банк вопросов', 'Доступ к тестам', 'Законодательство', 'Личные дела', 'Неделя', 'Нарушения', 'Бюджет', 'Состав', 'Журнал', 'Параметры', 'Изображения', 'Сводка баз', 'Таблицы выплат'];
 const EMPLOYEE = ['Учёба', 'Экзамены', 'Переаттестация', 'Отчёты', 'Премии', 'Повышение', 'База', 'Бланки'];
@@ -49,28 +53,37 @@ function railInfo(page) {
   const bgFiles = fs.existsSync(path.join(ROOT, 'bg')) ? fs.readdirSync(path.join(ROOT, 'bg')).sort() : [];
   const allowedBg = ['formation-d.avif', 'formation-d.webp', 'formation-m.avif', 'formation-m.webp', 'kremlin-d.avif', 'kremlin-d.webp', 'kremlin-m.avif', 'kremlin-m.webp', 'tanks-d.avif', 'tanks-d.webp', 'tanks-m.avif', 'tanks-m.webp'];
   check('в папке фона только три переданных кадра', bgFiles.join('|') === allowedBg.join('|'), bgFiles.join('|'));
-  const formsStatus = await head(FORMS);
-  const reportStatus = await head(REPORT);
+  const formsStatus = await head(FORMS_PROD);
+  const reportStatus = await head(REPORT_PROD);
   check('сайт бланков отвечает', formsStatus === 200, formsStatus);
   check('бланк отчёта отвечает', reportStatus === 200, reportStatus);
 
-  const srv = spawn('python3', ['-m', 'http.server', '8095', '--bind', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
-  await new Promise(r => setTimeout(r, 300));
+  const login = async (id, name, roles) => (await (await fetch(`${API}/__test/login?id=${id}&name=${encodeURIComponent(name)}${roles !== undefined ? '&roles=' + roles : ''}`)).json()).token;
+  const TOK = await login(SUPER, 'Шерман Ассман');
+  await fetch(API + '/api/me', { method: 'PUT', headers: { Authorization: 'Bearer ' + TOK, 'Content-Type': 'application/json' }, body: JSON.stringify({ ic_name: 'Шерман Ассман', rank: 'Лейтенант', static_id: '100-001' }) });
+  const STAFF_TOK = await login('610000000000000001', 'Иван Петров', 'vp,reatt');
+  await fetch(API + '/api/me', { method: 'PUT', headers: { Authorization: 'Bearer ' + STAFF_TOK, 'Content-Type': 'application/json' }, body: JSON.stringify({ ic_name: 'Иван Петров', rank: 'Рядовой', static_id: '100-002' }) });
   const browser = await chromium.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const authed = async (opts, tok) => { const c = await browser.newContext(opts); await c.addInitScript(t => localStorage.setItem('vpexam_token', t), tok || TOK); return c; };
+  const context = await authed({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   const hits = [];
   const bgHits = [];
+  const jsErr = [];
+  page.on('pageerror', e => jsErr.push(e.message));
+  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) jsErr.push(m.text()); });
+  page.on('response', r => { if (r.status() >= 400 && !/quebec-night/.test(r.url())) jsErr.push(r.status() + ' ' + r.url()); });
   page.on('request', req => {
     const u = req.url();
     if (/\/bg\//.test(u)) bgHits.push(u);
-    else if (!u.startsWith(SITE)) hits.push(u);
+    else if (!u.startsWith(SITE) && !u.startsWith(API)) hits.push(u);
   });
   await page.goto(SITE, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.rail-item');
-  check('заголовок документа', (await page.title()) === 'Прототип — ГУ ВП', await page.title());
+  check('заголовок документа', (await page.title()) === 'ГУ ВП — портал', await page.title());
   const body0 = await page.textContent('body');
-  check('нет пометок прогона и адресов', !/ДЕМО|фикстур|#\//i.test(body0));
+  check('нет пометок прогона, прототипа и адресов', !/ДЕМО|фикстур|прототип|#\//i.test(body0));
+  check('эмблема в шапке', (await page.getAttribute('.brand img', 'src')) === 'assets/emblem.svg');
   check('под плитками нет подписей', await page.locator('.rail-item small').count() === 0);
   check('лента сотрудника', (await labels(page)).join('|') === STAFF.join('|'), (await labels(page)).join('|'));
   let info = await railInfo(page);
@@ -91,7 +104,12 @@ function railInfo(page) {
   check('отчёты: заголовок и оба действия', (await page.textContent('h1')) === 'Отчёты' && /Заполнить отчёт/.test(await page.textContent('.acts')) && /Мои отчёты/.test(await page.textContent('.acts')));
   check('заполнить отчёт ведёт на бланк недели', (await page.getAttribute('.act[data-act="fill"]', 'href')) === REPORT);
   await page.click('.act[data-act="mine"]');
-  check('мои отчёты не сообщают об успехе', !/сохран|одобр|отправлен|ДЕМО/.test(await page.textContent('#stage')) && (await page.getAttribute('.act[data-act="mine"]', 'aria-pressed')) === 'true');
+  await page.waitForFunction(() => location.hash === '#/reports');
+  await page.waitForSelector('main h1');
+  check('«Мои отчёты» открывают свои отчёты, плитка остаётся выбранной', /Отчёт/.test(await page.textContent('main h1')) && (await page.getAttribute('#sec-reports', 'aria-selected')) === 'true' && await page.isVisible('#rail'));
+  await page.click('#homeMark');
+  await page.click('#sec-reports');
+  check('с главной снова видна панель отчётов', (await page.textContent('#stage h1')) === 'Отчёты');
   const seen = await page.evaluate(() => {
     const rail = document.getElementById('rail');
     const el = document.getElementById('sec-reports');
@@ -254,7 +272,7 @@ function railInfo(page) {
   check('отмена указателя снимает захват', beforeCancel.grabbing && !afterCancel.grabbing && afterCancel.scroll === beforeCancel.scroll, JSON.stringify({ beforeCancel, afterCancel }));
   check('фон не сменился', (await page.evaluate(() => document.documentElement.dataset.bg)) === bgBefore && bgHits.length === 1, bgHits.join(' '));
   check('наружу не ходим', hits.length === 0, hits.join(' '));
-  const gone = await page.evaluate(async () => (await fetch('bg/mp-mrzr.webp')).status);
+  const gone = await page.evaluate(async () => (await fetch('assets/bg/quebec-night.webp')).status);
   check('старый файл фона не отдаётся', gone === 404, gone);
 
   await page.click('.mode[data-mode="staff"]');
@@ -283,7 +301,7 @@ function railInfo(page) {
   await context.close();
 
   async function seeded(value, width) {
-    const ctx = await browser.newContext({ viewport: { width, height: width > 700 ? 800 : 844 } });
+    const ctx = await authed({ viewport: { width, height: width > 700 ? 800 : 844 } });
     await ctx.addInitScript(v => { Math.random = () => v; }, value);
     const p = await ctx.newPage();
     const seen = [];
@@ -306,7 +324,7 @@ function railInfo(page) {
   check('другой жребий может выбрать технику', other.id === 'tanks' && other.later === other.id && other.seen.length === 1 && /tanks-d\.webp/.test(other.seen[0]), JSON.stringify(other));
   check('узкий экран берёт мобильный кроп и только его', phone.id === 'kremlin' && phone.variant === 'm' && phone.seen.length === 1 && /kremlin-m\.webp/.test(phone.seen[0]), JSON.stringify(phone));
 
-  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const mobile = await authed({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const mp = await mobile.newPage();
   await mp.goto(SITE, { waitUntil: 'domcontentloaded' });
   await mp.waitForSelector('.rail-item');
@@ -343,8 +361,64 @@ function railInfo(page) {
   check('телефон: первый инструмент виден', mobileFocus.id === 'sec-users' && mobileFocus.scroll === 0 && mobileFocus.rail === 0 && mobileFocus.inView && mobileFocus.page <= 1, JSON.stringify(mobileFocus));
   await mp.screenshot({ path: SHOT + '/mobile-admin.png' });
   await mobile.close();
+
+  // каждая плитка обоих режимов: все действия ведут на рабочие страницы (без 404, «нет прав» и ошибок консоли)
+  const tour = await authed({ viewport: { width: 1440, height: 900 } });
+  const tp = await tour.newPage();
+  const tErr = [];
+  tp.on('pageerror', e => tErr.push('js ' + e.message));
+  tp.on('console', m => { if (m.type() === 'error') tErr.push('console ' + m.text()); });
+  tp.on('response', r => { if (r.status() >= 400 && (r.url().startsWith(SITE) || r.url().startsWith(API))) tErr.push(r.status() + ' ' + r.url()); });
+  await tp.goto(SITE + '#/'); await tp.waitForSelector('#rail .rail-item');
+  const visited = [];
+  for (const mode of ['staff', 'admin']) {
+    await tp.click(`.mode[data-mode="${mode}"]`);
+    const ids = await tp.$$eval('#rail .rail-item', ns => ns.map(n => n.id));
+    for (const id of ids) {
+      await tp.goto(SITE + '#/'); await tp.waitForSelector('#stage h1');
+      await tp.click('#' + id);
+      const acts = await tp.$$eval('#stage .act', ns => ns.map(a => ({ href: a.getAttribute('href'), ext: a.target === '_blank' })));
+      if (!acts.length) tErr.push('нет действий у ' + id);
+      for (const a of acts) {
+        if (a.ext) { const st = (await fetch(a.href)).status; if (st !== 200) tErr.push(st + ' ' + a.href); visited.push(id + ' ↗'); continue; }
+        await tp.goto(SITE + a.href);
+        await tp.waitForFunction(() => !document.querySelector('#app .loading') && document.querySelector('#app').textContent.trim().length > 0, null, { timeout: 15000 });
+        await tp.waitForTimeout(250);
+        const txt = await tp.textContent('#app');
+        if (/Страница не найдена|Недостаточно прав|Раздел недоступен/.test(txt)) tErr.push(id + ' ' + a.href + ' :: ' + txt.slice(0, 120));
+        if (await tp.locator('#app .alert.err').count()) tErr.push(id + ' ' + a.href + ' alert.err ' + (await tp.textContent('#app .alert.err')).slice(0, 160));
+        const sel = await tp.evaluate(() => { const n = document.querySelector('#rail [aria-selected="true"]'); return n ? n.id : ''; });
+        if (sel !== id) tErr.push(`${a.href}: в ленте выбрана ${sel}, ждали ${id}`);
+        visited.push(id + ' ' + a.href);
+      }
+    }
+  }
+  check('обход: каждая плитка и каждое действие открываются без ошибок', tErr.length === 0 && visited.length >= 28, JSON.stringify(tErr) + ' visited=' + visited.length);
+  console.log('обход:', visited.join(' | '));
+  await tour.close();
+
+  // скриншоты: главная сотрудника и администратора, внутренние страницы (десктоп 1440×900 и телефон 390×844)
+  const SH = process.env.MAIN_SHOTS;
+  if (SH) {
+    fs.mkdirSync(SH, { recursive: true });
+    const shots = [['staff', STAFF_TOK, 'staff', '#/'], ['admin', TOK, 'admin', '#/'], ['study', STAFF_TOK, 'staff', '#/study'], ['reports', STAFF_TOK, 'staff', '#/reports'], ['admin-laws', TOK, 'admin', '#/admin/laws'], ['admin-users', TOK, 'admin', '#/admin/users']];
+    for (const [vp, w, h] of [['desktop', 1440, 900], ['mobile', 390, 844]]) {
+      for (const [name, tok, mode, hash] of shots) {
+        const c = await authed({ viewport: { width: w, height: h }, isMobile: vp === 'mobile', hasTouch: vp === 'mobile' }, tok);
+        await c.addInitScript(() => { sessionStorage.setItem('vp_bg', sessionStorage.getItem('vp_bg') || 'kremlin'); });
+        const sp = await c.newPage();
+        await sp.goto(SITE + '#/'); await sp.waitForSelector('#rail .rail-item');
+        if (mode === 'admin') await sp.click('.mode[data-mode="admin"]');
+        if (hash !== '#/') await sp.goto(SITE + hash);
+        await sp.waitForFunction(() => !document.querySelector('#app .loading'));
+        await sp.waitForTimeout(900);
+        await sp.screenshot({ path: `${SH}/${vp}_${name}.png` });
+        await c.close();
+      }
+    }
+  }
+  check('нет ошибок JS на главной', jsErr.length === 0, jsErr.join(' | '));
   await browser.close();
-  srv.kill();
   const failed = results.filter(x => !x.ok);
   console.log(failed.length ? 'FAILED ' + failed.length : 'ALL PASS');
   process.exit(failed.length ? 1 : 0);

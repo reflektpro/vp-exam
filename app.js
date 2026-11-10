@@ -65,63 +65,12 @@ async function render() {
 function hasRole(role) { const l = { candidate: 0, examiner: 1, admin: 2 }; return App.me && (l[App.me.role] || 0) >= l[role]; }
 function noAccess(c) { return `<div class="card noacc"><h2>Раздел недоступен</h2><p>Этот раздел открывается с ролью ${CAP_RU[c] || ''}. Роли назначает администратор — обратитесь к руководству ГУ ВП.</p>
   <p class="small mut">Без ролей доступны «База данных» и профиль.</p><div class="row"><a class="btn" href="#/">На главную</a><a class="btn" href="#/docs">База данных</a></div></div>`; }
-// Разделы сайта (шторка): [путь, название, иконка, нужная роль (null — всем, кто вошёл), подпись]
-const MENU = [
-  ['/', 'Главная', '⌂', null],
-  ['/study', 'Учебный отдел', '🎓', 'vp', 'курсы, лекции, экзамены'],
-  ['/reatt', 'Переаттестация', '📋', 'reatt'],
-  ['/reports', 'Отчёты', '📝', 'vp', 'еженедельный отчёт'],
-  ['/premiums', 'Премирование', '₽', 'vp', 'премии недели'],
-  ['/promo', 'Система повышения', '⭐', 'vp'],
-  ['/docs', 'База данных', '📚', null, 'документация'],
-  ['/people', 'Личные дела', '🗂', 'ss', 'только старший состав'],
-  ['/lead', 'Руководство', '🛡', 'lead', 'проверка отчётов, фонд, бюджет'],
-  ['/admin', 'Админка', '⚙', 'examiner'],
-  ['/profile', 'Профиль', '👤', null],
-];
-const MENU_ALIAS = { '/lectures': '/study', '/lecture': '/study', '/exams': '/study', '/exam': '/study', '/course': '/study', '/topic': '/study', '/attempt': '/study', '/doc': '/docs', '/doc-edit': '/docs', '/person': '/people' };
-function menuActive(path) {
-  const top = '/' + (path.split('/')[1] || '').split('?')[0];
-  const t = MENU_ALIAS[top] || top;
-  return t === '/' ? '/' : t;
-}
-function openDrawer(open) {
-  const d = $('#drawer'), ov = $('#drawerOv'), b = $('#burger');
-  document.body.classList.toggle('drawer-open', open);
-  d.setAttribute('aria-hidden', open ? 'false' : 'true'); ov.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (open) { const a = d.querySelector('a.on') || d.querySelector('a'); if (a) a.focus({ preventScroll: true }); }
-}
-function renderHeader() {
-  const s = App.config && App.config.settings;
-  if (s) { $('#siteTitle').textContent = s.site_title; document.title = s.site_title; }
-  const path = (location.hash || '#/').slice(1) || '/';
-  const burger = $('#burger'), drawer = $('#drawer');
-  if (!App.me) { $('#userbox').innerHTML = ''; burger.hidden = true; drawer.innerHTML = ''; openDrawer(false); $('#secTitle').textContent = 'Главное управление Военной полиции'; return; }
-  const act = menuActive(path);
-  const items = MENU.filter(m => !m[3] || can(m[3]));
-  const cur = MENU.find(m => m[0] === act);
-  $('#secTitle').textContent = cur && cur[0] !== '/' ? cur[1] : 'Главное управление Военной полиции';
-  const u = App.me;
-  drawer.innerHTML = `<div class="drawer-head"><img src="assets/emblem.png" alt=""><div><b>ГУ ВП</b><div class="small mut">${esc(userName(u))}${u.rank ? ' · ' + esc(u.rank) : ''}</div></div>
-      <button type="button" class="drawer-x" id="drawerX" aria-label="Закрыть меню">✕</button></div>
-    <nav class="drawer-nav">${items.map(m => `<a href="#${m[0]}" class="${m[0] === act ? 'on' : ''}"><i>${m[2]}</i><span>${esc(m[1])}${m[4] ? `<small>${esc(m[4])}</small>` : ''}</span></a>`).join('')}</nav>
-    <div class="drawer-foot"><a href="#/theme">Фон</a>${can('vp') ? `<a href="${esc(CFG.REPORTS_URL.replace(/otchet\.html$/, ''))}" target="_blank" rel="noopener">Сайт бланков ↗</a>` : ''}
-      <div class="small mut">${rolesText(u)}</div></div>`;
-  burger.hidden = false;
-  burger.onclick = () => openDrawer(!document.body.classList.contains('drawer-open'));
-  $('#drawerOv').onclick = () => openDrawer(false);
-  $('#drawerX').onclick = () => openDrawer(false);
-  drawer.querySelectorAll('a[href^="#"]').forEach(a => a.addEventListener('click', () => openDrawer(false)));
-  $('#userbox').innerHTML = `<a href="#/profile" class="ub-me" title="Профиль">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : ''}<span>${esc(userName(u))}</span></a><button class="btn sm" id="logoutBtn">Выйти</button>`;
-  $('#logoutBtn').onclick = async () => { try { await api('POST', '/api/logout'); } catch (_) {} localStorage.removeItem(TOKEN_KEY); App.me = null; location.hash = '#/'; render(); };
-}
 function rolesText(u) {
   const r = [];
   if (u.super) r.push('Главный администратор'); else if (u.role === 'admin') r.push('Администратор'); else if (u.role === 'examiner') r.push('Проверяющий');
   if (u.leader) r.push('Руководство ГУ ВП'); if (u.senior) r.push('Старший состав'); if (u.vp) r.push('ВП'); if (u.reatt) r.push('Переаттестация');
   return r.length ? 'Роли: ' + r.join(', ') : 'Ролей пока нет';
 }
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) { openDrawer(false); $('#burger').focus(); } });
 
 // ---------- старт ----------
 async function boot() {
@@ -169,16 +118,14 @@ function loginPage() {
   if (App.configError) msg += `<div class="alert err">Сервер недоступен: ${esc(App.configError)}</div>`;
   else if (!oauthOk) msg += `<div class="alert warn"><b>OAuth не настроен.</b> Вход через Discord временно недоступен — администратору нужно указать DISCORD_CLIENT_ID и DISCORD_CLIENT_SECRET в настройках сервера.</div>`;
   if (App.authError) msg += `<div class="alert err">Не удалось войти: ${esc(App.authError)}</div>`;
-  setView(`<div class="login card">
-      <img src="assets/emblem.png" alt="">
+  setView(`<section class="stage login">
+      <p class="kicker">Главное управление Военной полиции</p>
       <h1>${esc(s ? s.site_title : 'ГУ ВП — портал')}</h1>
-      <p class="mut">Главное управление Военной полиции</p>
-      ${s && s.welcome_text ? `<p class="welcome mut">${esc(s.welcome_text)}</p>` : ''}
+      <p class="lead">${s && s.welcome_text ? esc(s.welcome_text) : 'Учёба, экзамены, переаттестация, отчёты и премии сотрудников ГУ ВП.'}</p>
       ${msg}
-      <p><button class="btn discord" id="loginBtn" ${oauthOk ? '' : 'disabled'}>Войти через Discord</button></p>
-      <p><a class="btn sm" href="#/theme">Фон</a></p>
-      <p class="login-note small mut"><svg class="login-note-ic" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 11V8a6 6 0 0 1 12 0v3M5 11h14v10H5z"/></svg><span>Вход идёт через официальную авторизацию Discord. Сайт получает только ваш ник, аватар и Discord ID — пароль, почта, серверы и сообщения нам недоступны.</span></p>
-    </div>`);
+      <div class="acts"><button type="button" class="act" id="loginBtn" ${oauthOk ? '' : 'disabled'}>Войти через Discord</button></div>
+      <p class="login-note"><svg class="login-note-ic" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 11V8a6 6 0 0 1 12 0v3M5 11h14v10H5z"/></svg><span>Вход идёт через официальную авторизацию Discord. Сайт получает только ваш ник, аватар и Discord ID — пароль, почта, серверы и сообщения нам недоступны.</span></p>
+    </section>`);
   $('#loginBtn').onclick = () => {
     const ret = location.origin + location.pathname;
     location.href = CFG.API_BASE + '/auth/login?return=' + encodeURIComponent(ret);
@@ -223,12 +170,20 @@ route('/lecture/:id', async (id) => {
     ${l.description ? `<div class="card flat" style="margin-top:14px"><div class="welcome">${esc(l.description)}</div></div>` : ''}
     ${l.kind === 'text' ? `<p><a class="btn" href="${back}">← ${l.topic_id ? 'К теме' : 'К курсу'}</a></p>` : ''}`);
   if (l.kind === 'text') {
+    lectureFont();
     const setFs = (n) => { n = Math.max(15, Math.min(22, n)); localStorage.setItem('vp_lec_fs', n); $('#lecText').style.setProperty('--lec-fs', n + 'px'); };
     $('#fsDn').onclick = () => setFs((Number(localStorage.getItem('vp_lec_fs')) || 18) - 1);
     $('#fsUp').onclick = () => setFs((Number(localStorage.getItem('vp_lec_fs')) || 18) + 1);
     textReader(l);
   } else window.VPPlayer.mount($('#playerBox'), l, $('#pmsg'));
 }, { cap: 'vp' });
+// Шрифт для чтения лекций (Golos Text) подгружается только на странице текстовой лекции.
+function lectureFont() {
+  if (document.getElementById('lecFont')) return;
+  const l = document.createElement('link'); l.id = 'lecFont'; l.rel = 'stylesheet';
+  l.href = 'https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap';
+  document.head.appendChild(l);
+}
 // Текстовая лекция: засчитывается по времени чтения (длительность лекции). Время идёт, только пока вкладка открыта и активна;
 // сервер проверяет прирост по реальному времени (тот же heartbeat, что у видео), поэтому «пролистать» лекцию нельзя.
 function textReader(l) {

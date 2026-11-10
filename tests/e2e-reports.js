@@ -2,6 +2,7 @@
 // руководство (vp-exam, :8080, #/lead): сводная таблица, проверка пунктов, фонд, надбавки, экспорт, нарушения, бюджет, таблицы выплат.
 // Запуск: bash /tmp/reset.sh (wrangler dev :8787, миграции 0001–0008), node serve.js (:8080), SITE_DIR=../vp_raport_offline PORT=8081 node serve.js.
 const { chromium } = require('playwright');
+const { shellMenu } = require('./shell-helper');
 const fs = require('fs');
 const API = 'http://localhost:8787', SITE = 'http://localhost:8080/', OFF = 'http://localhost:8081/';
 const SHOTS = process.env.SHOTS || (__dirname + '/shots/'); fs.mkdirSync(SHOTS, { recursive: true });
@@ -107,8 +108,10 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   // ---------- 3. руководство: сводная таблица ----------
   const as = async (tok, hash) => { await page.goto(SITE + '#/'); await page.evaluate(t => localStorage.setItem('vpexam_token', t), tok); await page.reload(); await page.waitForSelector('#logoutBtn'); await page.goto(SITE + '#' + hash); };
   await as(L, '/lead'); await page.waitForSelector('table.prem');
-  check('руководство: в шторке «Руководство», без «Админки»', /Руководство/.test(await page.textContent('#drawer')) && !/Админка/.test(await page.textContent('#drawer')), await page.textContent('#drawer'));
-  check('учебный сайт: верхней полосы ссылок нет, есть бургер', !(await page.$('.eco-bar')) && !(await page.$('#nav')) && await page.isVisible('#burger'));
+  check('руководство: плитка «Неделя» подсвечена в режиме администратора', await page.getAttribute('#sec-lead', 'aria-selected') === 'true' && await page.getAttribute('.mode[data-mode="admin"]', 'aria-checked') === 'true');
+  check('учебный сайт: верхней полосы ссылок нет, есть лента разделов', !(await page.$('.eco-bar')) && !(await page.$('#nav')) && await page.isVisible('#rail'));
+  { const mnu = await shellMenu(page); check('руководство: в ленте «Неделя» и разделы руководства, без админки', mnu.includes('#/lead') && mnu.includes('#/lead/budget') && !mnu.some(h => /^#\/admin/.test(h)), mnu); }
+  await page.goto(SITE + '#/lead'); await page.waitForSelector('table.prem');
   const rowTxt = async (uid) => page.textContent(`tr[data-uid="${uid}"]`);
   check('таблица: сотрудник с отчётом — нормальный план, база 499 000 (220 000 + 279 000)', /Нормальный/.test(await rowTxt(E1)) && /499\s000/.test(await rowTxt(E1)), await rowTxt(E1));
   check('таблица: сотрудник состава без отчёта — подсвечен «Нет отчёта»', (await page.getAttribute(`tr[data-uid="${E2}"]`, 'class')).includes('r-missing') && /Нет отчёта/.test(await rowTxt(E2)));
@@ -239,7 +242,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   // мобильный вид
   const m = await b.newPage({ viewport: { width: 390, height: 800 } }); await m.goto(OFF + 'otchet.html'); await m.waitForSelector('#ecoBar');
   check('мобильный: шапка сайта отчётов помещается в ширину', await m.evaluate(() => { const e = document.querySelector('header.topbar'); return e.scrollWidth <= e.clientWidth + 1 && e.getBoundingClientRect().right <= innerWidth + 1; }));
-  await m.goto(SITE + '#/'); await m.waitForSelector('.login, #burger:not([hidden])');
+  await m.goto(SITE + '#/'); await m.waitForSelector('.login, #rail .rail-item');
   check('мобильный: учебный сайт без горизонтальной прокрутки', await m.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await m.screenshot({ path: SHOTS + 'rep-mobile.png' }); await m.close();
   check('нет ошибок JS на страницах', errs.length === 0, errs);

@@ -5,36 +5,47 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ГУ ВП — портал</title>
 <meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=8ffb6b1">
-<script>document.documentElement.dataset.bg = (function(){ try { return localStorage.getItem('vp_bg') || 'quebec-night'; } catch (e) { return 'quebec-night'; } })();</script>
+<link rel="stylesheet" href="style.css?v=6f44ab5">
+<script>(function(){var ids=['kremlin','formation','tanks'],id=null;try{id=sessionStorage.getItem('vp_bg');}catch(e){}if(ids.indexOf(id)<0){id=ids[Math.min(ids.length-1,Math.floor(Math.random()*ids.length))];try{sessionStorage.setItem('vp_bg',id);}catch(e){}}var v=null;try{v=sessionStorage.getItem('vp_bg_v');}catch(e){}if(v!=='d'&&v!=='m'){v=window.matchMedia('(max-width: 720px)').matches?'m':'d';try{sessionStorage.setItem('vp_bg_v',v);}catch(e){}}var h=document.documentElement;h.dataset.bg=id;h.dataset.bgVariant=v;})();</script>
 </head>
 <body>
 <div class="scene" aria-hidden="true"><div class="scene-photo" id="scenePhoto"></div><div class="scene-veil"></div></div>
-<header class="topbar">
-  <button type="button" class="burger" id="burger" aria-label="Открыть меню" aria-controls="drawer" aria-expanded="false" hidden><span></span><span></span><span></span></button>
-  <a href="#/" class="brand"><img src="assets/emblem.png" alt="ГУ ВП"><div><div class="t1" id="siteTitle">ГУ ВП — портал</div><div class="t2" id="secTitle">Главное управление Военной полиции</div></div></a>
-  <div id="userbox"></div>
-</header>
-<div class="drawer-ov" id="drawerOv" hidden></div>
-<aside class="drawer" id="drawer" aria-label="Разделы сайта" aria-hidden="true"></aside>
-<main id="app"><div class="loading">Загрузка…</div></main>
-<footer class="foot">ГУ ВП · портал Главного управления Военной полиции · RMRP «Патрики»</footer>
+<div class="shell" id="shell">
+  <header class="top">
+    <button type="button" class="brand" id="homeMark" aria-label="ГУ ВП — на главную">
+      <img src="assets/emblem.svg" alt="" width="54" height="36">
+      <span>ГУ ВП</span>
+    </button>
+    <a class="forms-link" id="formsLink" href="https://reflektpro.github.io/vp-raport-offline/" target="_blank" rel="noopener noreferrer">Бланки<span class="ext" aria-hidden="true">↗</span></a>
+    <div class="modes" id="modes" role="radiogroup" aria-label="Режим" hidden>
+      <button type="button" class="mode" data-mode="staff" role="radio" aria-checked="true">Сотрудник</button>
+      <button type="button" class="mode" data-mode="admin" role="radio" aria-checked="false">Администратор</button>
+    </div>
+    <div id="userbox"></div>
+  </header>
+  <div class="nav" id="secnav" hidden>
+    <button type="button" class="chev" id="chevL" aria-label="Предыдущий раздел">‹</button>
+    <div class="rail" id="rail" role="listbox" aria-label="Разделы"></div>
+    <button type="button" class="chev" id="chevR" aria-label="Следующий раздел">›</button>
+  </div>
+  <main id="app"><div class="loading">Загрузка…</div></main>
+</div>
 <div id="toast" class="toast" hidden></div>
-<script>window.VP_VERSION = "8ffb6b1";</script>
-<script src="config.js?v=8ffb6b1"></script>
-<script src="qtypes.js?v=8ffb6b1"></script>
-<script src="app.js?v=8ffb6b1"></script>
-<script src="player.js?v=8ffb6b1"></script>
-<script src="admin.js?v=8ffb6b1"></script>
-<script src="reports.js?v=8ffb6b1"></script>
-<script src="portal.js?v=8ffb6b1"></script>
-<script src="dossier.js?v=8ffb6b1"></script>
-<script src="theme.js?v=8ffb6b1"></script>
-<script src="laws-ui.js?v=8ffb6b1"></script>
+<script>window.VP_VERSION = "6f44ab5";</script>
+<script src="config.js?v=6f44ab5"></script>
+<script src="qtypes.js?v=6f44ab5"></script>
+<script src="app.js?v=6f44ab5"></script>
+<script src="player.js?v=6f44ab5"></script>
+<script src="admin.js?v=6f44ab5"></script>
+<script src="reports.js?v=6f44ab5"></script>
+<script src="portal.js?v=6f44ab5"></script>
+<script src="dossier.js?v=6f44ab5"></script>
+<script src="theme.js?v=6f44ab5"></script>
+<script src="laws-ui.js?v=6f44ab5"></script>
+<script src="console.js?v=6f44ab5"></script>
 </body>
 </html>

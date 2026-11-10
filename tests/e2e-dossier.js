@@ -2,6 +2,7 @@
 // повышение обновляет профиль, архив, журнал, вёрстка на телефоне. Headless, вход — /__test/login, без Discord.
 // Запуск: bash /tmp/reset.sh (миграции 0001–0010), node serve.js (:8080).
 const { chromium } = require('playwright');
+const { shellMenu } = require('./shell-helper');
 const fs = require('fs');
 const API = 'http://localhost:8787', SITE = 'http://localhost:8080/';
 const SHOTS = process.env.SHOTS || (__dirname + '/shots/'); fs.mkdirSync(SHOTS, { recursive: true });
@@ -208,16 +209,16 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   // не-СС (ВП, сам сотрудник, без ролей): пункта нет, страницы закрыты
   for (const [who, tok] of [['ВП', T.vp2], ['сам сотрудник', T.vp], ['без ролей', T.none]]) {
     const V = await page(tok);
-    await go(V, '/', '#drawer');
-    const menu = await V.$$eval('#drawer a', l => l.map(a => a.getAttribute('href')));
+    await go(V, '/', '#userbox a');
+    const menu = await shellMenu(V);
     const tiles = await V.$$eval('#app a', l => l.map(a => a.getAttribute('href') || ''));
     const pages = [];
     for (const h of ['/people', '/person/' + U.vp, `/person/${U.vp}?tab=log`, `/person/${U.vp}/edit`, `/person/${U.vp}/event`]) { await go(V, h, '.noacc'); const t = await V.textContent('#app'); if (t.includes('Иван Петров') || t.includes('СЕКРЕТНАЯ')) pages.push(h); }
-    check(`UI ${who}: «Личные дела» нет в шторке и на главной, страницы закрыты`, !menu.some(h => /people|person/.test(h)) && !tiles.some(h => /people|person/.test(h)) && !pages.length, { menu, pages });
+    check(`UI ${who}: «Личные дела» нет в ленте и на главной, страницы закрыты`, !menu.some(h => /people|person/.test(h)) && !tiles.some(h => /people|person/.test(h)) && !pages.length, { menu, pages });
     if (who === 'сам сотрудник') { await go(V, '/profile', '#pf'); check('UI профиль: нет ссылки на своё личное дело', !(await V.$$eval('a', l => l.some(a => /person/.test(a.getAttribute('href') || '')))) ); await V.screenshot({ path: SHOTS + 'dossier-noacc.png' }); }
     await V.context().close();
   }
-  await go(P, '/', '#drawer'); check('UI СС: пункт «Личные дела» в шторке', (await P.$$eval('#drawer a', l => l.map(a => a.getAttribute('href')))).includes('#/people'));
+  await go(P, '/', '#rail .rail-item'); check('UI СС: раздел «Личные дела» в ленте', (await shellMenu(P)).includes('#/people'));
   // телефон
   const M = await page(T.ss, true); const mob = [];
   for (const [h, sel, shot] of [['/people', '.pcard', 'm-list'], ['/person/' + U.vp, '.dztabs', 'm-main'], [`/person/${U.vp}?tab=reports`, '#dzbody', 'm-reports'], [`/person/${U.vp}?tab=discipline`, '.ev', 'm-discipline'], [`/person/${U.vp}?tab=timeline`, 'ol.tl', 'm-timeline'], [`/person/${U.vp}/edit`, '#dzf', 'm-edit'], [`/person/${U.vp}/event`, '#evf', 'm-event']]) {

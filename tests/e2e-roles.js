@@ -132,27 +132,29 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
     await p.goto(SITE + '#' + hash); await p.waitForSelector('#logoutBtn'); await p.waitForTimeout(700);
     return p;
   };
-  const menu = async (p) => p.$$eval('#drawer .drawer-nav a', a => a.map(x => x.getAttribute('href')));
+  const { shellMenu } = require('./shell-helper');
+  const menu = async (p) => shellMenu(p);
   const M = {};
   for (const who of ['none', 'vp', 'reatt', 'exam', 'admin', 'lead']) { const p = await open(T[who], '/'); M[who] = await menu(p); if (who === 'none') { await p.screenshot({ path: SHOTS + 'roles-none.png' }); } await p.context().close(); }
   const has = (who, ...h) => h.every(x => M[who].includes('#' + x)), hasNo = (who, ...h) => h.every(x => !M[who].includes('#' + x));
-  check('без ролей: только Главная, База данных, Профиль (Личные дела — только СС)', JSON.stringify(M.none) === JSON.stringify(['#/', '#/docs', '#/profile']), M.none);
-  check('ВП: учебный отдел, отчёты, премирование, повышение; без переаттестации/админки', has('vp', '/study', '/reports', '/premiums', '/promo', '/docs') && hasNo('vp', '/reatt', '/admin', '/lead', '/people'), M.vp);
-  check('Переаттестация: только переаттестация + общие', has('reatt', '/reatt', '/docs') && hasNo('reatt', '/study', '/reports', '/admin'), M.reatt);
-  check('Проверяющий: админка; без учебного отдела и руководства', has('exam', '/admin') && hasNo('exam', '/study', '/lead'), M.exam);
-  check('Админ: все разделы', has('admin', '/study', '/reatt', '/reports', '/premiums', '/promo', '/docs', '/people', '/lead', '/admin'), M.admin);
-  check('Руководство: разделы «Руководство» и «Личные дела»', has('lead', '/lead', '/people') && hasNo('lead', '/admin'), M.lead);
+  const ADM = ['/admin/users', '/admin/attempts', '/admin/courses', '/admin/lectures', '/admin/exams', '/admin/bank', '/admin/reatt', '/admin/laws', '/admin/audit', '/admin/settings', '/admin/media', '/admin/bases'];
+  check('без ролей: только База данных (профиль — в шапке; Личные дела — только СС)', JSON.stringify(M.none) === JSON.stringify(['#/docs']), M.none);
+  check('ВП: учебный отдел, отчёты, премирование, повышение; без переаттестации/админки', has('vp', '/study', '/reports', '/premiums', '/promo', '/docs') && hasNo('vp', '/reatt', '/lead', '/people', ...ADM), M.vp);
+  check('Переаттестация: только переаттестация + общие', has('reatt', '/reatt', '/docs') && hasNo('reatt', '/study', '/reports', ...ADM), M.reatt);
+  check('Проверяющий: проверка и люди; без учебного отдела, руководства и правки', has('exam', '/admin/attempts', '/admin/users') && hasNo('exam', '/study', '/lead', '/admin/bank', '/admin/settings'), M.exam);
+  check('Админ: все разделы', has('admin', '/study', '/reatt', '/reports', '/premiums', '/promo', '/docs', '/people', '/lead', '/lead/violations', '/lead/budget', '/lead/staff', '/lead/config', ...ADM), M.admin);
+  check('Руководство: разделы «Руководство» и «Личные дела»', has('lead', '/lead', '/people') && hasNo('lead', ...ADM), M.lead);
+  for (const who of ['none', 'vp', 'reatt']) { const p = await open(T[who], '/'); check(`${who}: переключателя «Администратор» нет, профиль в шапке`, await p.isHidden('#modes') && await p.isVisible('#userbox a[href="#/profile"]')); await p.context().close(); }
+  for (const who of ['exam', 'admin', 'lead']) { const p = await open(T[who], '/'); check(`${who}: есть режим «Администратор»`, await p.isVisible('#modes')); await p.context().close(); }
   // прямой переход в закрытый раздел
   let p = await open(T.none, '/study'); check('без ролей: прямой переход в учебный отдел → «Раздел недоступен»', /Раздел недоступен/.test(await p.textContent('main'))); await p.context().close();
   p = await open(T.reatt, '/premiums'); check('переаттестация: премирование недоступно', /Раздел недоступен/.test(await p.textContent('main'))); await p.context().close();
   // мобильная шторка
   p = await open(T.vp, '/', { width: 390, height: 800 });
-  check('мобильный: шторка скрыта, есть бургер', await p.isVisible('#burger') && await p.evaluate(() => document.getElementById('drawer').getBoundingClientRect().right <= 0));
-  await p.click('#burger'); await p.waitForTimeout(400);
-  check('мобильный: бургер открывает шторку', await p.evaluate(() => document.body.classList.contains('drawer-open') && document.getElementById('drawer').getBoundingClientRect().left >= 0));
-  await p.screenshot({ path: SHOTS + 'roles-drawer-mobile.png' });
-  await p.click('#drawer a[href="#/premiums"]'); await p.waitForTimeout(800);
-  check('мобильный: переход по пункту закрывает шторку', !(await p.evaluate(() => document.body.classList.contains('drawer-open'))) && /Премирование/.test(await p.textContent('main')));
+  check('мобильный: лента разделов в одну строку', await p.isVisible('#rail') && await p.evaluate(() => { const it = [...document.querySelectorAll('#rail .rail-item')]; return it.length > 1 && it.every(e => e.offsetTop === it[0].offsetTop); }));
+  await p.screenshot({ path: SHOTS + 'roles-rail-mobile.png' });
+  await p.click('#sec-premiums'); await p.click('#stage .act[href="#/premiums"]'); await p.waitForTimeout(800);
+  check('мобильный: плитка и действие открывают раздел', /Премирование/.test(await p.textContent('main')) && await p.getAttribute('#sec-premiums', 'aria-selected') === 'true');
   check('мобильный: без горизонтальной прокрутки', await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await p.context().close();
   // премирование: публичный список с раздельными итогами

@@ -10,25 +10,6 @@ function avatar(u, cls) { return u.avatar_url ? `<img class="ava ${cls || ''}" s
 function profileMissing(u) { return [!u.ic_name && 'Имя Фамилия', !u.rank && 'звание', !u.static_id && 'статик'].filter(Boolean); }
 
 // ---------- главная ----------
-async function homePage() {
-  const u = App.me, s = App.config ? App.config.settings : {};
-  const tiles = MENU.filter(m => m[0] !== '/' && (!m[3] || can(m[3])));
-  const anyRole = can('vp') || can('reatt') || can('examiner') || can('lead');
-  const miss = profileMissing(u);
-  let rep = null, courses = null;
-  try { [rep, courses] = await Promise.all([can('vp') ? api('GET', '/api/reports/my') : null, can('vp') ? api('GET', '/api/courses') : null]); } catch (_) {}
-  const TILE_TXT = { '/study': courses ? (() => { const c = courses.courses; const done = c.filter(x => x.complete).length; return c.length ? `Курсов: ${c.length}, пройдено: ${done}` : 'Курсы пока не опубликованы'; })() : 'Курсы, лекции и экзамены',
-    '/reports': rep ? (rep.report ? `Отчёт за неделю: ${(REP_ST[rep.report.status] || ['—'])[0].toLowerCase()}` : `Отчёт за неделю не сдан · срок ${fmtDate(rep.deadline)}`) : 'Еженедельный отчёт',
-    '/premiums': 'Премии недели: кто, за что, сколько', '/promo': 'Ступени, баллы и требования', '/docs': 'Документация и инструкции', '/people': 'Досье сотрудников ГУ ВП',
-    '/reatt': 'Тесты по законам и уставам', '/lead': 'Проверка отчётов, фонд, бюджет', '/admin': 'Лекции, экзамены, проверка, пользователи', '/profile': 'Имя, звание, статик, должность' };
-  setView(`<div class="card hero"><div class="row"><div style="flex:1;min-width:240px"><h1>${esc(s.site_title || 'ГУ ВП')}</h1>
-      <div class="mut">Здравствуйте, <b>${esc(userName(u))}</b>${u.rank ? ' · ' + esc(u.rank) : ''}</div>
-      ${s.welcome_text ? `<div class="welcome small mut" style="margin-top:8px">${esc(s.welcome_text)}</div>` : '<div class="welcome" hidden></div>'}</div></div></div>
-    ${!anyRole ? `<div class="alert info"><b>У вас пока нет ролей.</b> Учебный отдел, отчёты и премии открываются с ролью «ВП», переаттестация — с ролью «Переаттестация». Роли назначает администратор — обратитесь к руководству ГУ ВП. Сейчас доступны «База данных» и профиль.</div>` : ''}
-    ${miss.length ? `<div class="alert warn">Заполните профиль: ${miss.join(', ')}. Эти данные подставляются в отчёты и документы. <a href="#/profile">Открыть профиль</a></div>` : ''}
-    ${rep && !rep.report && rep.deadline > rep.now ? `<div class="alert info">Еженедельный отчёт за эту неделю ещё не отправлен. Срок — <b>${fmtDate(rep.deadline)}</b> МСК. <a href="${esc(CFG.REPORTS_URL)}">Заполнить отчёт</a></div>` : ''}
-    <div class="tiles-grid">${tiles.map(m => `<a class="tile-card" href="#${m[0]}"><i>${m[2]}</i><b>${esc(m[1])}</b><span class="small mut">${esc(TILE_TXT[m[0]] || m[4] || '')}</span></a>`).join('')}</div>`);
-}
 
 // ---------- учебный отдел: курсы ----------
 const TRACKS = [['rank', 'Система званий', 'Курсы по уставам, кодексам, законам и правилам проекта — для присвоения званий.'], ['position', 'Система должностей', 'Курсы для назначения на должность: тема, лекции и экзамен по каждой должности.']];
@@ -331,7 +312,7 @@ route('/doc-edit/:id', async (id) => {
 route('/profile', async () => {
   const u = App.me;
   const { attempts } = await api('GET', '/api/my/attempts');
-  setView(`<h1>Профиль</h1>
+  setView(`<div class="row between page-head"><h1>Профиль</h1><a class="btn sm" href="#/theme">Фон</a></div>
     <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:64px;height:64px;border-radius:50%;border:2px solid var(--gold)">` : ''}
       <div><div><b>${esc(u.global_name || u.username)}</b> <span class="mut">@${esc(u.username)}</span></div><div class="small mut">Discord ID: ${esc(u.id)} · ${esc(rolesText(u))}${u.super ? ' (главный администратор)' : ''}</div></div></div>
       <p class="small mut" style="margin-top:12px">Эти данные подставляются в еженедельный отчёт и документы на сайте бланков. Администраторы и старший состав могут их исправить — изменения записываются в журнал.</p>
