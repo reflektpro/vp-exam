@@ -3825,6 +3825,41 @@ async function deleteDoc(env, user, id) {
   return json({ ok: true });
 }
 
+// Ответ «старта» дополняется самой попыткой: клиенту не нужен второй запрос.
+async function withAttempt(env, user, res) {
+  if (!res || res.status !== 200) return res;
+  let d; try { d = await res.clone().json(); } catch (_) { return res; }
+  if (!d || !d.attempt_id) return res;
+  try { const a = await getAttempt(env, user, d.attempt_id); if (a.status === 200) d.attempt = (await a.json()).attempt; } catch (_) { /* попытку клиент запросит сам */ }
+  return json(d);
+}
+// Один запрос при входе: настройки сайта, текущий пользователь и данные разделов, которые нужны первому экрану.
+// Без входа (или с истёкшей сессией) — гостевой ответ: user = null.
+const BOOT_DATA = {
+  '/api/courses': [u => caps(u).vp, (env, u) => listCourses(env, u)],
+  '/api/exams': [u => caps(u).vp, (env, u) => listExams(env, u)],
+  '/api/lectures': [u => caps(u).vp, (env, u) => listLectures(env, u)],
+  '/api/reatt': [u => caps(u).reatt, (env, u) => listReatt(env, u)],
+  '/api/reports/my': [u => caps(u).vp, (env, u) => myReports(env, u, new URL('https://boot/api/reports/my'))],
+  '/api/admin/stats': [u => ['examiner', 'admin'].includes(u.role), env => adminStats(env)],
+  '/api/admin/users?q=': [u => ['examiner', 'admin'].includes(u.role), env => adminUsers(env, new URL('https://boot/api/admin/users?q='))],
+  '/api/admin/attempts?status=pending_review&kind=': [u => ['examiner', 'admin'].includes(u.role), env => adminAttempts(env, new URL('https://boot/api/admin/attempts?status=pending_review&kind='))],
+};
+async function bootstrap(request, env, url) {
+  const config = { oauth_configured: oauthConfigured(env), settings: await getSettings(env), redirect_uri: redirectUri(env, request) };
+  const hasToken = /^Bearer\s+\S+/.test(request.headers.get('Authorization') || '');
+  let user = null;
+  try { user = await authUser(request, env, { optional: true }); } catch (e) { if (!(e instanceof HttpError) || e.status !== 401) throw e; user = null; }
+  if (!user) return json({ config, user: null, session: hasToken ? 'expired' : 'none', data: {} });
+  const want = String(url.searchParams.get('want') || '').split(',').map(x => x.trim()).filter(x => BOOT_DATA[x]).slice(0, 8);
+  const data = {};
+  await Promise.all([...new Set(want)].map(async k => {
+    const [ok, fn] = BOOT_DATA[k];
+    try { if (!ok(user)) return; const r = await fn(env, user); if (r && r.status === 200) data[k] = await r.json(); } catch (_) { /* раздел клиент загрузит сам */ }
+  }));
+  return json({ config, user: publicUser(user), session: 'ok', data });
+}
+
 async function route(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname.replace(/\/+$/, '') || '/';
@@ -3844,6 +3879,7 @@ async function route(request, env, ctx) {
   let m;
   if ((m = /^\/media\/([A-Za-z0-9_-]{16,48})$/.exec(p)) && M === 'GET') return serveMedia(env, m[1]);
   if (!p.startsWith('/api/')) throw new HttpError(404, 'Не найдено');
+  if (p === '/api/bootstrap' && M === 'GET') return bootstrap(request, env, url);
   const user = await authUser(request, env);
 
   if (p === '/api/logout' && M === 'POST') { await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?1').bind(user._token_hash).run(); return json({ ok: true }); }
@@ -3903,7 +3939,7 @@ async function route(request, env, ctx) {
   if ((m = /^\/api\/lectures\/(\d+)\/heartbeat$/.exec(p)) && M === 'POST') return heartbeat(request, env, user, idParam(m[1]));
   if (p === '/api/exams' && M === 'GET') return listExams(env, user);
   if ((m = /^\/api\/exams\/(\d+)$/.exec(p)) && M === 'GET') return getExam(env, user, idParam(m[1]));
-  if ((m = /^\/api\/exams\/(\d+)\/start$/.exec(p)) && M === 'POST') return startExam(env, user, idParam(m[1]));
+  if ((m = /^\/api\/exams\/(\d+)\/start$/.exec(p)) && M === 'POST') return withAttempt(env, user, await startExam(env, user, idParam(m[1])));
   if (p === '/api/my/attempts' && M === 'GET') return myAttempts(env, user);
   if ((m = /^\/api\/attempts\/(\d+)$/.exec(p)) && M === 'GET') return getAttempt(env, user, idParam(m[1]));
   if ((m = /^\/api\/attempts\/(\d+)\/answers$/.exec(p)) && M === 'PUT') return putAnswers(request, env, user, idParam(m[1]));
@@ -3911,7 +3947,7 @@ async function route(request, env, ctx) {
   if ((m = /^\/api\/attempts\/(\d+)\/upload$/.exec(p)) && M === 'POST') return uploadAnswerFile(request, env, user, idParam(m[1]));
   if ((m = /^\/api\/uploads\/(\d+)$/.exec(p)) && M === 'GET') return getUpload(env, user, idParam(m[1]));
   if (p === '/api/reatt' && M === 'GET') return listReatt(env, user);
-  if ((m = /^\/api\/reatt\/([a-z0-9_-]{1,40})\/start$/.exec(p)) && M === 'POST') return startReatt(env, user, m[1]);
+  if ((m = /^\/api\/reatt\/([a-z0-9_-]{1,40})\/start$/.exec(p)) && M === 'POST') return withAttempt(env, user, await startReatt(env, user, m[1]));
 
   // еженедельные отчёты сотрудника
   if (p === '/api/reports/my' && M === 'GET') return myReports(env, user, url);
@@ -4046,6 +4082,7 @@ async function route(request, env, ctx) {
       const result = await decideProposal(env, user, idParam(m[1]), b.action, Number(b.generation), b.note);
       if (!result.ok) throw new HttpError(result.status, result.error);
       await audit(env, user, result.proposal.status === 'approved' ? 'laws.approve' : 'laws.reject', m[1], { doc: undefined, note: String(b.note || '').slice(0, 300) });
+      if (result.doc_id) { try { result.doc = await lawDocument(env, result.doc_id); } catch (_) { /* документ не обязателен в ответе */ } }
       return json(result);
     }
     if ((m = /^\/api\/admin\/laws\/flags\/(\d+)\/ack$/.exec(p)) && M === 'POST') {

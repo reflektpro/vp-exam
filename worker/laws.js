@@ -574,6 +574,7 @@ export async function decideProposal(env, actor, id, action, generation, note) {
   return {
     ok: true,
     proposal: { id, status, generation: generation + 1 },
+    doc_id: cur.doc_id,
     questions_unchanged: true,
     open_flags: open ? open.c : 0,
     message: action === 'approve'
