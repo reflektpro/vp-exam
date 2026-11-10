@@ -89,6 +89,26 @@ route('/course/:id', async (id) => {
       <h2>Выберите тему</h2>
       <div class="topic-grid">${c.topics.map(tcard).join('')}</div>
       ${c.exams.length ? `<h2 style="margin-top:22px">Экзамены курса</h2><ol class="steps">${c.exams.map(e => exStep({ ...e, topic_titles: e.topic_ids.map(x => (c.topics.find(t => t.id === x) || {}).title).filter(Boolean) })).join('')}</ol>` : ''}`);
+    // тема раскрывается прямо в курсе: лекции видны без отдельной страницы
+    $$('.topic-card').forEach(card => {
+      const tid = card.getAttribute('href').split('/').pop();
+      card.addEventListener('pointerenter', () => prefetch('/api/topics/' + tid));
+      card.onclick = (ev) => {
+        if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button) return;
+        ev.preventDefault();
+        const open = document.querySelector('.topic-inline');
+        if (open) { const same = open.dataset.t === tid; open.remove(); $$('.topic-card.inl-open').forEach(x => x.classList.remove('inl-open')); if (same) return; }
+        const box = document.createElement('div'); box.className = 'topic-inline inl-box'; box.dataset.t = tid;
+        box.innerHTML = '<div class="skel sm" aria-hidden="true"><i class="sk-l"></i><i class="sk-b"></i><i class="sk-b short"></i></div>';
+        card.after(box); card.classList.add('inl-open');
+        api('GET', '/api/topics/' + encodeURIComponent(tid)).then(d => {
+          if (!box.isConnected) return;
+          sessionStorage.setItem('vp_topic_ctx', JSON.stringify({ id: d.topic.id, root: d.topic.linked ? d.topic.linked.id : d.topic.id }));
+          box.innerHTML = `<div class="row between"><h3 style="margin:0">${esc(d.topic.title)}</h3><a class="btn sm" href="#/topic/${d.topic.id}">Вся тема</a></div>${topicSteps(d)}`;
+          requestAnimationFrame(() => { try { box.scrollIntoView({ block: 'nearest' }); } catch (_) {} });
+        }).catch(e => { box.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; });
+      };
+    });
     return;
   }
   const lecDone = c.required_done >= c.required_total;
@@ -102,10 +122,9 @@ route('/course/:id', async (id) => {
     ${c.lectures.length && !lecDone ? `<p class="small mut">${'Лекции идут по порядку: следующая открывается после полного просмотра предыдущей обязательной.'}</p>` : ''}`);
 }, { cap: 'vp' });
 
-route('/topic/:id', async (id) => {
-  const d = await api('GET', '/api/topics/' + encodeURIComponent(id));
-  const t = d.topic, pr = d.progress, pos = d.course.track === 'position';
-  sessionStorage.setItem('vp_topic_ctx', JSON.stringify({ id: t.id, root: t.linked ? t.linked.id : t.id }));
+// Шаги темы: лекции, полная выгрузка, видео и экзамены (страница темы и раскрытие темы в курсе).
+function topicSteps(d) {
+  const pos = d.course.track === 'position', pr = d.progress, t = d.topic;
   const mat = d.material ? (d.material.locked
       ? `<li class="step locked"><span class="dot">📄</span><div class="step-body"><div class="row between"><b>Полная выгрузка: ${esc(d.material.title)}</b><span class="badge lock">🔒 после лекций</span></div><div class="small mut">Все материалы темы целиком — откроются, когда пройдены все лекции темы.</div></div></li>`
       : `<li class="step watched"><span class="dot">📄</span><a class="step-body" href="#/doc/${d.material.doc_id}"><div class="row between"><b>Полная выгрузка: ${esc(d.material.title)}</b><span class="badge ok">открыта</span></div><div class="small mut">Все материалы темы целиком в Базе данных.</div></a></li>`) : '';
@@ -114,6 +133,13 @@ route('/topic/:id', async (id) => {
       ? `<li class="step locked"><span class="dot">🎬</span><div class="step-body"><div class="row between"><b>Видео по теме</b><span class="badge lock">🔒 после лекций</span></div></div></li>`
       : d.video.planned ? `<li class="step"><span class="dot">🎬</span><div class="step-body"><div class="row between"><b>Видео по теме</b><span class="badge">готовится</span></div><div class="small mut">Ролик с разбором примеров появится здесь.</div></div></li>`
       : `<li class="step watched"><span class="dot">🎬</span><div class="step-body"><b>Видео по теме</b>${yt}</div></li>`;
+  return `${!pr.total ? `<div class="alert info">${t.status === 'placeholder' ? 'Материал этой темы готовит руководство ГУ ВП.' : 'Лекции темы пока не опубликованы.'}</div>` : ''}
+    <ol class="steps">${d.lectures.map(lecStep).join('')}${mat}${vid}${d.exams.map(exStep).join('')}</ol>`;
+}
+route('/topic/:id', async (id) => {
+  const d = await api('GET', '/api/topics/' + encodeURIComponent(id));
+  const t = d.topic, pr = d.progress;
+  sessionStorage.setItem('vp_topic_ctx', JSON.stringify({ id: t.id, root: t.linked ? t.linked.id : t.id }));
   setView(`<p><a href="#/course/${d.course.id}">← ${esc(d.course.title)}</a></p>
     ${d.siblings.length > 1 ? `<div class="tracktabs topics">${d.siblings.map((x, i) => `<a class="${x.id === t.id ? 'on' : ''}" href="#/topic/${x.id}">${i + 1}. ${esc(x.title)}</a>`).join('')}</div>` : ''}
     <div class="card"><div class="row between"><h1 style="margin:0">${esc(t.title)}</h1>${pr.done ? '<span class="badge ok">✔ тема пройдена</span>' : can('admin') && TOPIC_ST[t.status] ? `<span class="badge ${TOPIC_ST[t.status][1]}">${TOPIC_ST[t.status][0]}</span>` : ''}</div>
@@ -122,32 +148,13 @@ route('/topic/:id', async (id) => {
       <div class="small mut" style="margin-top:8px">Лекций: ${pr.total}${pr.required_total ? ` · пройдено ${pr.required_done} из ${pr.required_total}` : ''}</div>
       <div class="bar"><i style="width:${pr.required_total ? Math.round(pr.required_done / pr.required_total * 100) : 0}%"></i></div>
       ${can('admin') ? `<div class="row" style="margin-top:10px"><a class="btn sm" href="#/admin/topic/${t.linked ? t.linked.id : t.id}">✎ Редактировать тему</a></div>` : ''}</div>
-    ${!pr.total ? `<div class="alert info">${t.status === 'placeholder' ? 'Материал этой темы готовит руководство ГУ ВП.' : 'Лекции темы пока не опубликованы.'}</div>` : ''}
-    <ol class="steps">${d.lectures.map(lecStep).join('')}${mat}${vid}${d.exams.map(exStep).join('')}</ol>
+    ${topicSteps(d)}
     ${pr.total && !pr.done ? '<p class="small mut">Лекции идут по порядку: следующая открывается после полного прохождения предыдущей.</p>' : ''}
     ${t.video_plan ? `<details class="card flat"><summary>План ролика (видят только администраторы)</summary><div class="md">${md(t.video_plan)}</div></details>` : ''}`);
 }, { cap: 'vp' });
 
 // ---------- отчёты (сотрудник) ----------
-route('/reports', async () => {
-  const d = await api('GET', '/api/reports/my');
-  const r = d.report;
-  const left = d.deadline - d.now;
-  const rej = r ? r.items.filter(i => i.review && i.review.status === 'rejected') : [];
-  const part = r ? r.items.filter(i => i.review && i.review.status === 'ok' && i.review.n_ok != null) : [];
-  setView(`<h1>Отчёты</h1>
-    <div class="card"><div class="row between"><h2 style="margin:0">Неделя ${weekLabel(d.week)}</h2>${r ? repBadge(r.status) + (r.late ? ' <span class="badge err">после срока</span>' : '') : '<span class="badge warn">не отправлен</span>'}</div>
-      <p class="small mut">Срок — <b>${fmtDate(d.deadline)}</b> МСК${left > 0 ? ` (осталось ${Math.floor(left / 86400000) ? Math.floor(left / 86400000) + ' дн. ' : ''}${Math.floor(left % 86400000 / 3600000)} ч)` : ' — прошёл'}. Отчёт после срока сохраняется, но премия по нему не начисляется.</p>
-      ${r ? `<div class="kv"><span>Версия</span><b>${r.version} от ${fmtDate(r.submitted_at)}</b></div><div class="kv"><span>Должность</span><b>${esc(r.position_name)}</b></div><div class="kv"><span>Адресат (кому)</span><b class="rep-to">${esc(r.addressee_name || '')}</b></div>
-        <div class="kv"><span>Баллы отчёта</span><b>${r.points}</b></div><div class="kv"><span>План недели</span><b>${r.plan ? `<span class="badge ${PLAN_RU[r.plan.level][1]}">${PLAN_RU[r.plan.level][0]}</span>` : '—'}</b></div>
-        ${r.comment ? `<div class="alert info" style="margin-top:10px"><b>Комментарий руководства:</b> ${esc(r.comment)}</div>` : ''}
-        ${rej.length ? `<div class="alert err small"><b>Не засчитано:</b> ${rej.map(i => esc(i.name) + (i.review.comment ? ' — ' + esc(i.review.comment) : '')).join('; ')}</div>` : ''}
-        ${part.length ? `<div class="alert warn small"><b>Засчитано частично:</b> ${part.map(i => `${esc(i.name)}: ${i.review.n_ok} из ${i.n}`).join('; ')}</div>` : ''}` : ''}
-      <div class="row" style="margin-top:12px"><a class="btn gold" href="${esc(CFG.REPORTS_URL)}">${r ? 'Изменить отчёт' : 'Заполнить отчёт'}</a><a class="btn" href="#/premiums">Премирование</a></div>
-      <p class="small mut">Отчёт заполняется на сайте бланков (тот же вход). Имя, звание и статик подставляются из <a href="#/profile">профиля</a>. Адресата («Кому») выбираете там же: по умолчанию командир батальона и комендант гарнизона пишут командиру бригады, старший состав — заместителю командира бригады по РЛС, остальные — ${esc(((d.addressees || [])[0] || {}).name || 'начальнику ГУ ВП')}.${d.addressee_default ? ` Вам по умолчанию — <b>${esc(((d.addressees || []).find(a => a.key === d.addressee_default) || {}).name || '')}</b>.` : ''}</p></div>
-    <div class="card flat"><h3>Мои отчёты</h3>${d.recent.length ? `<table><tr><th>Неделя</th><th>Кому</th><th>Статус</th><th>Отправлен</th><th>Версия</th><th>Комментарий</th></tr>
-      ${d.recent.map(x => `<tr><td>${weekLabel(x.week)}</td><td class="small">${esc(x.addressee_name || '')}</td><td>${repBadge(x.status)}${x.late ? ' <span class="badge err">после срока</span>' : ''}</td><td>${fmtDate(x.submitted_at)}</td><td class="num">${x.version}</td><td class="small">${esc(x.comment || '')}</td></tr>`).join('')}</table>` : '<p class="mut">Отчётов пока нет.</p>'}</div>`);
-}, { cap: 'vp' });
+// /reports — раздел «Отчёты» со встроенным бланком: report-embed.js
 
 // ---------- премирование (все ВП) ----------
 route('/premiums', () => premiumsPage(), { cap: 'vp' });

@@ -6,7 +6,7 @@ const FORMS_SITE = CFG.REPORTS_URL.replace(/otchet\.html$/, '');
 // Раздел: id, подпись плитки, кто видит (cap — по caps, role — по уровню роли), заголовок, пояснение, действия, карточки, маршруты.
 const STAFF_SECTIONS = [
   { id: 'study', label: 'Учёба', cap: 'vp', lead: 'Курсы по званиям и должностям: темы, лекции и экзамен в конце курса.',
-    acts: [{ label: 'Открыть учебный отдел', href: '#/study', primary: true }, { label: 'Все лекции', href: '#/lectures' }],
+    acts: [{ label: 'Курсы', href: '#/study', primary: true }, { label: 'Все лекции', href: '#/lectures' }],
     points: [['Курсы', 'Что назначено по должности и званию'], ['Экзамен курса', 'Открывается после лекций']],
     match: /^\/(study|course|topic|lectures?)(\/|$)/, data: 'courses' },
   { id: 'exams', label: 'Экзамены', cap: 'vp', lead: 'Список экзаменов сотрудника. Конкретный экзамен выбирается здесь.',
@@ -17,13 +17,13 @@ const STAFF_SECTIONS = [
     acts: [{ label: 'Мои переаттестации', href: '#/reatt', primary: true }],
     points: [['Допуск', 'Вид, до какого момента и сколько попыток осталось']],
     match: /^\/reatt(\/|$)/, data: 'reatt' },
-  { id: 'reports', label: 'Отчёты', cap: 'vp', lead: 'Свой отчёт за неделю. Бланк заполняется на сайте бланков, статус и список своих отчётов — здесь.',
-    acts: [{ label: 'Заполнить отчёт', ext: () => CFG.REPORTS_URL, primary: true, id: 'fill' }, { label: 'Мои отчёты', href: '#/reports', id: 'mine' }],
+  { id: 'reports', label: 'Отчёты', cap: 'vp', lead: 'Еженедельный отчёт: бланк текущей недели, отправка руководству и свои прошлые отчёты.',
+    acts: [{ label: 'Отчёт за неделю', href: '#/reports', primary: true }],
     points: [['Текущая неделя', 'Кому адресован отчёт и сдан ли он'], ['Прошлые недели', 'Кому, статус и версия']],
     match: /^\/reports(\/|$)/, data: 'report' },
   { id: 'forms', label: 'Бланки', cap: 'vp', lead: 'Сайт бланков ГУ ВП: еженедельный отчёт, рапорт на повышение и остальные формы.',
-    acts: [{ label: 'Открыть бланки', ext: () => FORMS_SITE, primary: true }],
-    points: [['Каталог', 'Все бланки на одном сайте'], ['Отчёт', 'Еженедельный бланк открывается отдельно из раздела «Отчёты»']] },
+    acts: [{ label: 'Бланки', href: '#/forms', primary: true }],
+    points: [['Каталог', 'Все бланки на одном сайте'], ['Отчёт', 'Еженедельный бланк — в разделе «Отчёты»']], match: /^\/forms(\/|$)/ },
   { id: 'premiums', label: 'Премии', cap: 'vp', lead: 'Кто сколько получил за выбранную неделю. До срока неделя закрыта.',
     acts: [{ label: 'Открыть премии', href: '#/premiums', primary: true }],
     points: [['Выбранная неделя', 'Суммы видны после срока']], match: /^\/premiums(\/|$)/ },
@@ -39,7 +39,7 @@ const ADMIN_SECTIONS = [
     acts: [{ label: 'К списку людей', href: '#/admin/users', primary: true }],
     points: [['Список', 'Кому какая роль назначена']], match: /^\/admin\/users?(\/|$)/, stats: s => [['Пользователей', s.users]] },
   { id: 'attempts', label: 'Проверка', role: 'examiner', lead: 'Попытки экзаменов и переаттестаций, которые ждут проверяющего.',
-    acts: [{ label: 'К работам', href: '#/admin/attempts', primary: true }, { label: 'Сводка', href: '#/admin' }],
+    acts: [{ label: 'Работы на проверке', href: '#/admin/attempts', primary: true }, { label: 'Сводка', href: '#/admin' }],
     points: [['Очередь', 'Работы на проверке']], match: /^\/admin(\/attempts?(\/.*)?)?$/,
     stats: s => [['Ждут проверки', s.pending_review], ['Переаттестаций на проверке', `${s.reatt_pending} из ${s.reatt_total}`], ['Идёт сейчас', s.in_progress], ['Сдали экзамен', s.passed]] },
   { id: 'courses', label: 'Курсы', role: 'admin', lead: 'Состав курса: темы, лекции и экзамен. Это правка, не экран, где сотрудник учится.',
@@ -58,7 +58,7 @@ const ADMIN_SECTIONS = [
     acts: [{ label: 'Открыть доступы', href: '#/admin/reatt', primary: true }],
     points: [['Выдачи', 'Срок и число попыток']], match: /^\/admin\/reatt(\/|$)/ },
   { id: 'laws', label: 'Законодательство', role: 'admin', lead: 'Сверки документов. Решение человека само не переписывает ответы вопросов.',
-    acts: [{ label: 'Открыть сверки', href: '#/admin/laws', primary: true }, { label: 'История', href: '#/admin/laws/history' }],
+    acts: [{ label: 'Сверки', href: '#/admin/laws', primary: true }, { label: 'История', href: '#/admin/laws/history' }],
     points: [['Сверка', 'Что изменилось в документе и какие вопросы это затрагивает']], match: /^\/admin\/laws(\/|$)/ },
   { id: 'people', label: 'Личные дела', cap: 'ss', lead: 'Досье сотрудников. Видит старший состав, руководство и администратор.',
     acts: [{ label: 'К списку дел', href: '#/people', primary: true }],
@@ -92,7 +92,7 @@ const ADMIN_SECTIONS = [
     points: [['Правила', 'Как считается премия']], match: /^\/lead\/config(\/|$)/ }
 ];
 
-const Shell = { mode: 'staff', index: 0, sig: '', data: {}, drag: null };
+const Shell = { mode: 'staff', index: 0, sig: '', drag: null, navT: 0 };
 function ssGet(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }
 function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} }
 function sectionOk(s) { return s.role ? hasRole(s.role) : s.cap ? can(s.cap) : true; }
@@ -104,6 +104,31 @@ function curPath() { return ((location.hash || '#/').slice(1) || '/').split('?')
 function onHome() { return curPath() === '/'; }
 function isCalm() { return /^\/(attempt|exam|lecture)(\/|$)/.test(curPath()); }
 const railEl = () => document.getElementById('rail');
+const primaryHref = (s) => ((s.acts || []).find(a => a.primary && a.href) || (s.acts || [])[0] || { href: '#/' }).href;
+
+// Запросы, которые делает страница раздела (запоминаются после первого захода) — для подгрузки заранее.
+const PF_DEFAULT = { '/study': ['/api/courses'], '/exams': ['/api/exams'], '/reatt': ['/api/reatt'], '/reports': ['/api/reports/my', '/api/report-config', '/api/promo-config'],
+  '/admin/users': ['/api/admin/users?q='], '/admin/attempts': ['/api/admin/attempts?status=pending_review&kind='], '/admin/reatt': ['/api/admin/reatt'], '/admin/laws': ['/api/admin/laws'],
+  '/lead': ['/api/lead/week'], '/lead/budget': ['/api/lead/budget', '/api/lead/staff'], '/admin/bank': ['/api/admin/bank/stats'] };
+let PF = {}; try { PF = JSON.parse(localStorage.getItem('vp_pf') || '{}') || {}; } catch (_) { PF = {}; }
+function pfPaths(routePath) { return (PF[routePath] || PF_DEFAULT[routePath] || []).filter(p => cacheable(p)); }
+function pfSection(s) { if (s) pfPaths(primaryHref(s).slice(1)).forEach(prefetch); }
+// Что запросить вместе с входом (сервер отдаёт только разрешённое по ролям).
+// Адреса всех действий каждой видимой плитки: сначала режим сотрудника, затем администратора (для проверок меню).
+window.vpMenu = function () {
+  const out = []; const take = (m) => sections(m).forEach(s => s.acts.forEach(a => out.push(a.href)));
+  take('staff'); if (adminAllowed()) take('admin'); return out;
+};
+window.bootWants = function () {
+  let path = curPath();
+  if (path === '/') {
+    const mode = ssGet('vp_mode') === 'admin' ? 'admin' : 'staff';
+    const id = ssGet('vp_sec_' + mode);
+    const s = (mode === 'admin' ? ADMIN_SECTIONS : STAFF_SECTIONS).find(x => x.id === id) || STAFF_SECTIONS[0];
+    path = primaryHref(s).slice(1);
+  }
+  return pfPaths(path).slice(0, 8);
+};
 
 function restoreShell() {
   const m = ssGet('vp_mode');
@@ -120,7 +145,7 @@ function saveShell() {
 function syncToRoute() {
   const p = curPath();
   if (p === '/' || p === '/profile' || p === '/theme') return;
-  for (const mode of ['staff', 'admin']) {
+  for (const mode of [Shell.mode, Shell.mode === 'admin' ? 'staff' : 'admin']) {
     const list = sections(mode);
     const i = list.findIndex(s => s.match && s.match.test(p));
     if (i >= 0) { Shell.mode = mode; Shell.index = i; saveShell(); return; }
@@ -134,17 +159,20 @@ function renderHeader() {
   const u = App.me;
   const box = $('#userbox'), modes = $('#modes'), nav = $('#secnav');
   $('#formsLink').href = FORMS_SITE;
-  if (!u) { box.innerHTML = ''; modes.hidden = true; nav.hidden = true; Shell.sig = ''; return; }
+  if (!u) { box.innerHTML = ''; modes.hidden = true; nav.hidden = true; Shell.sig = ''; Shell.userSig = ''; return; }
   if (!Shell.restored) { restoreShell(); Shell.restored = true; }
   if (Shell.mode === 'admin' && !adminAllowed()) Shell.mode = 'staff';
   syncToRoute();
   modes.hidden = !adminAllowed();
   modes.querySelectorAll('.mode').forEach(b => b.setAttribute('aria-checked', b.dataset.mode === Shell.mode ? 'true' : 'false'));
   nav.hidden = isCalm() || !visibleSections().length;
-  box.innerHTML = `<a href="#/profile" class="ub-me" title="Профиль">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : `<span class="ub-ini">${esc(initials(userName(u)))}</span>`}<span class="ub-name">${esc(userName(u))}</span></a><button type="button" class="ub-out" id="logoutBtn">Выйти</button>`;
-  $('#logoutBtn').onclick = async () => { try { await api('POST', '/api/logout'); } catch (_) {} localStorage.removeItem(TOKEN_KEY); App.me = null; Shell.data = {}; location.hash = '#/'; render(); };
+  const usig = [u.id, u.avatar_url, userName(u)].join('|');
+  if (Shell.userSig !== usig) {
+    box.innerHTML = `<a href="#/profile" class="ub-me" title="Профиль">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : `<span class="ub-ini">${esc(initials(userName(u)))}</span>`}<span class="ub-name">${esc(userName(u))}</span></a><button type="button" class="ub-out" id="logoutBtn">Выйти</button>`;
+    $('#logoutBtn').onclick = async () => { try { await api('POST', '/api/logout'); } catch (_) {} localStorage.removeItem(TOKEN_KEY); App.me = null; cacheClear(); location.hash = '#/'; render(); };
+    Shell.userSig = usig;
+  }
   renderRail();
-  if (!onHome()) Shell.data = {};   // после работы в разделе главная перечитает свежие цифры
 }
 
 function tileHtml(s, i) {
@@ -165,12 +193,12 @@ function renderRail() {
 }
 function markSelected() {
   const rail = railEl();
-  const home = onHome();
+  const other = ['/profile', '/theme'].includes(curPath());
   rail.querySelectorAll('.rail-item').forEach(el => {
     const on = Number(el.dataset.i) === Shell.index;
     el.setAttribute('aria-selected', on ? 'true' : 'false');
     el.tabIndex = on ? 0 : -1;
-    el.classList.toggle('here', on && !home && !['/profile', '/theme'].includes(curPath()));
+    el.classList.toggle('here', on && !other);
   });
 }
 
@@ -205,6 +233,12 @@ function reveal(node, dir) {
   if (Math.abs(next - rail.scrollLeft) < 1) return;
   rail.scrollLeft = next;
 }
+// Плитка сразу открывает рабочую страницу раздела (без промежуточной панели).
+function openSection(s) {
+  if (!s) return;
+  const h = primaryHref(s);
+  if (location.hash === h) render(); else location.hash = h;
+}
 function select(i, opts = {}) {
   const n = visibleSections().length;
   if (!n) return;
@@ -212,7 +246,10 @@ function select(i, opts = {}) {
   Shell.index = ((i % n) + n) % n;
   saveShell();
   markSelected();
-  if (onHome()) renderStage(); else location.hash = '#/';
+  clearTimeout(Shell.navT);
+  // стрелками можно пролистать несколько плиток подряд — страница открывается, когда выбор остановился
+  if (opts.defer) { pfSection(currentSection()); Shell.navT = setTimeout(() => openSection(currentSection()), 180); }
+  else openSection(currentSection());
   const node = railEl().querySelector('[aria-selected="true"]');
   if (opts.focus && node) node.focus({ preventScroll: true });
   let dir = opts.dir;
@@ -231,7 +268,7 @@ function setMode(next) {
   $$('#modes .mode').forEach(b => b.setAttribute('aria-checked', b.dataset.mode === Shell.mode ? 'true' : 'false'));
   renderRail();
   railEl().scrollTo({ left: 0, behavior: 'auto' });
-  if (onHome()) renderStage(); else location.hash = '#/';
+  openSection(currentSection());
   window.scrollTo(0, 0);
   const node = railEl().querySelector('[aria-selected="true"]');
   if (node) node.focus({ preventScroll: true });
@@ -293,7 +330,10 @@ function bindShell() {
   window.addEventListener('pointerup', endDrag);
   window.addEventListener('pointercancel', (e) => { if (Shell.drag && e.pointerId === Shell.drag.id) clearDrag(); });
   rail.addEventListener('lostpointercapture', (e) => { if (Shell.drag && e.pointerId === Shell.drag.id) clearDrag(); });
-  $$('#modes .mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  $$('#modes .mode').forEach(b => { b.addEventListener('click', () => setMode(b.dataset.mode)); b.addEventListener('pointerenter', () => { if (App.me) pfSection(sections(b.dataset.mode)[0]); }); });
+  // наведение на плитку — данные раздела начинают грузиться ещё до клика
+  rail.addEventListener('pointerover', (e) => { const el = e.target.closest && e.target.closest('.rail-item'); if (el) pfSection(visibleSections()[Number(el.dataset.i)]); });
+  rail.addEventListener('focusin', (e) => { const el = e.target.closest && e.target.closest('.rail-item'); if (el) pfSection(visibleSections()[Number(el.dataset.i)]); });
   $('#homeMark').addEventListener('click', () => {
     if (!App.me) { if (!onHome()) location.hash = '#/'; return; }
     select(0, { focus: true });
@@ -308,17 +348,17 @@ function bindShell() {
     if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
     if (t && t.closest && t.closest('.modes')) return;
     const onRail = t && t.closest && t.closest('.rail, .chev, #homeMark');
-    const onPage = (t === document.body || t === document.documentElement) && onHome();
+    const onPage = (t === document.body || t === document.documentElement);
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       if (!(onRail || onPage)) return;
       e.preventDefault();
       const step = e.key === 'ArrowRight' ? 1 : -1;
-      select(fromIndex(t) + step, { focus: true, dir: step });
-    } else if (e.key === 'ArrowDown' && t && t.closest && t.closest('.rail') && onHome()) {
-      const act = document.querySelector('#stage .act');
+      select(fromIndex(t) + step, { focus: true, dir: step, defer: true });
+    } else if (e.key === 'ArrowDown' && t && t.closest && t.closest('.rail')) {
+      const first = document.querySelector('#app a[href], #app button, #app input, #app select, #app textarea');
       const s = currentSection();
-      if (act && s && t.id === 'sec-' + s.id) { e.preventDefault(); act.focus(); }
-    } else if (e.key === 'ArrowUp' && t && t.closest && t.closest('#stage .acts')) {
+      if (first && s && t.id === 'sec-' + s.id) { e.preventDefault(); first.focus(); }
+    } else if (e.key === 'ArrowUp' && t && t.closest && t.closest('#app .subnav')) {
       e.preventDefault();
       const node = railEl().querySelector('[aria-selected="true"]');
       if (node) node.focus();
@@ -327,58 +367,15 @@ function bindShell() {
 }
 
 // ---------- главная ----------
-function homePage() {
-  setView('<section class="stage" id="stage" aria-live="polite"></section>');
-  renderStage();
-}
-
-// Данные для карточек главной: один запрос на раздел за заход на главную.
-function loadData(key) {
-  if (Shell.data[key]) return Shell.data[key];
-  const get = {
-    courses: () => api('GET', '/api/courses'),
-    exams: () => api('GET', '/api/exams'),
-    reatt: () => api('GET', '/api/reatt'),
-    report: () => api('GET', '/api/reports/my'),
-    stats: () => api('GET', '/api/admin/stats')
-  }[key];
-  const p = get();
-  Shell.data[key] = p;
-  p.catch(() => { if (Shell.data[key] === p) delete Shell.data[key]; });
-  return p;
-}
-const cardHtml = (t, m, cls) => `<div class="card${cls ? ' ' + cls : ''}"><b>${esc(t)}</b>${m ? `<div class="meta">${esc(m)}</div>` : ''}</div>`;
-function dataCards(s, d) {
-  if (s.data === 'courses') {
-    const all = (d.courses || []);
-    if (!all.length) return cardHtml('Курсы', 'Курсы пока не опубликованы');
-    const byTrack = [['rank', 'Система званий'], ['position', 'Система должностей']].map(([k, t]) => {
-      const c = all.filter(x => (x.track || 'rank') === k);
-      return c.length ? cardHtml(t, `Курсов: ${c.length}, пройдено: ${c.filter(x => x.complete).length}`) : '';
-    }).join('');
-    return byTrack;
-  }
-  if (s.data === 'exams') {
-    const ex = d.exams || [];
-    if (!ex.length) return cardHtml('Экзамены', 'Экзамены пока не опубликованы');
-    return ex.slice(0, 4).map(e => {
-      const last = e.attempts && e.attempts[0];
-      const st = last ? (STATUS_RU[last.status] || [last.status])[0] : e.can_start ? 'Доступен' : 'Закрыт';
-      return cardHtml(e.title, st);
-    }).join('') + (ex.length > 4 ? cardHtml(`Ещё экзаменов: ${ex.length - 4}`, 'Полный список — в разделе') : '');
-  }
-  if (s.data === 'reatt') {
-    const vs = d.versions || [];
-    if (!vs.length) return cardHtml('Допуск', 'Сейчас нет открытых переаттестаций. Доступ выдаёт администратор.');
-    return vs.slice(0, 4).map(v => cardHtml(v.title, v.active_attempt_id ? 'Есть начатая попытка'
-      : v.access ? `Доступ ${v.access.expires_at ? 'до ' + fmtDate(v.access.expires_at) + ' МСК' : 'бессрочный'}${v.access.attempts != null ? ' · попыток осталось: ' + v.access.left : ''}`
-      : v.can_start ? 'Доступна' : (v.reason || 'Недоступна'))).join('');
-  }
-  if (s.data === 'report') {
-    if (d.report) return cardHtml('Текущая неделя', 'Отчёт: ' + (REP_ST[d.report.status] || [d.report.status])[0].toLowerCase());
-    return cardHtml('Текущая неделя', `Отчёт не сдан · срок ${fmtDate(d.deadline)} МСК`, d.deadline > d.now ? 'warn' : 'err');
-  }
-  return '';
+// Главная — это рабочая страница выбранного раздела (тот же вид, что по плитке), плюс напоминания о профиле и ролях.
+async function homePage() {
+  const s = currentSection();
+  if (!s) { setView(`<section class="stage" id="stage"><p class="kicker">Сотрудник</p><h1>ГУ ВП</h1>${noticesHtml()}</section>`); return; }
+  const path = primaryHref(s).slice(1);
+  const r = App.routes.find(x => x.p !== '/' && x.re.test(path));
+  if (!r) return;
+  if ((r.opts.role && !hasRole(r.opts.role)) || (r.opts.cap && !can(r.opts.cap))) { setView(noAccess(r.opts.cap || 'admin')); return; }
+  await r.fn(...r.re.exec(path).slice(1));
 }
 function noticesHtml() {
   const u = App.me, out = [];
@@ -388,27 +385,42 @@ function noticesHtml() {
   if (miss.length) out.push(`<div class="alert warn">Заполните профиль: ${esc(miss.join(', '))}. Эти данные подставляются в отчёты и документы. <a href="#/profile">Открыть профиль</a></div>`);
   return out.join('');
 }
-function renderStage() {
-  const stage = document.getElementById('stage');
-  if (!stage) return;
-  const s = currentSection();
-  if (!s) { stage.innerHTML = `<p class="kicker">Сотрудник</p><h1>ГУ ВП</h1>${noticesHtml()}`; return; }
-  const acts = (s.acts || []).map(a => {
-    const id = a.id ? ` data-act="${esc(a.id)}"` : '';
-    if (a.ext) return `<a class="act${a.primary ? '' : ' ghost'}"${id} href="${esc(a.ext())}" target="_blank" rel="noopener noreferrer">${esc(a.label)}<span class="ext" aria-hidden="true">↗</span></a>`;
-    return `<a class="act${a.primary ? '' : ' ghost'}"${id} href="${esc(a.href)}">${esc(a.label)}</a>`;
-  }).join('');
-  const points = (s.points || []).map(p => cardHtml(p[0], p[1])).join('');
-  stage.innerHTML = `<p class="kicker">${Shell.mode === 'admin' ? 'Администратор' : 'Сотрудник'}</p><h1>${esc(s.title || s.label)}</h1><p class="lead">${esc(s.lead)}</p><div class="acts">${acts}</div>${noticesHtml()}<div class="preview" id="detail-points">${points}</div>`;
-  const key = s.data || (s.stats && hasRole('examiner') ? 'stats' : null);
-  if (!key) return;
-  const want = Shell.mode + ':' + s.id;
-  loadData(key).then(d => {
-    const box = document.getElementById('detail-points');
-    if (!box || !onHome() || Shell.mode + ':' + (currentSection() || {}).id !== want) return;
-    const html = key === 'stats' ? s.stats(d).map(([t, v]) => cardHtml(t, String(v))).join('') : dataCards(s, d);
-    if (html) box.innerHTML = html;
-  }).catch(() => {});
+// Строка действий раздела (если их несколько) — над страницей, без отдельного экрана.
+function secActsHtml(s, path) {
+  const acts = (s.acts || []).filter(a => a.href);
+  if (acts.length < 2) return '';
+  const here = acts.find(a => a.href.slice(1) === path) || acts[0];
+  return `<nav class="subnav secacts" aria-label="${esc(s.label)}">${acts.map(a => `<a href="${esc(a.href)}" class="${a === here ? 'on' : ''}"${a === here ? ' aria-current="page"' : ''}>${esc(a.label)}</a>`).join('')}</nav>`;
 }
+// После каждой страницы: строка действий раздела, напоминания на главной, запоминание запросов и подгрузка соседних плиток.
+window.afterRoute = function (fullPath, used) {
+  document.body.dataset.shown = fullPath;
+  if (!App.me) return;
+  const path = fullPath.split('?')[0];
+  const home = path === '/';
+  const s = currentSection();
+  const shown = home && s ? primaryHref(s).slice(1) : path;
+  const app = $('#app');
+  if (s && app && !app.querySelector('.secacts') && (s.acts || []).some(a => a.href && a.href.slice(1) === shown)) {
+    const h = secActsHtml(s, shown); if (h) app.insertAdjacentHTML('afterbegin', h);
+  }
+  if (home && app) { const n = noticesHtml(); if (n) app.insertAdjacentHTML('afterbegin', n); }
+  const list = [...(used || [])].filter(p => cacheable(p));
+  if (list.length && JSON.stringify(PF[shown]) !== JSON.stringify(list)) {
+    PF[shown] = list.slice(0, 8);
+    const keys = Object.keys(PF); if (keys.length > 60) delete PF[keys[0]];
+    try { localStorage.setItem('vp_pf', JSON.stringify(PF)); } catch (_) {}
+  }
+  if (window.warmReport && !isCalm()) warmReport();
+  const v = visibleSections(), n = v.length;
+  if (n > 1 && !isCalm()) setTimeout(() => { pfSection(v[(Shell.index + 1) % n]); pfSection(v[(Shell.index - 1 + n) % n]); }, 500);
+};
+
+// ---------- бланки ----------
+const FORMS = [['index.html', 'Рапорт на взыскание'], ['povyshenie.html', 'Рапорт на повышение'], ['otchet.html', 'Еженедельный отчёт (отдельная страница)'], ['vygovor.html', 'Приказ'], ['ugolovnoe.html', 'Уголовные дела'], ['gajd.html', 'Гайд УД']];
+route('/forms', async () => {
+  setView(`<h1>Бланки</h1><p class="mut small">Бланки открываются на сайте бланков ГУ ВП в новой вкладке. Еженедельный отчёт заполняется прямо здесь — в разделе «Отчёты».</p>
+    <div class="forms-grid">${FORMS.map(f => `<a class="card flat form-tile" href="${esc(FORMS_SITE + f[0])}" target="_blank" rel="noopener noreferrer"><b>${esc(f[1])}</b><span class="ext" aria-hidden="true">↗</span></a>`).join('')}</div>`);
+}, { cap: 'vp' });
 
 document.addEventListener('DOMContentLoaded', bindShell);

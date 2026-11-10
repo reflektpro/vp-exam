@@ -98,18 +98,21 @@ function railInfo(page) {
   check('размытие не считается на весь экран', fx === 'none|none|none', fx);
   check('запрошен только выбранный фон', bgHits.length === 1 && bgHits[0].includes(info.bg + '-d.webp'), bgHits.join(' '));
   check('шапка бланков', (await page.getAttribute('#formsLink', 'href')) === FORMS && (await page.getAttribute('#formsLink', 'target')) === '_blank');
-  check('сразу видно, что внутри учёбы', (await page.textContent('h1')) === 'Учёба' && /лекции/.test(await page.textContent('.lead')) && /Открыть учебный отдел/.test(await page.textContent('.acts')));
+  const ready = () => page.waitForFunction(() => document.body.dataset.shown === (location.hash.slice(1) || '/') && document.querySelector('#app h1') && !document.querySelector('#app .skel'), null, { timeout: 15000 });
+  await ready();
+  check('сразу видно, что внутри учёбы: главная — рабочая страница раздела', (await page.textContent('#app h1')) === 'Учебный отдел' && await page.locator('#app .course-card, #app .alert').count() > 0 && (await page.$$eval('.secacts a', a => a.map(x => x.textContent))).join('|') === 'Курсы|Все лекции' && (await page.getAttribute('#sec-study', 'aria-selected')) === 'true');
 
   await page.click('#sec-reports');
-  check('отчёты: заголовок и оба действия', (await page.textContent('h1')) === 'Отчёты' && /Заполнить отчёт/.test(await page.textContent('.acts')) && /Мои отчёты/.test(await page.textContent('.acts')));
-  check('заполнить отчёт ведёт на бланк недели', (await page.getAttribute('.act[data-act="fill"]', 'href')) === REPORT);
-  await page.click('.act[data-act="mine"]');
-  await page.waitForFunction(() => location.hash === '#/reports');
-  await page.waitForSelector('main h1');
-  check('«Мои отчёты» открывают свои отчёты, плитка остаётся выбранной', /Отчёт/.test(await page.textContent('main h1')) && (await page.getAttribute('#sec-reports', 'aria-selected')) === 'true' && await page.isVisible('#rail'));
+  await page.waitForSelector('#repBox #sendBtn'); await ready();
+  check('отчёты: плитка сразу открывает бланк недели и свои отчёты', (await page.textContent('#app h1')) === 'Отчёты' && (await page.evaluate(() => location.hash)) === '#/reports' && await page.locator('#repWeek').count() === 1 && await page.locator('#repRecent').count() === 1);
+  await page.waitForSelector('#repBox .pv-page', { timeout: 20000 });
+  check('бланк недели встроен: пункты, предпросмотр, отправка', await page.locator('#repBox #acts .act').count() > 10 && await page.isVisible('#repBox #sendBtn') && await page.locator('#repBox .pv-page').count() > 0);
+  check('запасной бланк на сайте бланков остаётся по прежнему адресу', (await page.getAttribute(`#repWeek a[href="${REPORT}"]`, 'target')) === '_blank');
+  check('«Мои отчёты» на той же странице, плитка остаётся выбранной', /Отчёт/.test(await page.textContent('#repRecent')) && (await page.getAttribute('#sec-reports', 'aria-selected')) === 'true');
   await page.click('#homeMark');
   await page.click('#sec-reports');
-  check('с главной снова видна панель отчётов', (await page.textContent('#stage h1')) === 'Отчёты');
+  await page.waitForSelector('#repBox #sendBtn');
+  check('с главной снова открываются отчёты', (await page.textContent('#app h1')) === 'Отчёты');
   const seen = await page.evaluate(() => {
     const rail = document.getElementById('rail');
     const el = document.getElementById('sec-reports');
@@ -130,15 +133,18 @@ function railInfo(page) {
   await page.click('#sec-reports');
   await page.screenshot({ path: SHOT + '/desktop-reports.png' });
 
+  await page.click('#sec-study'); await page.waitForSelector('.secacts'); await ready();
   await page.focus('#sec-study');
   await page.keyboard.press('ArrowRight');
-  check('стрелка вправо открывает экзамены', (await page.textContent('h1')) === 'Экзамены' && /К списку экзаменов/.test(await page.textContent('.acts')));
-  await page.click('#sec-reports');
-  await page.focus('#sec-reports');
+  await page.waitForFunction(() => location.hash === '#/exams', null, { timeout: 5000 }).catch(() => {}); await ready();
+  check('стрелка вправо открывает экзамены', (await page.textContent('#app h1')) === 'Экзамены' && (await page.getAttribute('#sec-exams', 'aria-selected')) === 'true');
+  await page.click('#sec-study'); await page.waitForSelector('.secacts'); await ready();
+  await page.focus('#sec-study');
   await page.keyboard.press('ArrowDown');
-  check('стрелка вниз ставит фокус на действие', await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('act')));
+  check('стрелка вниз ставит фокус на действие раздела', await page.evaluate(() => document.activeElement && !!document.activeElement.closest('#app .secacts')));
   await page.keyboard.press('ArrowUp');
-  check('стрелка вверх возвращает на плитку', await page.evaluate(() => document.activeElement && document.activeElement.id === 'sec-reports'));
+  check('стрелка вверх возвращает на плитку', await page.evaluate(() => document.activeElement && document.activeElement.id === 'sec-study'));
+  await page.click('#sec-reports'); await page.waitForSelector('#repBox #sendBtn');
 
   await page.evaluate(() => {
     const s = document.createElement('div');
@@ -152,12 +158,12 @@ function railInfo(page) {
   await page.waitForFunction(() => window.scrollY > 20);
   check('вертикальное колесо листает страницу', (await page.evaluate(() => window.scrollY)) > y0);
   await page.evaluate(() => window.scrollTo(0, 0));
-  const before = await page.textContent('h1');
+  await ready(); const before = await page.textContent('#app h1');
   const box = await page.locator('#rail').boundingBox();
   await page.mouse.move(box.x + 30, box.y + box.height / 2);
   await page.mouse.wheel(0, 180);
   await page.waitForTimeout(60);
-  check('колесо над лентой не меняет раздел', (await page.textContent('h1')) === before);
+  check('колесо над лентой не меняет раздел', (await page.textContent('#app h1')) === before);
   await page.waitForFunction(() => {
     window.scrollTo(0, 0);
     const top = document.getElementById('rail').getBoundingClientRect().top;
@@ -174,7 +180,7 @@ function railInfo(page) {
   await page.mouse.up();
   await page.waitForTimeout(40);
   const scrolledRight = await scrollOf();
-  const headingAfterDrag = await page.textContent('h1');
+  const headingAfterDrag = await page.textContent('#app h1');
   check('мышь тащит ленту вправо и не выбирает плитку', grabbing && scrolledRight > 80 && headingAfterDrag === before, scrolledRight + ' ' + headingAfterDrag);
   check('после протяжки нет залипшего захвата', await page.evaluate(() => !document.getElementById('rail').classList.contains('is-grabbing')));
   await page.mouse.move(x0 - 180, y);
@@ -184,9 +190,10 @@ function railInfo(page) {
   await page.waitForTimeout(40);
   const scrolledBack = await scrollOf();
   check('обратное протягивание возвращает ленту влево', scrolledBack < scrolledRight - 60, scrolledRight + ' -> ' + scrolledBack);
-  const beforeChev = await page.textContent('h1');
+  const beforeChev = await page.evaluate(() => document.querySelector('#rail [aria-selected="true"]').id);
   await page.click('#chevR');
-  check('кнопка следующего раздела работает', (await page.textContent('h1')) !== beforeChev);
+  await page.waitForTimeout(400); await ready();
+  check('кнопка следующего раздела работает', (await page.evaluate(() => document.querySelector('#rail [aria-selected="true"]').id)) !== beforeChev && !/^\/reports/.test(await page.evaluate(() => location.hash.slice(1))));
   await page.evaluate(() => document.getElementById('scroll-probe').remove());
 
   const bgBefore = await page.evaluate(() => document.documentElement.dataset.bg);
@@ -200,7 +207,8 @@ function railInfo(page) {
     return { staleGone: !document.getElementById(stale), id: el.id, top: r.top, bottom: r.bottom, scroll: window.scrollY, rail: document.getElementById('rail').scrollLeft };
   }, staleId);
   check('фокус на первом инструменте администратора', focusInfo.staleGone && focusInfo.id === 'sec-users' && focusInfo.scroll === 0 && focusInfo.rail === 0 && focusInfo.top >= 0 && focusInfo.top < 500, JSON.stringify(focusInfo));
-  check('панель администратора объясняет раздел', (await page.textContent('h1')) === 'Люди и роли' && /Роли/.test(await page.textContent('.lead')));
+  await page.waitForSelector('.users-t');
+  check('плитка администратора сразу открывает список людей с ролями', (await page.textContent('#app h1')) === 'Пользователи и роли' && await page.locator('.users-t .inl-roles').count() > 0);
   await page.screenshot({ path: SHOT + '/desktop-admin.png' });
   const adminLabels = await labels(page);
   check('админ без разделов сотрудника', EMPLOYEE.every(t => !adminLabels.includes(t)), adminLabels.join('|'));
@@ -276,7 +284,7 @@ function railInfo(page) {
   check('старый файл фона не отдаётся', gone === 404, gone);
 
   await page.click('.mode[data-mode="staff"]');
-  check('сотрудник возвращается', (await labels(page)).join('|') === STAFF.join('|') && (await page.evaluate(() => document.activeElement.id)) === 'sec-study' && (await page.textContent('h1')) === 'Учёба');
+  check('сотрудник возвращается', (await labels(page)).join('|') === STAFF.join('|') && (await page.evaluate(() => document.activeElement.id)) === 'sec-study' && (await ready().then(() => page.textContent('#app h1'))) === 'Учебный отдел');
 
   const studyBox = await page.locator('#sec-exams').boundingBox();
   const idleBg = await page.evaluate(() => getComputedStyle(document.querySelector('#sec-exams')).backgroundColor);
@@ -375,14 +383,18 @@ function railInfo(page) {
     await tp.click(`.mode[data-mode="${mode}"]`);
     const ids = await tp.$$eval('#rail .rail-item', ns => ns.map(n => n.id));
     for (const id of ids) {
-      await tp.goto(SITE + '#/'); await tp.waitForSelector('#stage h1');
+      await tp.goto(SITE + '#/'); await tp.waitForSelector('#rail .rail-item');
       await tp.click('#' + id);
-      const acts = await tp.$$eval('#stage .act', ns => ns.map(a => ({ href: a.getAttribute('href'), ext: a.target === '_blank' })));
-      if (!acts.length) tErr.push('нет действий у ' + id);
-      for (const a of acts) {
+      await tp.waitForFunction(() => location.hash.length > 2 && document.body.dataset.shown === location.hash.slice(1) && !document.querySelector('#app .skel'), null, { timeout: 15000 });
+      const first = await tp.evaluate(() => location.hash);
+      const acts = await tp.evaluate(() => { const s = window.vpMenu(); return s; });
+      const own = await tp.$$eval('#app .secacts a', ns => ns.map(a => ({ href: a.getAttribute('href'), ext: a.target === '_blank' })));
+      const list = [{ href: first, ext: false }, ...own.filter(a => a.href !== first)];
+      if (!acts.includes(first)) tErr.push('плитка ' + id + ' открыла ' + first + ', которого нет в меню');
+      for (const a of list) {
         if (a.ext) { const st = (await fetch(a.href)).status; if (st !== 200) tErr.push(st + ' ' + a.href); visited.push(id + ' ↗'); continue; }
-        await tp.goto(SITE + a.href);
-        await tp.waitForFunction(() => !document.querySelector('#app .loading') && document.querySelector('#app').textContent.trim().length > 0, null, { timeout: 15000 });
+        if (a.href !== first) await tp.goto(SITE + a.href);
+        await tp.waitForFunction(() => document.body.dataset.shown === location.hash.slice(1) && !document.querySelector('#app .loading, #app .skel') && document.querySelector('#app').textContent.trim().length > 0, null, { timeout: 15000 });
         await tp.waitForTimeout(250);
         const txt = await tp.textContent('#app');
         if (/Страница не найдена|Недостаточно прав|Раздел недоступен/.test(txt)) tErr.push(id + ' ' + a.href + ' :: ' + txt.slice(0, 120));

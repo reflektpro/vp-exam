@@ -133,12 +133,15 @@ function shell(over, opt = {}) {
   check('главная: заголовок портала и фото на фоне', /ГУ ВП/.test(await page.textContent('.brand')) && (await page.title()) === 'ГУ ВП — портал' && await page.locator('.scene-photo').count() === 1 && /\/assets\/bg\/(kremlin|formation|tanks)-d\.webp/.test(await page.evaluate(() => getComputedStyle(document.querySelector('.scene-photo')).backgroundImage)));
   await page.screenshot({ path: SHOTS + 'home-desktop.png' });
   await page.focus('#rail .rail-item[aria-selected="true"]');
-  const h1a = await page.textContent('#stage h1');
+  await page.waitForFunction(() => document.querySelector('#app h1') && !document.querySelector('#app .skel'));
+  const h1a = await page.textContent('#app h1'), hashA = await page.evaluate(() => location.hash);
   await page.keyboard.press('ArrowRight');
-  check('лента с клавиатуры: стрелка открывает следующий раздел', (await page.textContent('#stage h1')) !== h1a && await page.evaluate(() => document.activeElement.classList.contains('rail-item')));
+  await page.waitForFunction(h => location.hash !== h && document.querySelector('#app h1') && !document.querySelector('#app .skel'), hashA, { timeout: 8000 }).catch(() => {});
+  check('лента с клавиатуры: стрелка открывает следующий раздел', (await page.textContent('#app h1')) !== h1a && await page.evaluate(() => document.activeElement.classList.contains('rail-item')));
   await page.click('.mode[data-mode="admin"]');
   await page.click('#sec-laws');
-  check('админ-режим: плитка «Законодательство» ведёт в сверки', (await page.getAttribute('#stage .act', 'href')) === '#/admin/laws');
+  await page.waitForSelector('.law-card', { timeout: 10000 }).catch(() => {});
+  check('админ-режим: плитка «Законодательство» сразу открывает сверки', (await page.evaluate(() => location.hash)) === '#/admin/laws' && await page.locator('.law-card').count() > 0 && (await page.getAttribute('#sec-laws', 'aria-selected')) === 'true');
   await page.screenshot({ path: SHOTS + 'rail-desktop.png' });
   await page.goto(SITE + '#/theme', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.bgopt');

@@ -1,10 +1,7 @@
 /* Панель управления (администратор / проверяющий). Права проверяются на сервере. */
 'use strict';
-function adminNav(active) {
-  const items = [['/admin', 'Сводка', 'examiner'], ['/admin/attempts', 'Проверка', 'examiner'], ['/admin/users', 'Пользователи и роли', 'examiner'],
-    ['/admin/courses', 'Курсы', 'admin'], ['/admin/lectures', 'Лекции', 'admin'], ['/admin/exams', 'Экзамены', 'admin'], ['/admin/bank', 'Банк вопросов', 'admin'], ['/admin/reatt', 'Переаттестация', 'admin'], ['/admin/bases', 'Базы и источники', 'admin'], ['/admin/laws', 'Законодательство', 'admin'], ['/admin/media', 'Изображения', 'admin'], ['/admin/settings', 'Настройки', 'admin'], ['/admin/audit', 'Журнал', 'admin']];
-  return `<div class="subnav">${items.filter(i => hasRole(i[2])).map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
-}
+// Внутреннее меню админки убрано: все разделы — плитки ленты (вызовы оставлены, чтобы не трогать разметку страниц).
+function adminNav() { return ''; }
 function formObj(form) {
   const o = {};
   for (const el of form.elements) {
@@ -31,7 +28,56 @@ function topicSelect(courses, topics, cur) {
   const opts = courses.map(c => { const ts = topics.filter(t => t.course_id === c.id && !t.link_topic_id); return ts.length ? `<optgroup label="${esc(c.title)}">${ts.map(t => `<option value="${t.id}" ${t.id === cur ? 'selected' : ''}>${esc(t.title)}</option>`).join('')}</optgroup>` : ''; }).join('');
   return `<label class="f"><span>Тема курса (лекция попадёт в курс этой темы)</span><select name="topic_id"><option value="">— без темы —</option>${opts}</select></label>`;
 }
-function bindRows() { $$('tr.click').forEach(tr => tr.onclick = () => { location.hash = tr.dataset.href; }); }
+// Клик по строке открывает карточку; клик по полю/кнопке внутри строки — действие на месте.
+const INLINE_SKIP = 'input, select, textarea, button, label, a, .inl-ctl';
+function bindRows(root) { $$('tr.click', root).forEach(tr => tr.onclick = (e) => { if (e.target.closest && e.target.closest(INLINE_SKIP)) return; if (tr._inline) return tr._inline(e); location.hash = tr.dataset.href; }); }
+// Перерисовать без прокрутки наверх и без анимации (после действия — данные уже пришли в ответе).
+function quiet(fn) { const was = App.silent; App.silent = true; try { return fn(); } finally { App.silent = was; } }
+// Раскрыть подробности прямо в списке (под строкой таблицы или в карточке). Повторный клик — свернуть.
+function inlineOpen(host, key, run) {
+  const cur = document.querySelector('.inl-panel');
+  if (cur) {
+    const same = cur.dataset.key === key;
+    cur.remove(); $$('.inl-open').forEach(x => x.classList.remove('inl-open'));
+    if (same) return null;
+  }
+  let panel, box;
+  if (host.tagName === 'TR') {
+    panel = document.createElement('tr'); panel.className = 'inl-panel';
+    const td = document.createElement('td'); td.colSpan = host.children.length; panel.appendChild(td);
+    box = document.createElement('div'); box.className = 'inl-box'; td.appendChild(box); host.after(panel);
+  } else {
+    panel = document.createElement('div'); panel.className = 'inl-panel inl-box';
+    if (host.classList.contains('law-card')) host.after(panel); else host.appendChild(panel);
+    box = panel;
+  }
+  panel.dataset.key = key; host.classList.add('inl-open');
+  box.innerHTML = '<div class="skel sm" aria-hidden="true"><i class="sk-l"></i><i class="sk-b"></i><i class="sk-b short"></i></div>';
+  const put = (html) => { box.innerHTML = html; };
+  Promise.resolve().then(() => run(put, box)).catch(e => { box.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; });
+  requestAnimationFrame(() => { try { box.scrollIntoView({ block: 'nearest' }); } catch (_) {} });
+  return box;
+}
+function inlineClose() { const cur = document.querySelector('.inl-panel'); if (cur) cur.remove(); $$('.inl-open').forEach(x => x.classList.remove('inl-open')); }
+// «Опасные» смены ролей требуют короткого подтверждения.
+function roleChangeRisk(u, k, v) {
+  const name = userName(u);
+  if (k === 'role') {
+    if (u.role === 'admin' && v !== 'admin') return `Снять права администратора у «${name}»?`;
+    if (v === 'admin') return `Назначить «${name}» администратором? Он получит доступ ко всем разделам.`;
+    if (u.role === 'examiner' && v === 'candidate') return `Снять права проверяющего у «${name}»?`;
+    return '';
+  }
+  if (k === 'leader' && !v) return `Снять роль «Руководство ГУ ВП» у «${name}»?`;
+  return '';
+}
+const ROLE_FLAG_RU = { vp: 'ВП', reatt: 'Переаттестация', leader: 'Руководство ГУ ВП' };
+function roleCtl(u) {
+  const ck = (k) => `<label class="chk sm inl-ctl"><input type="checkbox" data-k="${k}" ${u[k] ? 'checked' : ''}> ${ROLE_FLAG_RU[k]}</label>`;
+  return `<div class="inl-roles" data-u="${esc(u.id)}">${ck('vp')}${ck('reatt')}${ck('leader')}
+    <select class="inl-ctl" data-k="role" aria-label="Админ-права" ${u.super ? 'disabled' : ''}>${['candidate', 'examiner', 'admin'].map(x => `<option value="${x}" ${u.role === x ? 'selected' : ''}>${x === 'candidate' ? 'без админ-прав' : ROLE_RU[x]}</option>`).join('')}</select></div>`;
+}
+
 const yes = v => v ? '✔' : '—';
 // Блок «Статус публикации» + кнопки сохранения (общий для лекций и экзаменов).
 function pubBlock(published, female) {
@@ -478,15 +524,18 @@ route('/admin/reatt', async () => {
         ${bad.length ? `<div class="alert warn small">В банке не хватает вопросов: ${bad.map(a => esc(a.label)).join(', ')}</div>` : ''}
         ${ba && !ba.ok ? `<div class="alert warn small">В базе не хватает вопросов для выборки: нужно лёгких/средних/сложных ${ba.want[1]}/${ba.want[2]}/${ba.want[3]}, есть ${ba.have[1]}/${ba.have[2]}/${ba.have[3]} (недостающие добираются из соседней сложности)</div>` : ''}
         <div class="row"><a class="btn sm" href="#/admin/reatt/${v.id}">Редактировать</a><button class="btn sm r-tog">${v.enabled ? 'Выключить' : 'Включить'}</button>
-          <a class="btn sm gold" href="#/admin/reatt/${v.id}/access">🔑 Доступ${v.access.active ? ' (' + v.access.active + ')' : ''}</a>
+          <a class="btn sm gold r-acc" href="#/admin/reatt/${v.id}/access">🔑 Доступ${v.access.active ? ' (' + v.access.active + ')' : ''}</a>
           <a class="btn sm" href="#/admin/attempts?kind=${encodeURIComponent(v.key)}">Попытки</a><button class="btn sm danger r-del">Удалить</button></div>
         <p class="small ${v.access.active ? 'mut' : 'neg'}">${v.access.active ? `Действующих выдач доступа: ${v.access.active}${v.access.global ? ' (в т. ч. всем с ролью)' : ''}` : 'Доступ никому не выдан — кандидаты эту переаттестацию не видят.'}</p></div>`; }
   $$('.ritem').forEach(el => {
     const id = el.dataset.id, v = r.items.find(x => String(x.id) === id);
-    el.querySelector('.r-tog').onclick = async () => { try { await api('PUT', '/api/admin/reatt/' + id, { enabled: !v.enabled }); toast(v.enabled ? 'Выключена' : 'Включена'); render(); } catch (e) { toast(e.message, true); } };
+    el.querySelector('.r-tog').onclick = async () => { try { await api('PUT', '/api/admin/reatt/' + id, { enabled: !v.enabled }); toast(v.enabled ? 'Выключена' : 'Включена'); render({ silent: true }); } catch (e) { toast(e.message, true); } };
+    // доступ выдаётся прямо в карточке вида, без перехода
+    el.querySelector('.r-acc').onclick = (ev) => { ev.preventDefault(); inlineOpen(el, 'acc' + id, (put) => accessView(id, put, { inline: true, onChange: (d) => {
+      const n = d.grants.filter(g => g.active).length; el.querySelector('.r-acc').textContent = '🔑 Доступ' + (n ? ' (' + n + ')' : ''); } })); };
     el.querySelector('.r-del').onclick = async () => {
       if (!confirm(`Удалить «${v.title}»?` + (Object.keys(v.attempts).length ? '\nПопытки кандидатов сохранятся и останутся в «Проверке».' : ''))) return;
-      try { await api('DELETE', '/api/admin/reatt/' + id); toast('Удалено'); render(); } catch (e) { toast(e.message, true); }
+      try { await api('DELETE', '/api/admin/reatt/' + id); toast('Удалено'); render({ silent: true }); } catch (e) { toast(e.message, true); }
     };
   });
 }, { role: 'admin' });
@@ -654,18 +703,38 @@ route('/admin/media', async () => {
 route('/admin/users', async () => {
   const q = new URLSearchParams((location.hash.split('?')[1]) || '').get('q') || '';
   const r = await api('GET', '/api/admin/users?q=' + encodeURIComponent(q));
+  const adm = hasRole('admin');
+  const rowHtml = (u) => `<tr class="click" data-href="#/admin/user/${u.id}" data-u="${esc(u.id)}"><td>${esc(u.global_name || u.username)}<div class="small mut">${esc(u.id)}</div></td><td>${esc(u.ic_name || '—')}<div class="small mut">${esc(u.static_id)}</div></td>
+      <td class="u-badges">${roleBadges(u)}${u.blocked ? ' <span class="badge err">заблокирован</span>' : ''}</td>${adm ? `<td>${roleCtl(u)}</td>` : ''}<td>${u.lectures_watched} / ${r.lectures_total}</td><td>${u.attempt_count} ${u.last_status ? badge(u.last_status) : ''}</td><td>${fmtDate(u.last_login_at)}</td></tr>`;
   setView(`<h1>Пользователи и роли</h1>${adminNav('/admin/users')}
     <form class="row" id="sf" style="margin-bottom:14px"><input name="q" value="${esc(q)}" placeholder="Поиск: Discord ID, ник, игровое имя, статик" style="max-width:420px"><button class="btn">Найти</button></form>
-    <table><tr><th>Пользователь</th><th>Игровое имя / статик</th><th>Роли</th><th>Лекции</th><th>Попытки</th><th>Последний вход</th></tr>
-    ${r.users.map(u => `<tr class="click" data-href="#/admin/user/${u.id}"><td>${esc(u.global_name || u.username)}<div class="small mut">${esc(u.id)}</div></td><td>${esc(u.ic_name || '—')}<div class="small mut">${esc(u.static_id)}</div></td>
-      <td>${roleBadges(u)}${u.blocked ? ' <span class="badge err">заблокирован</span>' : ''}</td><td>${u.lectures_watched} / ${r.lectures_total}</td><td>${u.attempt_count} ${u.last_status ? badge(u.last_status) : ''}</td><td>${fmtDate(u.last_login_at)}</td></tr>`).join('')}</table>`);
+    ${adm ? '<p class="small mut">Роли меняются прямо в таблице. Карточка человека — по клику на строку.</p>' : ''}
+    <div class="tscroll"><table class="users-t"><tr><th>Пользователь</th><th>Игровое имя / статик</th><th>Роли</th>${adm ? '<th>Назначить</th>' : ''}<th>Лекции</th><th>Попытки</th><th>Последний вход</th></tr>
+    ${r.users.map(rowHtml).join('')}</table></div>`);
   $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/admin/users?q=' + encodeURIComponent(ev.target.q.value); };
   bindRows();
+  if (!adm) return;
+  $$('.inl-roles').forEach(box => box.addEventListener('change', async (ev) => {
+    const el = ev.target; const k = el.dataset.k; if (!k) return;
+    const u = r.users.find(x => String(x.id) === box.dataset.u); if (!u) return;
+    const v = el.type === 'checkbox' ? el.checked : el.value;
+    const revert = () => { if (el.type === 'checkbox') el.checked = !v; else el.value = u.role; };
+    const risk = roleChangeRisk(u, k, v);
+    if (risk && !confirm(risk)) { revert(); return; }
+    box.classList.add('busy'); el.disabled = true;
+    try {
+      const resp = await api('PUT', '/api/admin/users/' + u.id, { [k]: v });
+      Object.assign(u, resp && resp.user ? resp.user : { [k]: v });
+      const tr = box.closest('tr'); tr.querySelector('.u-badges').innerHTML = roleBadges(u) + (u.blocked ? ' <span class="badge err">заблокирован</span>' : '');
+      toast(k === 'role' ? 'Админ-права: ' + (u.role === 'candidate' ? 'нет' : ROLE_RU[u.role]) : (v ? 'Назначена роль «' : 'Снята роль «') + ROLE_FLAG_RU[k] + '»');
+    } catch (e) { revert(); toast(e.message, true); }
+    finally { box.classList.remove('busy'); el.disabled = k === 'role' && !!u.super; }
+  }));
 }, { role: 'examiner' });
 route('/admin/users\\?.*', () => App.routes.find(r => r.p === '/admin/users').fn(), { role: 'examiner' });
 
-route('/admin/user/:id', async (id) => {
-  const r = await api('GET', '/api/admin/users/' + encodeURIComponent(id));
+route('/admin/user/:id', async (id) => userCard(await api('GET', '/api/admin/users/' + encodeURIComponent(id))), { role: 'examiner' });
+function userCard(r) {
   const u = r.user, adm = hasRole('admin');
   setView(`<p><a href="#/admin/users">← Пользователи</a></p>
     <div class="card"><div class="row">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" style="width:56px;height:56px;border-radius:50%">` : ''}<div><h2 style="margin:0">${esc(u.ic_name || u.global_name || u.username)}</h2>
@@ -695,9 +764,10 @@ route('/admin/user/:id', async (id) => {
       ${r.attempts.length ? `<table><tr><th>№</th><th>Экзамен</th><th>Начата</th><th>Статус</th><th>Результат</th></tr>${r.attempts.map(a => `<tr class="click" data-href="#/admin/attempt/${a.id}"><td>#${a.id}</td><td>${esc(a.exam_title)}</td><td>${fmtDate(a.started_at)}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : '<p class="mut">Нет попыток.</p>'}</div>`);
   bindRows();
   if (!adm) return;
-  const act = async (method, path, body, ok) => { try { await api(method, path, body); toast(ok); render(); } catch (e) { toast(e.message, true); } };
-  const role = $('#role'); if (role && !u.super) role.onchange = () => act('PUT', '/api/admin/users/' + u.id, { role: role.value }, 'Роль изменена');
-  const ld = $('#leader'); if (ld) ld.onchange = () => act('PUT', '/api/admin/users/' + u.id, { leader: ld.checked }, ld.checked ? 'Назначена роль «Руководство ГУ ВП»' : 'Роль «Руководство ГУ ВП» снята');
+  const act = async (method, path, body, ok) => { try { const resp = await api(method, path, body); toast(ok); if (resp && resp.user) quiet(() => userCard(resp)); else render({ silent: true }); } catch (e) { toast(e.message, true); render({ silent: true }); } };
+  const risky = (k, v, el) => { const m = roleChangeRisk(u, k, v); if (m && !confirm(m)) { if (el.type === 'checkbox') el.checked = !v; else el.value = u.role; return true; } return false; };
+  const role = $('#role'); if (role && !u.super) role.onchange = () => risky('role', role.value, role) || act('PUT', '/api/admin/users/' + u.id, { role: role.value }, 'Роль изменена');
+  const ld = $('#leader'); if (ld) ld.onchange = () => risky('leader', ld.checked, ld) || act('PUT', '/api/admin/users/' + u.id, { leader: ld.checked }, ld.checked ? 'Назначена роль «Руководство ГУ ВП»' : 'Роль «Руководство ГУ ВП» снята');
   const rv = $('#r_vp'); if (rv) rv.onchange = () => act('PUT', '/api/admin/users/' + u.id, { vp: rv.checked }, rv.checked ? 'Назначена роль «ВП»' : 'Роль «ВП» снята');
   const rr = $('#r_reatt'); if (rr) rr.onchange = () => act('PUT', '/api/admin/users/' + u.id, { reatt: rr.checked }, rr.checked ? 'Назначена роль «Переаттестация»' : 'Роль «Переаттестация» снята');
   const upf = $('#upf'); if (upf) upf.onsubmit = (ev) => { ev.preventDefault(); act('PUT', '/api/admin/users/' + u.id, Object.fromEntries(new FormData(upf)), 'Профиль сохранён'); };
@@ -705,9 +775,10 @@ route('/admin/user/:id', async (id) => {
   $('#rstAll').onclick = () => { if (confirm('Сбросить прогресс всех лекций этого пользователя?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, {}, 'Прогресс сброшен'); };
   $$('[data-rl]').forEach(b => b.onclick = () => { if (confirm('Сбросить прогресс этой лекции?')) act('POST', `/api/admin/users/${u.id}/reset-progress`, { lecture_id: Number(b.dataset.rl) }, 'Прогресс сброшен'); });
   $('#rstAtt').onclick = () => { if (confirm('Удалить все попытки экзаменов этого пользователя? Он сможет сдавать заново.')) act('POST', `/api/admin/users/${u.id}/reset-attempts`, {}, 'Попытки удалены'); };
-}, { role: 'examiner' });
+}
 
 // ---------- проверка попыток ----------
+const attCells = (a) => `<td>#${a.id}</td><td>${esc(a.ic_name || a.global_name || a.username || '')}<div class="small mut">${esc(a.static_id || a.user_id)}</div></td><td>${esc(a.exam_title || '')}</td><td>${fmtDate(a.submitted_at)}${a.expired ? ' <span class="badge warn">по таймеру</span>' : ''}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td>`;
 route('/admin/attempts', async () => {
   const qp = new URLSearchParams((location.hash.split('?')[1]) || '');
   const st = qp.get('status') ?? 'pending_review', kind = qp.get('kind') || '';
@@ -717,18 +788,26 @@ route('/admin/attempts', async () => {
   setView(`<h1>Проверка попыток</h1>${adminNav('/admin/attempts')}
     <div class="row" style="margin-bottom:8px">${tabs.map(([k, v]) => `<a class="btn sm ${k === st ? 'gold' : ''}" href="#/admin/attempts?status=${k}&kind=${kind}">${v}</a>`).join('')}</div>
     <div class="row" style="margin-bottom:12px">${kinds.map(([k, v]) => `<a class="btn sm ${k === kind ? 'gold' : ''}" href="#/admin/attempts?status=${st}&kind=${k}">${v}</a>`).join('')}</div>
-    ${attempts.length ? `<table><tr><th>№</th><th>Кандидат</th><th>Экзамен / переаттестация</th><th>Отправлена</th><th>Статус</th><th>Баллы</th></tr>
-    ${attempts.map(a => `<tr class="click" data-href="#/admin/attempt/${a.id}"><td>#${a.id}</td><td>${esc(a.ic_name || a.global_name || a.username)}<div class="small mut">${esc(a.static_id || a.user_id)}</div></td><td>${esc(a.exam_title)}</td><td>${fmtDate(a.submitted_at)}${a.expired ? ' <span class="badge warn">по таймеру</span>' : ''}</td><td>${badge(a.status)}</td><td>${a.score_pct != null ? a.score_pct + '%' : '—'}</td></tr>`).join('')}</table>` : '<div class="alert info">Нет попыток в этом разделе.</div>'}`);
+    ${attempts.length ? `<p class="small mut">Работа раскрывается прямо в списке — проверка и решение без перехода.</p><div class="tscroll"><table class="att-t"><tr><th>№</th><th>Кандидат</th><th>Экзамен / переаттестация</th><th>Отправлена</th><th>Статус</th><th>Баллы</th></tr>
+    ${attempts.map(a => `<tr class="click" data-href="#/admin/attempt/${a.id}" data-id="${a.id}">${attCells(a)}</tr>`).join('')}</table></div>` : '<div class="alert info">Нет попыток в этом разделе.</div>'}`);
   bindRows();
+  $$('.att-t tr.click').forEach(tr => { tr._inline = () => {
+    const a0 = attempts.find(x => String(x.id) === tr.dataset.id);
+    inlineOpen(tr, 'att' + tr.dataset.id, (put) => attemptView(tr.dataset.id, put, { inline: true,
+      onSaved: (resp) => { if (resp && resp.attempt) { Object.assign(a0, { status: resp.attempt.status, score_pct: resp.attempt.score_pct }); tr.innerHTML = attCells(a0); } inlineClose(); },
+      onDeleted: () => { inlineClose(); tr.remove(); } }));
+  }; });
 }, { role: 'examiner' });
 route('/admin/attempts\\?.*', () => App.routes.find(r => r.p === '/admin/attempts').fn(), { role: 'examiner' });
 
-route('/admin/attempt/:id', async (id) => {
-  const r = await api('GET', '/api/admin/attempts/' + encodeURIComponent(id));
+route('/admin/attempt/:id', async (id) => attemptView(id, setView, {}), { role: 'examiner' });
+// Проверка одной попытки — отдельной страницей или прямо в списке (o.inline).
+async function attemptView(id, put, o) {
+  const r = o.data || await api('GET', '/api/admin/attempts/' + encodeURIComponent(id));
   const a = r.attempt, u = r.user;
   const items = r.items.map((it, i) => window.QT.review(it, i)).join('');
   const groups = r.groups ? `<div class="card flat"><h3>По блокам</h3><table><tr><th>Блок</th><th>Вопросов</th><th>Кейсов</th><th>Баллы</th><th></th></tr>${r.groups.map(g => `<tr><td>${esc(g.label)}</td><td>${g.questions}${g.short_q ? ` <span class="badge err">не хватило ${g.short_q}</span>` : ''}</td><td>${g.cases}${g.short_c ? ` <span class="badge err">не хватило ${g.short_c}</span>` : ''}</td><td>${g.points} / ${g.max}</td><td>${g.pending ? `<span class="badge warn">на проверке: ${g.pending}</span>` : ''}</td></tr>`).join('')}</table></div>` : '';
-  setView(`<p><a href="#/admin/attempts">← Проверка</a></p>
+  put(`${o.inline ? '' : '<p><a href="#/admin/attempts">← Проверка</a></p>'}
     <div class="card"><div class="row between"><h2 style="margin:0">Попытка #${a.id} — ${esc(r.exam ? r.exam.title : '')}</h2>${badge(a.status)}</div>
       <p>Кандидат: <a href="#/admin/user/${esc(a.user_id)}">${esc(userName(u))}</a> <span class="mut small">(${esc(u ? u.username : '')}, ${esc(a.user_id)}${u && u.static_id ? ', статик ' + esc(u.static_id) : ''})</span></p>
       <p class="small mut">Начата ${fmtDate(a.started_at)} · отправлена ${fmtDate(a.submitted_at)}${a.expired ? ' (автоматически по таймеру)' : ''} · автобаллы ${a.auto_score} · ручные ${a.manual_score} · максимум ${a.max_score} · итог ${a.score_pct != null ? a.score_pct + '%' : '—'} (проходной ${r.exam ? r.exam.pass_pct : '?'}%)</p>
@@ -736,19 +815,25 @@ route('/admin/attempt/:id', async (id) => {
     ${groups}
     <div id="ritems">${items}</div>
     ${a.status === 'in_progress' ? '<div class="alert info">Кандидат ещё проходит экзамен.</div>' : `<form class="card" id="rf"><h3>Итог проверки</h3>
-      <label class="f"><span>Решение</span><select name="verdict"><option value="auto">По баллам (≥ ${r.exam ? r.exam.pass_pct : '?'}% — сдан)</option><option value="passed" ${a.status === 'passed' ? '' : ''}>Сдан (вручную)</option><option value="failed">Не сдан (вручную)</option></select></label>
+      <label class="f"><span>Решение</span><select name="verdict"><option value="auto">По баллам (≥ ${r.exam ? r.exam.pass_pct : '?'}% — сдан)</option><option value="passed">Сдан (вручную)</option><option value="failed">Не сдан (вручную)</option></select></label>
       <label class="f"><span>Комментарий для кандидата</span><textarea name="comment" maxlength="5000">${esc(a.reviewer_comment || '')}</textarea></label>
       <button class="btn gold">Сохранить проверку</button> ${hasRole('admin') ? '<button type="button" class="btn danger" id="delA">Удалить попытку</button>' : ''}</form>`}`);
   window.QT.bindReview($('#ritems'), api);
   const rf = $('#rf');
   if (rf) rf.onsubmit = async (ev) => {
     ev.preventDefault();
-    const points = {}; $$('.pts').forEach(x => { if (x.value !== '') points[x.dataset.q] = Number(x.value); });
-    try { await api('POST', `/api/admin/attempts/${a.id}/review`, { points, verdict: rf.verdict.value, comment: rf.comment.value }); toast('Проверка сохранена'); render(); }
-    catch (e) { toast(e.message, true); }
+    const points = {}; $$('.pts', rf.parentNode).forEach(x => { if (x.value !== '') points[x.dataset.q] = Number(x.value); });
+    const btn = rf.querySelector('button.gold'); btn.disabled = true;
+    try {
+      const resp = await api('POST', `/api/admin/attempts/${a.id}/review`, { points, verdict: rf.verdict.value, comment: rf.comment.value });
+      toast('Проверка сохранена');
+      if (o.onSaved) o.onSaved(resp);
+      else if (resp && resp.attempt && resp.items) quiet(() => attemptView(id, put, { ...o, data: resp }));
+      else render({ silent: true });
+    } catch (e) { btn.disabled = false; toast(e.message, true); }
   };
-  const dA = $('#delA'); if (dA) dA.onclick = async () => { if (!confirm('Удалить попытку? Кандидат сможет пройти экзамен заново.')) return; try { await api('DELETE', '/api/admin/attempts/' + a.id); location.hash = '#/admin/attempts'; } catch (e) { toast(e.message, true); } };
-}, { role: 'examiner' });
+  const dA = $('#delA'); if (dA) dA.onclick = async () => { if (!confirm('Удалить попытку? Кандидат сможет пройти экзамен заново.')) return; try { await api('DELETE', '/api/admin/attempts/' + a.id); toast('Попытка удалена'); if (o.onDeleted) o.onDeleted(); else location.hash = '#/admin/attempts'; } catch (e) { toast(e.message, true); } };
+}
 
 // ---------- настройки и журнал ----------
 route('/admin/settings', async () => {
@@ -851,14 +936,17 @@ route('/admin/course/:id', async (id) => {
 const mskInput = (ms) => new Date(ms + 3 * 3600000).toISOString().slice(0, 16);
 const mskParse = (v) => v ? Date.parse(v + ':00+03:00') : null;
 const mskEndOfDay = () => { const d = new Date(Date.now() + 3 * 3600000); return Date.parse(d.toISOString().slice(0, 10) + 'T23:59:00+03:00'); };
-route('/admin/reatt/:id/access', async (id) => {
-  const d = await api('GET', `/api/admin/reatt/${id}/access`);
+route('/admin/reatt/:id/access', async (id) => accessView(id, setView, {}), { role: 'admin' });
+// Выдача доступа к переаттестации — отдельной страницей или в карточке вида (o.inline).
+async function accessView(id, put, o) {
+  const d = o.data || await api('GET', `/api/admin/reatt/${id}/access`);
+  if (o.onChange) o.onChange(d);
   const act = d.grants.filter(g => g.active), old = d.grants.filter(g => !g.active);
   const row = (g) => `<tr><td data-l="Кому">${g.user_id ? esc(g.user_name) : '<b>Все с ролью «Переаттестация»</b>'}</td><td data-l="До">${g.expires_at ? fmtDate(g.expires_at) : 'бессрочно'}</td>
     <td data-l="Попытки" class="num">${g.attempts != null ? (g.user_id ? `${g.used} из ${g.attempts}` : `${g.attempts} на человека · всего начато ${g.used}`) : `без ограничения · начато ${g.used}`}</td>
     <td data-l="Выдал" class="small">${esc(g.granted_by || '')}<div class="mut">${fmtDate(g.granted_at)}</div>${g.note ? `<div>${esc(g.note)}</div>` : ''}</td>
     <td>${g.revoked_at ? '<span class="badge">отозван</span>' : g.active ? `<button class="btn sm danger g-rev" data-g="${g.id}">Отозвать</button>` : '<span class="badge">истёк / исчерпан</span>'}</td></tr>`;
-  setView(`<h1>Доступ: ${esc(d.title)}</h1>${adminNav('/admin/reatt')}<p><a href="#/admin/reatt">← Все переаттестации</a></p>
+  put(`${o.inline ? `<h3>Доступ: ${esc(d.title)}</h3>` : `<h1>Доступ: ${esc(d.title)}</h1><p><a href="#/admin/reatt">← Все переаттестации</a></p>`}
     <p class="small mut">Пока доступ не выдан, пользователи с ролью «Переаттестация» эту переаттестацию не видят. Начатую попытку можно завершить и после окончания срока (до её собственного лимита времени). Время — московское.</p>
     <form class="card" id="gf"><h3>Выдать доступ</h3><div class="fgrid">
       <label class="f"><span>Кому</span><select name="user_id"><option value="">Всем с ролью «Переаттестация»</option>${d.users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select></label>
@@ -874,9 +962,12 @@ route('/admin/reatt/:id/access', async (id) => {
   f.onsubmit = async (ev) => { ev.preventDefault();
     const body = { user_id: f.user_id.value || null, expires_at: mskParse(f.until.value), attempts: f.attempts.value || null, note: f.note.value };
     if (!body.user_id && !confirm('Выдать доступ ВСЕМ пользователям с ролью «Переаттестация»?')) return;
-    try { await api('POST', `/api/admin/reatt/${id}/access`, body); toast('Доступ выдан'); render(); } catch (e) { toast(e.message, true); } };
-  $$('.g-rev').forEach(b => b.onclick = async () => { if (!confirm('Отозвать доступ?')) return; try { await api('DELETE', '/api/admin/reatt/access/' + b.dataset.g); toast('Доступ отозван'); render(); } catch (e) { toast(e.message, true); } });
-}, { role: 'admin' });
+    const btn = f.querySelector('button.gold'); btn.disabled = true;
+    try { const resp = await api('POST', `/api/admin/reatt/${id}/access`, body); toast('Доступ выдан'); again(resp); } catch (e) { btn.disabled = false; toast(e.message, true); } };
+  $$('.g-rev').forEach(b => b.onclick = async () => { if (!confirm('Отозвать доступ?')) return; try { const resp = await api('DELETE', '/api/admin/reatt/access/' + b.dataset.g); toast('Доступ отозван'); again(resp); } catch (e) { toast(e.message, true); } });
+  // ответ сервера — уже обновлённый список выдач; без него (старый сервер) — перечитать
+  function again(resp) { const data = resp && Array.isArray(resp.grants) ? resp : null; quiet(() => accessView(id, put, { ...o, data: data || undefined })); }
+}
 
 // ---------- тема курса: лекции, полная выгрузка, видео и план ролика, экзамены ----------
 route('/admin/topic/:id', async (id) => {

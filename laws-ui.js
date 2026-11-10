@@ -76,6 +76,17 @@ route('/admin/laws', async () => {
       ${doc.pending_proposal_id ? '<small>Есть карточка на решение</small>' : ''}
       ${doc.open_flags ? `<small>Открытых цитат: ${doc.open_flags}</small>` : ''}
     </a>`).join('')}</div>`);
+  // карточка документа раскрывается прямо в сетке: решение по правке — без перехода
+  $$('.law-card').forEach(card => card.onclick = (ev) => {
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button) return;
+    ev.preventDefault();
+    const code = card.getAttribute('href').split('/').pop();
+    inlineOpen(card, 'law' + code, (put) => lawDocView(code, put, { inline: true, onDecided: (r) => {
+      const doc = d.documents.find(x => x.id === code);
+      if (doc && r && r.doc && r.doc.document) Object.assign(doc, r.doc.document);
+      const small = [...card.querySelectorAll('small')].find(x => x.textContent === 'Есть карточка на решение'); if (small) small.remove();
+    } }));
+  });
   $('#lawFile').onchange = async (ev) => {
     const file = ev.target.files && ev.target.files[0];
     const box = $('#lawErr');
@@ -88,7 +99,7 @@ route('/admin/laws', async () => {
     try {
       const r = await api('POST', '/api/admin/laws/reports', payload);
       toast(r.duplicate ? 'Такой отчёт уже записан' : 'Отчёт опубликован');
-      render();
+      render({ silent: true });
     } catch (e) { box.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; toast(e.message, true); }
   };
 }, { role: 'admin' });
@@ -100,13 +111,14 @@ route('/admin/laws/history', async () => {
     ${d.events.length ? `<ol class="tl">${d.events.map(e => `<li><div><b>${esc(act[e.action] || e.action)}</b> ${e.doc_id ? '· ' + esc(e.doc_id) : ''}<div class="small mut">${lawWhen(e.at)}${e.actor_name ? ' · ' + esc(e.actor_name) : ''}</div>${e.details && e.details.note ? `<div>${esc(e.details.note)}</div>` : ''}${e.details && e.details.summary ? `<div class="small">${esc(e.details.summary)}</div>` : ''}</div></li>`).join('')}</ol>` : '<div class="alert info">Событий ещё нет.</div>'}`);
 }, { role: 'admin' });
 
-route('/admin/laws/doc/:id', async (id) => {
-  const d = await api('GET', '/api/admin/laws/docs/' + encodeURIComponent(id));
+route('/admin/laws/doc/:id', async (id) => lawDocView(id, setView, {}), { role: 'admin' });
+// Документ и решение по правке — отдельной страницей или раскрытием в сетке документов (o.inline).
+async function lawDocView(id, put, o) {
+  const d = o.data || await api('GET', '/api/admin/laws/docs/' + encodeURIComponent(id));
   const doc = d.document;
   const pending = d.pending;
-  setView(`<p><a href="#/admin/laws">← Все документы</a></p>
-    <div class="row between"><h1>${esc(doc.short)}</h1>${lawBadge(LAW_ST, doc.monitor_status)}</div>
-    ${adminNav('/admin/laws')}
+  put(`${o.inline ? `<div class="row between"><h3>${esc(doc.short)}</h3>${lawBadge(LAW_ST, doc.monitor_status)}</div>` : `<p><a href="#/admin/laws">← Все документы</a></p>
+    <div class="row between"><h1>${esc(doc.short)}</h1>${lawBadge(LAW_ST, doc.monitor_status)}</div>`}
     <p class="lead">${esc(doc.title)}</p>
     <p><a href="${esc(doc.url)}" target="_blank" rel="noopener">Тема на форуме</a></p>
     ${doc.mode === 'manual' ? `<div class="alert warn"><b>Автопроверка недоступна.</b> ${esc(doc.manual_reason)}</div>` : ''}
@@ -144,17 +156,20 @@ route('/admin/laws/doc/:id', async (id) => {
       ev.preventDefault();
       const box = $('#lawDecErr'); box.innerHTML = '';
       const action = ev.submitter ? ev.submitter.value : form.dataset.action;
+      if (action === 'reject' && !confirm('Отклонить правку? Решение попадёт в историю.')) return;
+      form.querySelectorAll('button').forEach(b => { b.disabled = true; });
       try {
         const r = await api('POST', `/api/admin/laws/proposals/${pending.proposal.id}/decision`, { action, generation: pending.proposal.generation, note: form.note.value });
         toast(r.message || 'Решение записано');
-        render();
-      } catch (e) { box.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; toast(e.message, true); }
+        if (o.onDecided) o.onDecided(r);
+        quiet(() => lawDocView(id, put, { ...o, data: r && r.doc && r.doc.document ? r.doc : undefined }));
+      } catch (e) { form.querySelectorAll('button').forEach(b => { b.disabled = false; }); box.innerHTML = `<div class="alert err">${esc(e.message)}</div>`; toast(e.message, true); }
     };
   }
   $$('[data-ack]').forEach(btn => btn.onclick = async () => {
     const note = prompt('Почему текущий вопрос остаётся без правки ответа?');
     if (note === null) return;
-    try { const r = await api('POST', '/api/admin/laws/flags/' + btn.dataset.ack + '/ack', { note }); toast(r.message || 'Отмечено'); render(); }
+    try { const r = await api('POST', '/api/admin/laws/flags/' + btn.dataset.ack + '/ack', { note }); toast(r.message || 'Отмечено'); quiet(() => lawDocView(id, put, { ...o, data: undefined })); }
     catch (e) { toast(e.message, true); }
   });
-}, { role: 'admin' });
+}

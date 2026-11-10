@@ -12,10 +12,8 @@ function mondayOf(d) { const x = new Date(Date.UTC(d.getFullYear(), d.getMonth()
 function addD(w, n) { const d = new Date(w + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function weekLabel(w) { const f = (s) => s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4); return f(w) + ' — ' + f(addD(w, 6)); }
 function hashQ() { return new URLSearchParams((location.hash.split('?')[1]) || ''); }
-function leadNav(active) {
-  const items = [['/lead', 'Неделя и премии'], ['/lead/violations', 'Нарушения'], ['/lead/budget', 'Бюджет ГУ ВП'], ['/lead/staff', 'Состав'], ['/lead/config', 'Таблицы выплат']];
-  return `<div class="subnav">${items.map(i => `<a href="#${i[0]}" class="${active === i[0] ? 'on' : ''}">${i[1]}</a>`).join('')}</div>`;
-}
+// Разделы руководства — плитки ленты; отдельное меню вкладок не нужно.
+function leadNav() { return ''; }
 function weekPicker(week, base) {
   return `<div class="row weekpick"><a class="btn sm" href="#${base}?week=${addD(week, -7)}">← Пред.</a><b>${weekLabel(week)}</b><a class="btn sm" href="#${base}?week=${addD(week, 7)}">След. →</a>
     <input type="date" id="wkDate" value="${week}" style="width:auto"><a class="btn sm" href="#${base}">Текущая</a></div>`;
@@ -230,8 +228,7 @@ leadRoute('/lead/violations', async () => {
 // ---------- бюджет ГУ ВП ----------
 leadRoute('/lead/budget', async () => {
   const q = hashQ();
-  const d = await api('GET', '/api/lead/budget' + (q.get('week') ? '?week=' + encodeURIComponent(q.get('week')) : ''));
-  const st = await api('GET', '/api/lead/staff');
+  const [d, st] = await Promise.all([api('GET', '/api/lead/budget' + (q.get('week') ? '?week=' + encodeURIComponent(q.get('week')) : '')), api('GET', '/api/lead/staff')]);
   const people = st.users.filter(u => u.staff || u.senior);
   setView(`<h1>Бюджет ГУ ВП</h1>${leadNav('/lead/budget')}
     <div class="grid two"><div class="card flat"><h3>Баланс</h3><div class="big ${d.balance < 0 ? 'neg' : 'pos'}" id="balance">${RUB(d.balance)}</div>

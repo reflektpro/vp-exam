@@ -153,8 +153,8 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   p = await open(T.vp, '/', { width: 390, height: 800 });
   check('мобильный: лента разделов в одну строку', await p.isVisible('#rail') && await p.evaluate(() => { const it = [...document.querySelectorAll('#rail .rail-item')]; return it.length > 1 && it.every(e => e.offsetTop === it[0].offsetTop); }));
   await p.screenshot({ path: SHOTS + 'roles-rail-mobile.png' });
-  await p.click('#sec-premiums'); await p.click('#stage .act[href="#/premiums"]'); await p.waitForTimeout(800);
-  check('мобильный: плитка и действие открывают раздел', /Премирование/.test(await p.textContent('main')) && await p.getAttribute('#sec-premiums', 'aria-selected') === 'true');
+  await p.click('#sec-premiums'); await p.waitForFunction(() => location.hash === '#/premiums'); await p.waitForTimeout(800);
+  check('мобильный: плитка сразу открывает раздел', /Премирование/.test(await p.textContent('main')) && await p.getAttribute('#sec-premiums', 'aria-selected') === 'true');
   check('мобильный: без горизонтальной прокрутки', await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await p.context().close();
   // премирование: публичный список с раздельными итогами

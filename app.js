@@ -2,7 +2,7 @@
 'use strict';
 const CFG = window.VP_CONFIG;
 const TOKEN_KEY = 'vpexam_token';
-const App = { me: null, config: null, routes: [], cleanup: [], seq: 0, doneSeq: 0 };
+const App = { me: null, config: null, routes: [], cleanup: [], seq: 0, doneSeq: 0, cacheGen: 0, once: {}, touched: false, busy: false, silent: false, recording: null };
 
 // ---------- утилиты ----------
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -12,7 +12,9 @@ function fmtTime(sec) { sec = Math.max(0, Math.floor(sec || 0)); const h = Math.
 function fmtDate(ms) { if (!ms) return '—'; return new Date(ms).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
 function toast(msg, isErr) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (isErr ? ' err' : ''); t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, isErr ? 9000 : 4000); }
 function token() { return localStorage.getItem(TOKEN_KEY); }
-function setView(html) { const el = $('#app'); el.innerHTML = html; el.classList.remove('view-in'); void el.offsetWidth; el.classList.add('view-in'); window.scrollTo(0, 0); }
+function setView(html) { const el = $('#app'); el.innerHTML = html; el.removeAttribute('aria-busy'); if (App.silent) return; el.classList.remove('view-in'); void el.offsetWidth; el.classList.add('view-in'); window.scrollTo(0, 0); }
+// Заготовка страницы на время загрузки: появляется, только если данные не пришли почти сразу.
+function skeleton() { const el = $('#app'); el.setAttribute('aria-busy', 'true'); el.innerHTML = '<div class="skel" aria-hidden="true"><i class="sk-h"></i><i class="sk-l"></i><i class="sk-b"></i><i class="sk-b"></i><i class="sk-b short"></i></div>'; }
 function onCleanup(fn) { App.cleanup.push(fn); }
 function userName(u) { return u ? (u.ic_name || u.global_name || u.username || u.id) : '—'; }
 const STATUS_RU = {
@@ -26,7 +28,7 @@ function can(c) { return !!(App.me && App.me.caps && App.me.caps[c]); }
 function isLeadUser() { return can('lead'); }
 const CAP_RU = { vp: '«ВП»', reatt: '«Переаттестация»', examiner: '«Проверяющий» или «Администратор»', admin: '«Администратор»', lead: '«Руководство ГУ ВП»', ss: '«Руководство ГУ ВП», «Администратор» или отметкой «СС» (старший состав) в составе ГУ ВП' };
 
-async function api(method, path, body) {
+async function apiRaw(method, path, body) {
   const h = {};
   const t = token(); if (t) h.Authorization = 'Bearer ' + t;
   if (body !== undefined) h['Content-Type'] = 'application/json';
@@ -34,27 +36,81 @@ async function api(method, path, body) {
   try { res = await fetch(CFG.API_BASE + path, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined }); }
   catch (e) { throw new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.'); }
   let data = null; try { data = await res.json(); } catch (_) {}
-  if (res.status === 401 && path.startsWith('/api/')) { localStorage.removeItem(TOKEN_KEY); App.me = null; renderHeader(); if (location.hash !== '#/') location.hash = '#/'; }
+  if (res.status === 401 && path.startsWith('/api/')) { localStorage.removeItem(TOKEN_KEY); App.me = null; cacheClear(); renderHeader(); if (location.hash !== '#/') location.hash = '#/'; }
   if (!res.ok) { const e = new Error((data && data.error) || ('Ошибка ' + res.status)); e.status = res.status; e.data = data; throw e; }
   return data;
 }
 
+// ---------- кэш ответов ----------
+// Списки и сводки держатся в памяти: повторный заход в раздел открывается сразу, свежие данные догружаются в фоне.
+// Любое изменение (POST/PUT/DELETE) сбрасывает кэш целиком; записи старше CACHE_MAX не используются.
+const CACHE_RE = /^\/api\/(courses|exams(\/\d+)?|reatt|lectures|topics\/\d+|reports\/my|report-config|promo-config|premiums|promo|docs(\/\d+)?|people(\/\d+)?|my\/attempts|admin\/(stats|users(\/\d+)?|attempts(\/\d+)?|reatt(\/\d+(\/access)?)?|laws(\/history|\/docs\/[a-z0-9_]+)?|bank|bank\/stats|lectures|courses|exams(\/\d+)?|topics(\/\d+)?|settings|bases|media|audit)|lead\/(week|violations|budget|staff|config|deleted|reports\/\d+))(\?.*)?$/;
+const CACHE_FRESH = 30000, CACHE_MAX = 5 * 60000;
+const Cache = new Map(), Inflight = new Map();
+function cacheable(path) { return CACHE_RE.test(path); }
+function cachePut(path, data) { Cache.set(path, { data, t: Date.now() }); }
+function cacheClear() { Cache.clear(); Inflight.clear(); App.cacheGen++; }
+const copy = (d) => d == null ? d : (typeof structuredClone === 'function' ? structuredClone(d) : JSON.parse(JSON.stringify(d)));
+function fetchShared(path) {
+  if (Inflight.has(path)) return Inflight.get(path);
+  const gen = App.cacheGen;
+  const p = apiRaw('GET', path).then(d => { if (gen === App.cacheGen) cachePut(path, d); return d; })
+    .finally(() => { if (Inflight.get(path) === p) Inflight.delete(path); });
+  Inflight.set(path, p);
+  return p;
+}
+function prefetch(path) {
+  if (!App.me || !cacheable(path)) return;
+  const e = Cache.get(path);
+  if ((e && Date.now() - e.t < CACHE_FRESH) || Inflight.has(path)) return;
+  fetchShared(path).catch(() => {});
+}
+// Фоновое обновление устаревшей записи: если данные изменились, страница тихо перерисовывается
+// (только если человек ничего не вводит на ней).
+function revalidate(path) {
+  if (Inflight.has(path)) return;
+  const old = Cache.get(path), hash = location.hash;
+  fetchShared(path).then(d => {
+    if (!old || JSON.stringify(old.data) === JSON.stringify(d)) return;
+    if (location.hash !== hash || App.touched || App.busy) return;
+    render({ silent: true });
+  }).catch(() => {});
+}
+async function api(method, path, body, opt) {
+  if (method !== 'GET') {
+    try { return await apiRaw(method, path, body); }
+    finally { cacheClear(); }
+  }
+  if (App.once[path]) { const d = App.once[path]; delete App.once[path]; return d; }
+  if (App.recording) App.recording.add(path);
+  if ((opt && opt.fresh) || !cacheable(path)) return apiRaw(method, path);
+  const e = Cache.get(path), age = e ? Date.now() - e.t : Infinity;
+  if (age < CACHE_FRESH) return copy(e.data);
+  if (age < CACHE_MAX) { revalidate(path); return copy(e.data); }
+  return copy(await fetchShared(path));
+}
+
 // ---------- роутер ----------
 function route(pattern, fn, opts = {}) { App.routes.push({ p: pattern, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '([^/]+)') + '$'), fn, opts }); }
-async function render() {
+async function render(opts) {
+  const silent = !!(opts && opts.silent);
   App.cleanup.forEach(f => { try { f(); } catch (_) {} }); App.cleanup = [];
   const path = (location.hash || '#/').slice(1) || '/';
   document.body.classList.toggle('calm', /^\/(attempt|exam|lecture)(\/|$)/.test(path.split('?')[0]));
   renderHeader();
   if (!App.me && path.split('?')[0] !== '/' && path.split('?')[0] !== '/theme') { location.hash = '#/'; return; }
+  App.touched = false;
   for (const r of App.routes) {
     const m = r.re.exec(path.split("?")[0]);
     if (!m) continue;
     if (r.opts.role && !hasRole(r.opts.role)) { setView('<div class="alert err">Недостаточно прав для этого раздела.</div>'); return; }
     if (r.opts.cap && !can(r.opts.cap)) { setView(noAccess(r.opts.cap)); return; }
     const mine = ++App.seq;
-    try { await r.fn(...m.slice(1).map(decodeURIComponent)); }
+    const sk = silent ? 0 : setTimeout(() => { if (mine === App.seq) skeleton(); }, 60);
+    App.silent = silent; App.recording = new Set();
+    try { await r.fn(...m.slice(1).map(decodeURIComponent)); if (mine === App.seq && window.afterRoute) window.afterRoute(path, App.recording); }
     catch (e) { if (mine === App.seq) setView(`<div class="alert err">${esc(e.message)}</div><a class="btn" href="#/">На главную</a>`); }
+    finally { clearTimeout(sk); if (mine === App.seq) { App.silent = false; App.recording = null; } }
     // Устаревшая отрисовка (пользователь уже перешёл на другую страницу) могла затереть новую — перерисовать актуальную.
     if (mine !== App.seq && App.doneSeq > mine) { render(); return; }
     App.doneSeq = Math.max(App.doneSeq, mine);
@@ -78,14 +134,38 @@ async function boot() {
   let authError = qs.get('auth_error');
   const code = qs.get('login_code');
   if (code || authError) history.replaceState(null, '', location.pathname + location.hash);
-  try { App.config = await api('GET', '/api/config'); } catch (e) { App.configError = e.message; }
   if (code) {
-    try { const r = await api('POST', '/auth/exchange', { code }); localStorage.setItem(TOKEN_KEY, r.token); }
+    try { const r = await apiRaw('POST', '/auth/exchange', { code }); localStorage.setItem(TOKEN_KEY, r.token); }
     catch (e) { authError = e.message; }
   }
-  if (token()) { try { App.me = (await api('GET', '/api/me')).user; } catch (e) { if (e.status !== 401) authError = authError || e.message; } }
+  // Один запрос: настройки, профиль и данные первого экрана. Старый сервер без /api/bootstrap — прежние запросы, параллельно.
+  let booted = false;
+  try {
+    const sent = token(); const h = {}; if (sent) h.Authorization = 'Bearer ' + sent;
+    const want = window.bootWants ? window.bootWants() : [];
+    const res = await fetch(CFG.API_BASE + '/api/bootstrap' + (want.length ? '?want=' + encodeURIComponent(want.join(',')) : ''), { headers: h, cache: 'no-store' });
+    if (res.ok) {
+      const b = await res.json();
+      if (b && b.config && 'user' in b) {
+        App.config = b.config;
+        // токен могли сменить, пока шёл запрос (вход в соседней вкладке) — тогда ответ устарел
+        if (token() !== sent) throw new Error('token changed');
+        App.me = b.user || null;
+        if (!b.user && sent && b.session === 'expired') localStorage.removeItem(TOKEN_KEY);
+        for (const [k, v] of Object.entries(b.data || {})) cachePut(k, v);
+        booted = true;
+      }
+    }
+  } catch (_) { /* сеть или старый сервер — ниже обычный путь */ }
+  if (!booted) {
+    const [c, me] = await Promise.allSettled([apiRaw('GET', '/api/config'), token() ? apiRaw('GET', '/api/me') : Promise.resolve(null)]);
+    if (c.status === 'fulfilled') App.config = c.value; else App.configError = c.reason.message;
+    if (me.status === 'fulfilled') App.me = me.value ? me.value.user : null;
+    else if (me.reason.status !== 401) authError = authError || me.reason.message;
+  }
   App.authError = authError;
-  window.addEventListener('hashchange', render);
+  window.addEventListener('hashchange', () => render());
+  document.addEventListener('input', (e) => { if (e.target && e.target.closest && e.target.closest('#app')) App.touched = true; }, true);
   checkVersion(); setInterval(checkVersion, 5 * 60 * 1000);
   render();
 }
@@ -266,7 +346,7 @@ route('/exam/:id', async (id) => {
   if (sb) sb.onclick = async () => {
     if (!confirm(e.time_limit_min ? `После начала пойдёт таймер (${e.time_limit_min} мин). Начать?` : 'Начать экзамен?')) return;
     sb.disabled = true;
-    try { const r = await api('POST', `/api/exams/${e.id}/start`); location.hash = '#/attempt/' + r.attempt_id; }
+    try { const r = await api('POST', `/api/exams/${e.id}/start`); handoffAttempt(r); location.hash = '#/attempt/' + r.attempt_id; }
     catch (err) { toast(err.message, true); sb.disabled = false; }
   };
 }, { cap: 'vp' });
@@ -343,6 +423,8 @@ route('/attempt/:id', async (id) => {
     tick(); const ti = setInterval(tick, 1000); onCleanup(() => clearInterval(ti));
   }
 });
+// Сервер вместе со стартом отдаёт саму попытку — страница попытки открывается без второго запроса.
+function handoffAttempt(r) { if (r && r.attempt && r.attempt.id === r.attempt_id) App.once['/api/attempts/' + r.attempt_id] = { attempt: r.attempt }; }
 function attemptBack(a) { return a.reatt ? { href: '#/reatt', title: 'Переаттестация' } : { href: '#/exam/' + (a.exam ? a.exam.id : ''), title: a.exam ? a.exam.title : 'Экзамен' }; }
 function attemptResult(a) {
   let big, cls;
@@ -389,7 +471,7 @@ route('/reatt', async () => {
   $$('.startR').forEach(b => b.onclick = async () => {
     if (!confirm(Number(b.dataset.t) ? `После начала пойдёт таймер (${b.dataset.t} мин). Начать?` : 'Начать переаттестацию?')) return;
     b.disabled = true;
-    try { const r = await api('POST', `/api/reatt/${b.dataset.v}/start`); location.hash = '#/attempt/' + r.attempt_id; }
+    try { const r = await api('POST', `/api/reatt/${b.dataset.v}/start`); handoffAttempt(r); location.hash = '#/attempt/' + r.attempt_id; }
     catch (err) { toast(err.message, true); b.disabled = false; }
   });
 }, { cap: 'reatt' });
