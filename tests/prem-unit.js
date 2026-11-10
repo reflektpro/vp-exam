@@ -1,6 +1,6 @@
 // Юнит-тест движка премий (приказ № 01_10 + уточнения руководства): node tests/prem-unit.js
 const fs = require('fs'), path = require('path');
-const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(src + '\nreturn { PREM_DEFAULT, computePremiums, premBase, premPlan, premCounts, premShare, weeklyPoints, reportInput, weekOf, weekDeadline, positionKey, strikeLabel, premConfigInput, reportToDefault, REPORT_TO };')();
 let fail = 0, pass = 0; const ok = (n, c, x) => { if (c) { pass++; console.log('PASS', n); } else { fail++; console.log('FAIL', n, x !== undefined ? JSON.stringify(x).slice(0, 500) : ''); } };
 const cfg = JSON.parse(JSON.stringify(W.PREM_DEFAULT));

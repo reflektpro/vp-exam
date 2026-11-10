@@ -1,6 +1,6 @@
 // Юнит-тест движка вопросов без сервера: node tests/engine-unit.js
 const fs = require('fs'), path = require('path');
-const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(src + '\nreturn { questionInput, makeState, publicQuestion, validateAnswer, gradeAnswer, describeQA, toNative, sampleReatt, importItems, evalFormula };')();
 const { correctAnswer, wrongAnswer } = require('./answers-helper');
 const ex = JSON.parse(fs.readFileSync(path.join(__dirname, '../tools/examples.json'), 'utf8')).questions;

@@ -2,7 +2,7 @@
 // Нормализация — той же функцией questionInput(), что и в worker.js. Запуск: node tools/gen-seed.js
 // Заглушки помечены «ПРИМЕР» и ext_id = example-…; удалить их все: «Банк вопросов» → «Удалить все ПРИМЕРЫ».
 const fs = require('fs'), path = require('path');
-const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(src + '\nreturn { questionInput };')();
 
 const T = (cat, n, label) => `ПРИМЕР [${cat}] №${n} (${label}) — вопрос-заглушка, будет заменён реальным содержанием.`;

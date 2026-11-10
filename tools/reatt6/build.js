@@ -11,7 +11,7 @@
 // 0017 (первичная загрузка) не перегенерируется. Запуск: node tools/reatt6/build.js [--mig 0019_name.sql] [--baseline]
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '../..');
-const src = fs.readFileSync(path.join(ROOT, 'worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const src = fs.readFileSync(path.join(ROOT, 'worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(src + '\nreturn { questionInput, lintQuestion, SOURCE_DOCS, R6_BASES, wordSet, nearDup };')();
 const CFG = JSON.parse(fs.readFileSync(path.join(__dirname, 'sources.json'), 'utf8'));
 const SRC = '/workspace/vp_reatt_sources', PKC = '/workspace/vp_course_pk/questions.json';

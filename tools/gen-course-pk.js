@@ -4,7 +4,7 @@
 // Запуск: python3 <dir>/validate.py && node tools/gen-course-pk.js <dir> <out.json> [--json <questions.out.json>]
 // Результат: JSON { batches: [sql…], summary }. Резерв (tools/reserve_questions.json) не импортируется.
 const fs = require('fs'), path = require('path');
-const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(src + '\nreturn { questionInput, importItems };')();
 const dir = process.argv[2], out = process.argv[3];
 if (!dir || !out) { console.error('usage: node tools/gen-course-pk.js <dir> <out.json>'); process.exit(1); }

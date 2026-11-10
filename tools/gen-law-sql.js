@@ -2,7 +2,7 @@
 // Нормализация — те же importItems()/questionInput(), что и в API импорта. Запуск: node tools/gen-law-sql.js <laws_dir> <out.json>
 // Результат: JSON-массив SQL-пакетов (каждый — набор UPDATE+INSERT … WHERE NOT EXISTS).
 const fs = require('fs'), path = require('path');
-const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(src + '\nreturn { questionInput, importItems };')();
 const dir = process.argv[2], out = process.argv[3];
 const q = (v) => v === null || v === undefined ? 'NULL' : typeof v === 'number' ? String(v) : "'" + String(v).replace(/'/g, "''") + "'";

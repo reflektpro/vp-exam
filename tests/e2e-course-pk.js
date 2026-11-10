@@ -21,7 +21,7 @@ const sql = async (q, args) => (await (await fetch(API + '/__test/sql', { method
 const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
 
 // функции воркера в процессе (как в tools/gen-course-pk.js)
-const wsrc = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const wsrc = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(wsrc + '\nreturn { questionInput, importItems, makeState, publicQuestion, gradeAnswer, validateAnswer, takeDistinct, sampleReatt, distinctCapacity };')();
 
 const SRC = JSON.parse(fs.readFileSync(path.join(DIR, 'questions.json'), 'utf8'));

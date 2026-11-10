@@ -2,7 +2,7 @@
 // Запуск: node tests/bank-check.js <dir_with_json>
 const DIR = process.argv[2] || '/workspace/vp_reatt_sources/laws';
 const fs = require('fs'), path = require('path');
-const src = fs.readFileSync('/workspace/vp_exam/worker/worker.js', 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '');
+const src = fs.readFileSync('/workspace/vp_exam/worker/worker.js', 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
 const W = new Function(src + '\nreturn { questionInput, importItems, makeState, publicQuestion, gradeAnswer, validateAnswer };')();
 const { correctAnswer, wrongAnswer } = require('/workspace/vp_exam/tests/answers-helper');
 let tot = {}, errs = 0;
