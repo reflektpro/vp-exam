@@ -35,7 +35,12 @@ window.VPPromoMount = function (ECO) {
       const lack = res.items.reduce((s, i) => s + i.lack, 0);
       const canCover = swapOn ? Math.floor(Math.max(0, total - step.points) / P.pointsPerItem) : 0;
       res.covered = Math.min(lack, canCover);
-      res.met = total >= step.points && lack <= canCover;
+      // обязательные курсы учёбы — тоже критерии ступени (общие и для звания; что пройдено, решает сервер)
+      const g = ECO && ECO.gate ? ECO.gate() : null;
+      res.courses = (g && g.required) || [];
+      const cLeft = res.courses.filter(c => !c.done);
+      res.met = total >= step.points && lack <= canCover && !cLeft.length;
+      res.coursesLeft = cLeft;
       res.left = { pts: Math.max(0, step.points - total), swap: Math.max(0, lack - canCover) };
     }
     return res;
@@ -56,12 +61,14 @@ window.VPPromoMount = function (ECO) {
       $("barFill").style.width = pct + "%"; $("barFill").classList.toggle("full", r.total >= r.step.points);
       $("barText").textContent = `${r.total} / ${r.step.points} баллов`;
       $("crit").innerHTML = r.items.map(i => `<li class="${i.lack ? "no" : "ok"}">${i.lack ? "✗" : "✓"} ${esc(i.a.name.replace(/\s*\(.*\)$/, ""))} <b>${Math.min(i.have, i.need)}/${i.need}</b></li>`).join("")
+        + (r.courses || []).map(c => `<li class="${c.done ? "ok" : "no"}">${c.done ? "✓" : "✗"} <a href="#/course/${Number(c.id)}">Пройти курс «${esc(c.title)}»</a></li>`).join("")
         + `<li class="${r.total >= r.step.points ? "ok" : "no"}">${r.total >= r.step.points ? "✓" : "✗"} Набрать ${r.step.points} баллов <b>${r.total}</b></li>`;
       let note;
       if (r.met) note = r.covered ? `Готово к подаче. Недостающие пункты (${r.covered}) закрыты лишними баллами: ${P.pointsPerItem} баллов за пункт.` : "Все критерии выполнены, можно подавать.";
       else {
         const parts = [];
         if (r.left.pts) parts.push(`${r.left.pts} баллов`);
+        if (r.coursesLeft && r.coursesLeft.length) parts.push((r.coursesLeft.length > 1 ? "курсы " : "курс ") + r.coursesLeft.map(c => `«${c.title}»`).join(", "));
         if (r.left.swap) parts.push(swapOn ? `${r.left.swap} пункт(ов) критерия, каждый можно заменить ${P.pointsPerItem} баллами сверх нормы` : `${r.left.swap} пункт(ов) критерия`);
         note = "Не хватает: " + parts.join("; ") + ".";
       }

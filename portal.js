@@ -199,29 +199,33 @@ async function premiumsPage() {
 }
 
 // ---------- система повышения ----------
-// Обязательные курсы учёбы: без них рапорт на повышение не скачивается. Общий список и по званиям (ступеням).
-function promoCoursesHtml(req, courses, cById, C, edit) {
-  const tag = (id) => { const c = cById.get(id); return c ? `<a class="chip ${c.complete ? 'ok' : ''}" href="#/course/${id}">${esc(c.title)}${c.complete ? ' ✔' : ''}</a>` : ''; };
-  const ranks = Object.entries(req.by_rank || {}).filter(([, l]) => l.length);
-  const view = (req.all.length || ranks.length) ? `<div class="card flat" id="promoReq"><h3>Обязательные курсы</h3><p class="small mut">Пока они не пройдены, рапорт на повышение не скачивается.</p>
-    ${req.all.length ? `<div class="chips">${req.all.map(tag).join('')}</div>` : ''}
-    ${ranks.map(([r, l]) => `<div class="kv"><span>${esc(r)}</span><b class="chips">${l.map(tag).join('')}</b></div>`).join('')}</div>` : '';
-  if (!edit) return view;
-  const ck = (rank, id) => { const on = rank ? (req.by_rank[rank] || []).includes(id) : req.all.includes(id); return `<td class="c"><input type="checkbox" data-r="${esc(rank)}" data-c="${id}" ${on ? 'checked' : ''} aria-label="${esc((rank || 'Все звания') + ': ' + (cById.get(id) || {}).title)}"></td>`; };
-  return view + `<details class="card flat" id="promoReqEdit"><summary><b>Обязательные курсы — изменить</b></summary>
-    <div class="tscroll"><table class="req-t"><tr><th>Звание</th>${courses.map(c => `<th class="c small">${esc(c.title)}</th>`).join('')}</tr>
-      <tr><td><b>Все звания</b></td>${courses.map(c => ck('', c.id)).join('')}</tr>
-      ${C.ladder.map(st => `<tr><td>${esc(st.rank)} → ${esc(st.to)}</td>${courses.map(c => ck(st.rank, c.id)).join('')}</tr>`).join('')}</table></div></details>`;
+// Обязательные курсы учёбы — критерии ступени повышения, рядом с остальными пунктами: общие (во всех ступенях) и для звания.
+// Без них рапорт на повышение не скачивается. Админ сайта добавляет/убирает курс прямо в ступени.
+function promoCourseChip(c, id, rm) {
+  const t = c ? c.title : 'Курс';
+  return `<span class="chip pcourse ${c && c.complete ? 'ok' : ''}"><a href="#/course/${id}">Пройти курс «${esc(t)}»</a>${c && c.complete ? ' ✔' : ''}${rm !== undefined ? ` <button type="button" class="chip-x" data-rm="${esc(rm)}" data-c="${id}" aria-label="Убрать курс «${esc(t)}»">✕</button>` : ''}</span>`;
+}
+function promoCourseAdd(rank, req, courses) {
+  const used = new Set([...req.all, ...(rank ? req.by_rank[rank] || [] : [])]);
+  const free = courses.filter(c => !used.has(c.id));
+  if (!free.length) return '';
+  return `<select class="chip pc-add" data-r="${esc(rank)}" aria-label="Добавить курс${rank ? ' для звания ' + esc(rank) : ' во все ступени'}"><option value="">+ курс</option>${free.map(c => `<option value="${c.id}">${esc(c.title)}</option>`).join('')}</select>`;
 }
 function bindPromoCourses(req) {
-  $$('#promoReqEdit input[type=checkbox]').forEach(cb => cb.onchange = async () => {
-    const id = Number(cb.dataset.c), r = cb.dataset.r;
-    const next = { all: [...req.all], by_rank: JSON.parse(JSON.stringify(req.by_rank || {})) };
-    const list = r ? (next.by_rank[r] = next.by_rank[r] || []) : next.all;
-    if (cb.checked) { if (!list.includes(id)) list.push(id); } else list.splice(list.indexOf(id), 1);
-    cb.disabled = true;
-    try { const x = await api('PUT', '/api/promo/courses', next); req.all = x.courses_req.all; req.by_rank = x.courses_req.by_rank; toast('Обязательные курсы сохранены'); const det = $('#promoReqEdit'); const open = det && det.open; await render({ silent: true }); const d2 = $('#promoReqEdit'); if (d2 && open) d2.open = true; }
-    catch (e) { cb.checked = !cb.checked; toast(e.message, true); cb.disabled = false; }
+  const save = async (next, el) => {
+    el.disabled = true;
+    try { const x = await api('PUT', '/api/promo/courses', next); req.all = x.courses_req.all; req.by_rank = x.courses_req.by_rank; toast('Обязательные курсы сохранены'); await render({ silent: true }); }
+    catch (e) { toast(e.message, true); el.disabled = false; }
+  };
+  const copy = () => ({ all: [...req.all], by_rank: JSON.parse(JSON.stringify(req.by_rank || {})) });
+  $$('.pc-add').forEach(sel => sel.onchange = () => {
+    const id = Number(sel.value); if (!id) return;
+    const n = copy(), r = sel.dataset.r; (r ? (n.by_rank[r] = n.by_rank[r] || []) : n.all).push(id); save(n, sel);
+  });
+  $$('.pcourse .chip-x').forEach(b => b.onclick = () => {
+    const id = Number(b.dataset.c), r = b.dataset.rm, n = copy();
+    if (r) n.by_rank[r] = (n.by_rank[r] || []).filter(x => x !== id); else n.all = n.all.filter(x => x !== id);
+    save(n, b);
   });
 }
 route('/promo', async () => {
@@ -238,9 +242,10 @@ route('/promo', async () => {
     setView(`<h1>Система повышения</h1>
       ${d.can_edit ? `<p><a class="btn gold" href="#/promo?edit=1">Изменить правила</a>${d.custom ? ' <span class="small mut">изменено ' + fmtDate(d.updated_at) + '</span>' : ''}</p>` : ''}
       <p class="mut small">Для повышения нужно набрать баллы за период и выполнить обязательные пункты ступени.${swap ? ` Каждый недостающий пункт можно заменить <b>${C.points_per_item}</b> баллами сверх нормы (кроме лекций, экзаменов и стажировок).` : ' Все обязательные пункты нужно выполнить — баллами они не заменяются.'} <a href="#/promo/raport">Рапорт на повышение</a> считает всё сам.</p>
-      ${promoCoursesHtml(req, courses, cById, C, d.can_edit)}
+      ${d.can_edit ? `<div class="kv pc-all"><span>Курсы во всех ступенях</span><b class="chips">${req.all.map(id => promoCourseChip(cById.get(id), id, '')).join('')}${promoCourseAdd('', req, courses)}</b></div>` : ''}
       <div class="ladder">${C.ladder.map((st, i) => `<div class="lstep"><div class="lnum">${i + 1}</div><div style="flex:1"><div class="row between"><b>${esc(st.rank)} → ${esc(st.to)}</b><span class="badge gold">${st.points} баллов</span></div>
-        <div class="chips">${need(st.need)}</div></div></div>`).join('')}</div>
+        <div class="chips">${(() => { const cc = req.all.map(id => promoCourseChip(cById.get(id), id)).join('') + (req.by_rank[st.rank] || []).map(id => promoCourseChip(cById.get(id), id, d.can_edit ? st.rank : undefined)).join('');
+          const nn = Object.keys(st.need).length ? need(st.need) : ''; return (nn || cc ? nn + cc : need({})) + (d.can_edit ? promoCourseAdd(st.rank, req, courses) : ''); })()}</div></div></div>`).join('')}</div>
       <div class="card flat"><h3>Баллы за действия</h3><table><tr><th>Действие</th><th>Раздел</th><th>Баллы</th></tr>${ptsItems.map(i => `<tr><td>${esc(i.name)}</td><td class="small mut">${GROUP_RU[i.group] || ''}</td><td class="num">${C.pts[i.key]}</td></tr>`).join('')}</table>
         <p class="small mut">Остальные пункты отчёта баллов для повышения не дают.</p></div>`);
     if (d.can_edit) bindPromoCourses(req);

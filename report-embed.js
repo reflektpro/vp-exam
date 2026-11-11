@@ -244,14 +244,16 @@ route('/promo/raport', async () => {
     const el = $('#promoGate'); if (!el) return;
     el.innerHTML = promoGateHtml(gate);
     ['pdf', 'png'].forEach(id => { const b = document.getElementById(id); if (b) { b.classList.toggle('gated', !gate.allowed); b.setAttribute('aria-disabled', gate.allowed ? 'false' : 'true'); } });
+    if (mounted && mounted.recalc) mounted.recalc();
   };
+  let mounted = null;
   paint();
   box.classList.add('rep-wait');
   try { await libs; } catch (e) { if (box.isConnected) $('#status').innerHTML = `<div class="send-err">${esc(e.message)}</div>`; return; }
   if (!box.isConnected) return;
   repPromo(pc);
   const eco = { me: App.me, api, missingPoints: !(pc && pc.missing_points === false), gate: () => gate };
-  window.VPPromoMount(eco);
+  mounted = window.VPPromoMount(eco);
   repAutofill(App.me);
   box.classList.remove('rep-wait');
   let t = null, asked = (App.me && App.me.rank) || '';

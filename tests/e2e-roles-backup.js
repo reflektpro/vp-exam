@@ -148,6 +148,8 @@ async function backup(tok, kind, label) {
   const gateTxt = await s.p.locator('.promo-gate').textContent().catch(() => '');
   check('рапорт: сообщение с курсом и ссылкой', /Скачать рапорт можно после курса/.test(gateTxt) && /Курс сержанта/.test(gateTxt) && await s.p.locator(`.promo-gate a[href="#/course/${CID}"]`).count() === 1, gateTxt);
   check('рапорт: PDF неактивна', await s.p.locator('#pdf.gated[aria-disabled="true"]').count() === 1);
+  check('рапорт: курс — критерий ступени в калькуляторе (не пройден)', /✗\s*Пройти курс «Курс сержанта»/.test(await s.p.locator('#crit').textContent()) && await s.p.locator(`#crit a[href="#/course/${CID}"]`).count() === 1, await s.p.locator('#crit').textContent());
+  check('рапорт: итог называет курс', /Не хватает:.*курс «Курс сержанта»/.test(await s.p.locator('#critNote').textContent()), await s.p.locator('#critNote').textContent());
   check('рапорт: без технических надписей', !/eligib|allowed|api|undefined|null/i.test(gateTxt));
   // расчёт без замены пунктов баллами
   const calc = await s.p.evaluate(() => { const c = window.__vp.crit; const t = c.total, n = c.n; c.total = () => 1000; c.n = () => 0; const r = window.__vp.compute(); c.total = t; c.n = n; return { covered: r.covered, met: r.met, rank: r.rank }; });
@@ -166,6 +168,7 @@ async function backup(tok, kind, label) {
   await s.p.evaluate(() => window.cacheClear && window.cacheClear());
   await s.p.goto(SITE + '#/promo/raport'); await s.p.reload(); await ready(s.p);
   await s.p.waitForFunction(() => window.__vp && document.querySelector('#fromRank'), null, { timeout: 15000 }); await s.p.waitForTimeout(500);
+  check('рапорт: курс в критериях отмечен пройденным', /✓\s*Пройти курс «Курс сержанта»/.test(await s.p.locator('#crit').textContent()), await s.p.locator('#crit').textContent());
   check('рапорт: после курса кнопка активна, сообщения нет', await s.p.locator('#pdf.gated').count() === 0 && await s.p.locator('.promo-gate').count() === 0);
   const calc2 = await s.p.evaluate(() => { const c = window.__vp.crit; c.total = () => 1000; c.n = () => 0; return window.__vp.compute(); });
   check('включено: недостающие пункты закрываются баллами', calc2.covered === 3 && calc2.met === true, { covered: calc2.covered, met: calc2.met });
@@ -181,7 +184,10 @@ async function backup(tok, kind, label) {
   s = await open(S);
   await s.p.goto(SITE + '#/promo'); await ready(s.p);
   let t = await s.p.locator('#app').textContent();
-  check('правила: курс в списке обязательных с отметкой', /Обязательные курсы/.test(t) && /Курс сержанта ✔/.test(t) && /каждый недостающий пункт можно заменить/i.test(t), t.slice(0, 300));
+  const serg = await s.p.locator('.lstep', { hasText: 'Сержант → Старший сержант' }).first().locator('.chips').textContent();
+  check('правила: курс — критерий своей ступени с отметкой', /Пройти курс «Курс сержанта» ✔/.test(serg) && await s.p.locator('.lstep .chip.pcourse.ok a[href="#/course/' + CID + '"]').count() === 1, serg);
+  check('правила: в других ступенях этого курса нет, нижнего блока нет', await s.p.locator('.lstep .pcourse').count() === 1 && !/Обязательные курсы/.test(t) && /каждый недостающий пункт можно заменить/i.test(t), t.slice(0, 300));
+  check('правила: у сотрудника нет правки курсов', await s.p.locator('.pc-add, .chip-x').count() === 0);
   await s.ctx.close();
   await call('PUT', '/api/admin/settings', AD, { promo_missing_points: false });
   s = await open(S); await s.p.goto(SITE + '#/promo'); await ready(s.p);
@@ -197,11 +203,18 @@ async function backup(tok, kind, label) {
   await s.p.click('#pmp'); await s.p.waitForFunction(() => !document.getElementById('pmp').disabled); await s.p.waitForTimeout(300);
   check('параметры: включение в один клик', (await call('GET', '/api/promo-config')).d.missing_points === true);
   await s.p.goto(SITE + '#/promo'); await ready(s.p);
-  check('правила: редактор обязательных курсов у администратора', await s.p.locator('#promoReqEdit').count() === 1);
-  await s.p.click('#promoReqEdit summary');
-  await s.p.locator(`#promoReqEdit input[data-r=""][data-c="${CID}"]`).check(); await s.p.waitForTimeout(800);
-  check('правила: курс для всех званий — в один клик', (await call('GET', '/api/promo', A)).d.courses_req.all.includes(CID));
-  check('правила: редактор остался открыт', await s.p.locator('#promoReqEdit[open]').count() === 1);
+  const nSteps = await s.p.locator('.lstep').count();
+  check('правила: добавление курса — в ступенях и строкой «во всех ступенях»', await s.p.locator('.lstep .pc-add').count() === nSteps && await s.p.locator('.pc-all .pc-add').count() === 1);
+  // убрать курс из ступени «Сержант» крестиком
+  await s.p.locator('.lstep', { hasText: 'Сержант → Старший сержант' }).first().locator(`.chip-x[data-c="${CID}"]`).click();
+  await s.p.waitForFunction(() => !document.querySelector('.lstep .pcourse'), null, { timeout: 8000 }).catch(() => {});
+  check('правила: курс убран из ступени в один клик', !((await call('GET', '/api/promo', A)).d.courses_req.by_rank['Сержант'] || []).length && await s.p.locator('.lstep .pcourse').count() === 0);
+  await s.p.locator('.pc-all .pc-add').selectOption(String(CID));
+  await s.p.waitForFunction((n) => document.querySelectorAll('.lstep .pcourse').length === n, nSteps, { timeout: 8000 }).catch(() => {});
+  check('правила: курс для всех ступеней — в один выбор', (await call('GET', '/api/promo', A)).d.courses_req.all.includes(CID));
+  check('правила: общий курс показан критерием в каждой ступени', await s.p.locator('.lstep .pcourse').count() === nSteps, await s.p.locator('.lstep .pcourse').count());
+  await s.p.locator('.lstep', { hasText: 'Сержант → Старший сержант' }).first().locator('.pc-add').selectOption(String(CID)).catch(() => {});
+  check('правила: уже общий курс в ступень повторно не предлагается', await s.p.locator('.lstep', { hasText: 'Сержант → Старший сержант' }).first().locator(`.pc-add option[value="${CID}"]`).count() === 0);
   check('админ: ошибок нет', s.st.errs.length === 0, s.st.errs);
   await s.ctx.close();
   await call('PUT', '/api/promo/courses', AD, { all: [], by_rank: {} });
@@ -242,7 +255,7 @@ async function backup(tok, kind, label) {
   await s.p.goto(SITE + '#/admin/settings'); await s.p.waitForTimeout(1500);
   check('руководство: параметры закрыты', !(await s.p.locator('#pmp').count()));
   await s.p.goto(SITE + '#/promo'); await ready(s.p);
-  check('руководство: правила повышения без правки', await s.p.locator('#promoReqEdit').count() === 0 && !/Изменить правила/.test(await s.p.locator('#app').textContent()));
+  check('руководство: правила повышения без правки', await s.p.locator('.pc-add, .chip-x').count() === 0 && !/Изменить правила/.test(await s.p.locator('#app').textContent()));
   check('руководство: ошибок нет', s.st.errs.length === 0, s.st.errs);
   await s.ctx.close();
 

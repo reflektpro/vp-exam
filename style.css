@@ -734,5 +734,10 @@ tr.inl-open>td{background:#15263a}
 .rep .promo-gate{margin-top:10px;font-size:13px;line-height:1.45}
 .rep .promo-gate a{color:#e7c75a}
 .rep .promo-gate:empty{display:none}
-.req-t td.c,.req-t th.c{text-align:center}.req-t th.c{max-width:120px;font-weight:500}
 .chip.ok{border-color:#2f6b2f;color:#a8e0a8}
+.rep .crit a{color:inherit;text-decoration:underline;text-underline-offset:2px}
+.chip.pcourse a{color:inherit;text-decoration:none}.chip.pcourse a:hover{text-decoration:underline}
+.chip-x{background:none;border:0;color:inherit;opacity:.6;cursor:pointer;padding:0 0 0 4px;font-size:12px}.chip-x:hover{opacity:1}
+select.chip.pc-add{width:auto;max-width:150px;color:var(--gold2);border-style:dashed;cursor:pointer;padding:3px 8px}
+.pc-all{margin:6px 0 10px;justify-content:flex-start;border-bottom:0}.pc-all>span{white-space:nowrap}
+.pc-all b{font-weight:400}
