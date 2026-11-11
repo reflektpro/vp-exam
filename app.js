@@ -22,11 +22,11 @@ const STATUS_RU = {
   watched: ['Просмотрена', 'ok'], not_started: ['Не начата', ''], locked: ['Закрыта', 'lock'],
 };
 function badge(st) { const x = STATUS_RU[st] || [st, '']; return `<span class="badge ${x[1]}">${esc(x[0])}</span>`; }
-const ROLE_RU = { candidate: 'Пользователь', examiner: 'Проверяющий', admin: 'Администратор' };
+const ROLE_RU = { candidate: 'Пользователь', examiner: 'Проверяющий', manager: 'Руководство (СС)', admin: 'Администратор' };
 // Роли доступа (сервер присылает caps): vp, reatt, examiner, admin, lead, ss (старший состав), super. Проверка — на сервере, здесь только меню.
 function can(c) { return !!(App.me && App.me.caps && App.me.caps[c]); }
 function isLeadUser() { return can('lead'); }
-const CAP_RU = { vp: '«ВП»', reatt: '«Переаттестация»', examiner: '«Проверяющий» или «Администратор»', admin: '«Администратор»', lead: '«Руководство ГУ ВП»', ss: '«Руководство ГУ ВП», «Администратор» или отметкой «СС» (старший состав) в составе ГУ ВП' };
+const CAP_RU = { vp: '«ВП»', reatt: '«Переаттестация»', examiner: '«Проверяющий» или «Администратор»', admin: '«Администратор»', grant: '«Руководство (СС)» или «Администратор»', manager: '«Руководство (СС)» или «Администратор»', lead: '«Руководство ГУ ВП»', ss: '«Руководство ГУ ВП», «Администратор» или отметкой «СС» (старший состав) в составе ГУ ВП' };
 
 async function apiRaw(method, path, body) {
   const h = {};
@@ -118,12 +118,12 @@ async function render(opts) {
   }
   setView('<div class="alert warn">Страница не найдена.</div><a class="btn" href="#/">На главную</a>');
 }
-function hasRole(role) { const l = { candidate: 0, examiner: 1, admin: 2 }; return App.me && (l[App.me.role] || 0) >= l[role]; }
+function hasRole(role) { const l = { candidate: 0, examiner: 1, manager: 2, admin: 3 }; return App.me && (l[App.me.role] || 0) >= l[role]; }
 function noAccess(c) { return `<div class="card noacc"><h2>Раздел недоступен</h2><p>Этот раздел открывается с ролью ${CAP_RU[c] || ''}. Роли назначает администратор — обратитесь к руководству ГУ ВП.</p>
   <p class="small mut">Без ролей доступны «База данных» и профиль.</p><div class="row"><a class="btn" href="#/">На главную</a><a class="btn" href="#/docs">База данных</a></div></div>`; }
 function rolesText(u) {
   const r = [];
-  if (u.super) r.push('Главный администратор'); else if (u.role === 'admin') r.push('Администратор'); else if (u.role === 'examiner') r.push('Проверяющий');
+  if (u.super) r.push('Главный администратор'); else if (u.role === 'admin') r.push('Администратор'); else if (u.role === 'manager') r.push('Руководство (СС)'); else if (u.role === 'examiner') r.push('Проверяющий');
   if (u.leader) r.push('Руководство ГУ ВП'); if (u.senior) r.push('Старший состав'); if (u.vp) r.push('ВП'); if (u.reatt) r.push('Переаттестация');
   return r.length ? 'Роли: ' + r.join(', ') : 'Ролей пока нет';
 }

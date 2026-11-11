@@ -13,7 +13,9 @@ const HB_MAX_STEP_SEC = 40;      // максимум прироста за од�
 const COMPLETE_END_SLACK_SEC = 3;  // max_pos >= duration - 3
 const COMPLETE_WATCH_RATIO = 0.95; // засчитанное время >= 95% длительности
 
-const ROLES = ['candidate', 'examiner', 'admin'];
+// Иерархия: главный администратор (ADMIN_IDS) > администратор сайта (admin) > руководство (СС) (manager) > проверяющий (examiner) и роли-флаги.
+const ROLES = ['candidate', 'examiner', 'manager', 'admin'];
+const ROLE_LVL = { candidate: 0, examiner: 1, manager: 2, admin: 3 };
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -170,9 +172,10 @@ async function audit(env, actor, action, target, details) {
 
 async function getSettings(env) {
   const { results } = await env.DB.prepare('SELECT k, v FROM settings').all();
-  const s = { site_title: 'ГУ ВП — портал', welcome_text: '', sequential_lectures: '1' };
+  const s = { site_title: 'ГУ ВП — портал', welcome_text: '', sequential_lectures: '1', promo_missing_points: '1' };
   for (const r of results) s[r.k] = r.v;
-  return { site_title: s.site_title, welcome_text: s.welcome_text, sequential_lectures: s.sequential_lectures === '1' };
+  // promo_missing_points — заменять ли недостающий пункт ступени лишними баллами (система повышения)
+  return { site_title: s.site_title, welcome_text: s.welcome_text, sequential_lectures: s.sequential_lectures === '1', promo_missing_points: s.promo_missing_points !== '0' };
 }
 
 // ---------- auth ----------
@@ -192,8 +195,7 @@ async function authUser(request, env, { optional = false } = {}) {
   return user;
 }
 function requireRole(user, role) {
-  const lvl = { candidate: 0, examiner: 1, admin: 2 };
-  if ((lvl[user.role] ?? 0) < lvl[role]) throw new HttpError(403, 'Недостаточно прав');
+  if ((ROLE_LVL[user.role] ?? 0) < ROLE_LVL[role]) throw new HttpError(403, 'Недостаточно прав');
 }
 // Роли доступа (можно несколько): «ВП» (users.vp) — учебный отдел, отчёты, премирование, система повышения;
 // «Переаттестация» (users.reatt); «Проверяющий» / «Администратор» (users.role); «Руководство ГУ ВП» (users.leader).
@@ -201,11 +203,13 @@ function requireRole(user, role) {
 // «Личные дела» — только старший состав (caps.ss).
 function caps(u) {
   const admin = u.role === 'admin' || !!u.super;
-  const lead = !!u.leader || admin;
+  // «Руководство (СС)»: выдаёт роли ниже своего уровня, видит отчёты и работы, проверяет; правки сайта — нет
+  const manager = u.role === 'manager';
+  const lead = !!u.leader || admin || manager;
   // ss — старший состав ГУ ВП: «Руководство ГУ ВП», администраторы и отметка «Старший состав» в составе (users.senior)
-  return { vp: !!u.vp || admin, reatt: !!u.reatt || admin, examiner: admin || u.role === 'examiner', admin, lead, ss: lead || !!u.senior, super: !!u.super };
+  return { vp: !!u.vp || admin || manager, reatt: !!u.reatt || admin || manager, examiner: admin || manager || u.role === 'examiner', admin, manager: manager || admin, grant: admin || manager, lead, ss: lead || !!u.senior, super: !!u.super };
 }
-const CAP_MSG = { vp: 'Раздел доступен роли «ВП». Роль назначает администратор.', reatt: 'Раздел доступен роли «Переаттестация». Роль назначает администратор.',
+const CAP_MSG = { grant: 'Выдавать роли и доступы могут администратор сайта и руководство (СС)', manager: 'Доступно руководству (СС) и администраторам', vp: 'Раздел доступен роли «ВП». Роль назначает администратор.', reatt: 'Раздел доступен роли «Переаттестация». Роль назначает администратор.',
   examiner: 'Раздел доступен проверяющим и администраторам', ss: 'Личные дела доступны только старшему составу ГУ ВП', admin: 'Только для администраторов', lead: 'Раздел доступен роли «Руководство ГУ ВП» и администраторам' };
 function requireCap(user, cap) { if (!caps(user)[cap]) throw new HttpError(403, CAP_MSG[cap] || 'Недостаточно прав'); }
 function publicUser(u) {
@@ -2575,15 +2579,24 @@ async function updateUser(request, env, actor, id) {
   const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(id).first();
   if (!u) throw new HttpError(404, 'Пользователь не найден');
   const ch = {};
+  const actorAdmin = caps(actor).admin;
+  if (!actorAdmin) {
+    // руководство (СС): только роли ниже своего уровня и только людям ниже своего уровня
+    if (isSuper(env, id) || (ROLE_LVL[u.role] ?? 0) >= ROLE_LVL.manager) throw new HttpError(403, 'Изменять администраторов и руководство может только администратор сайта');
+    const allowed = new Set(['role', 'vp', 'reatt', ...PROFILE_FIELDS]);
+    const bad = Object.keys(b).filter(k => !allowed.has(k));
+    if (bad.length) throw new HttpError(403, bad.includes('leader') ? 'Роль «Руководство ГУ ВП» назначает администратор сайта' : 'Недостаточно прав');
+    if (b.role !== undefined && !['candidate', 'examiner'].includes(b.role)) throw new HttpError(403, 'Руководство (СС) может назначать только роли ниже своего уровня');
+  }
   if (b.role !== undefined) {
-    if (!ROLES.includes(b.role)) throw new HttpError(400, 'Роль: candidate, examiner или admin');
+    if (!ROLES.includes(b.role)) throw new HttpError(400, 'Роль: candidate, examiner, manager или admin');
     if (isSuper(env, id)) throw new HttpError(400, 'Роль главного администратора задаётся в настройках Worker (ADMIN_IDS)');
     if ((b.role === 'admin' || u.role === 'admin') && !actor.super) throw new HttpError(403, 'Назначать и снимать администраторов может только главный администратор');
     ch.role = b.role;
   }
   if (b.blocked !== undefined) {
     if (isSuper(env, id) || id === actor.id) throw new HttpError(400, 'Нельзя заблокировать этого пользователя');
-    if (u.role === 'admin' && !actor.super) throw new HttpError(403, 'Недостаточно прав');
+    if ((u.role === 'admin' && !actor.super) || !actorAdmin) throw new HttpError(403, 'Недостаточно прав');
     ch.blocked = bool(b.blocked, false);
   }
   Object.assign(ch, profileInput(b, true));
@@ -2721,6 +2734,7 @@ async function putSettings(request, env, actor) {
   if (b.site_title !== undefined) ch.site_title = str(b.site_title, 120, { required: true, name: 'название сайта' });
   if (b.welcome_text !== undefined) ch.welcome_text = str(b.welcome_text, 5000, { name: 'приветствие' });
   if (b.sequential_lectures !== undefined) ch.sequential_lectures = bool(b.sequential_lectures, true) ? '1' : '0';
+  if (b.promo_missing_points !== undefined) ch.promo_missing_points = bool(b.promo_missing_points, true) ? '1' : '0';
   const stmts = Object.entries(ch).map(([k, v]) => env.DB.prepare('INSERT INTO settings (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = excluded.v').bind(k, v));
   if (stmts.length) await env.DB.batch(stmts);
   await audit(env, actor, 'settings.update', null, ch);
@@ -3501,7 +3515,7 @@ function dossierInput(b) {
 const dzName = (u) => u ? (u.ic_name || u.global_name || u.username || u.id) : '';
 function dzRoles(env, u) {
   const su = isSuper(env, u.id);
-  return [u.vp && 'ВП', u.staff && 'Состав ГУ ВП', u.senior && 'Старший состав', u.leader && 'Руководство ГУ ВП', (u.role === 'admin' || su) && 'Администратор', u.role === 'examiner' && 'Проверяющий', u.reatt && 'Переаттестация'].filter(Boolean);
+  return [u.vp && 'ВП', u.staff && 'Состав ГУ ВП', u.senior && 'Старший состав', u.leader && 'Руководство ГУ ВП', (u.role === 'admin' || su) && 'Администратор', u.role === 'manager' && 'Руководство (СС)', u.role === 'examiner' && 'Проверяющий', u.reatt && 'Переаттестация'].filter(Boolean);
 }
 function personCard(env, u, position) {
   return { id: u.id, name: dzName(u), has_ic: !!u.ic_name, discord: u.username, rank: u.rank || '', static_id: u.static_id || '', position: position || '',
@@ -3763,7 +3777,45 @@ const PROMO_DEFAULT = {"points_per_item":100,"pts":{"postavka":35,"otbitie":30,"
 async function promoConfig(env) {
   const r = await env.DB.prepare("SELECT v, updated_at FROM prem_config WHERE k = 'promo'").first();
   const v = r ? parseJ(r.v, null) : null;
-  return { config: v ? { ...PROMO_DEFAULT, ...v } : JSON.parse(JSON.stringify(PROMO_DEFAULT)), custom: !!v, updated_at: r ? r.updated_at : null };
+  const st = await getSettings(env);
+  return { config: v ? { ...PROMO_DEFAULT, ...v } : JSON.parse(JSON.stringify(PROMO_DEFAULT)), custom: !!v, updated_at: r ? r.updated_at : null,
+    missing_points: st.promo_missing_points, courses_req: await promoCourses(env) };
+}
+// Обязательные курсы учёбы для повышения: общий список и по званиям (ступеням). Хранится в prem_config 'promo_courses'.
+async function promoCourses(env) {
+  const r = await env.DB.prepare("SELECT v FROM prem_config WHERE k = 'promo_courses'").first();
+  const v = r ? parseJ(r.v, null) : null;
+  return { all: Array.isArray(v && v.all) ? v.all : [], by_rank: v && v.by_rank && typeof v.by_rank === 'object' ? v.by_rank : {} };
+}
+async function promoCoursesPut(request, env, actor) {
+  const b = await readJson(request, 50000);
+  const { results } = await env.DB.prepare('SELECT id FROM courses').all();
+  const known = new Set(results.map(x => x.id));
+  const ids = (a, name) => {
+    if (a === undefined || a === null) return [];
+    if (!Array.isArray(a) || a.length > 50) throw new HttpError(400, name + ': нужен список курсов (до 50)');
+    const out = [...new Set(a.map(x => idParam(x)))];
+    for (const x of out) if (!known.has(x)) throw new HttpError(400, name + ': курс не найден');
+    return out;
+  };
+  const v = { all: ids(b.all, 'Общие курсы'), by_rank: {} };
+  for (const [rank, list] of Object.entries(b.by_rank || {}).slice(0, 60)) { const r = str(rank, 60, { required: true, name: 'звание' }); const l = ids(list, `Звание «${r}»`); if (l.length) v.by_rank[r] = l; }
+  await env.DB.prepare("INSERT INTO prem_config (k, v, updated_by, updated_at) VALUES ('promo_courses', ?1, ?2, ?3) ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_by = excluded.updated_by, updated_at = excluded.updated_at").bind(JSON.stringify(v), actor.id, Date.now()).run();
+  await audit(env, actor, 'promo.courses', null, { all: v.all.length, ranks: Object.keys(v.by_rank).length });
+  return json({ courses_req: v });
+}
+// Допуск к выгрузке рапорта на повышение: пройдены ли обязательные курсы (общие + для звания).
+async function promoEligibility(env, user, rank) {
+  const req = await promoCourses(env);
+  const key = Object.keys(req.by_rank).find(k => k.toLowerCase() === String(rank || '').trim().toLowerCase());
+  const need = [...new Set([...req.all, ...(key ? req.by_rank[key] : [])])];
+  if (!need.length) return { allowed: true, required: [], missing: [] };
+  const list = need.length ? (await (await listCourses(env, user)).json()).courses : [];
+  const byId = new Map(list.map(c => [c.id, c]));
+  const titles = new Map((await env.DB.prepare('SELECT id, title FROM courses').all()).results.map(c => [c.id, c.title]));
+  const required = need.map(id => ({ id, title: titles.get(id) || ('Курс ' + id), done: !!(byId.get(id) && byId.get(id).complete) }));
+  const missing = required.filter(c => !c.done);
+  return { allowed: missing.length === 0, required, missing };
 }
 function promoInput(cfg, b) {
   const keys = new Set(cfg.items.map(i => i.key));
@@ -3841,9 +3893,9 @@ const BOOT_DATA = {
   '/api/lectures': [u => caps(u).vp, (env, u) => listLectures(env, u)],
   '/api/reatt': [u => caps(u).reatt, (env, u) => listReatt(env, u)],
   '/api/reports/my': [u => caps(u).vp, (env, u) => myReports(env, u, new URL('https://boot/api/reports/my'))],
-  '/api/admin/stats': [u => ['examiner', 'admin'].includes(u.role), env => adminStats(env)],
-  '/api/admin/users?q=': [u => ['examiner', 'admin'].includes(u.role), env => adminUsers(env, new URL('https://boot/api/admin/users?q='))],
-  '/api/admin/attempts?status=pending_review&kind=': [u => ['examiner', 'admin'].includes(u.role), env => adminAttempts(env, new URL('https://boot/api/admin/attempts?status=pending_review&kind='))],
+  '/api/admin/stats': [u => caps(u).examiner, env => adminStats(env)],
+  '/api/admin/users?q=': [u => caps(u).examiner, env => adminUsers(env, new URL('https://boot/api/admin/users?q='))],
+  '/api/admin/attempts?status=pending_review&kind=': [u => caps(u).examiner, env => adminAttempts(env, new URL('https://boot/api/admin/attempts?status=pending_review&kind='))],
 };
 async function bootstrap(request, env, url) {
   const config = { oauth_configured: oauthConfigured(env), settings: await getSettings(env), redirect_uri: redirectUri(env, request) };
@@ -3858,6 +3910,126 @@ async function bootstrap(request, env, url) {
     try { if (!ok(user)) return; const r = await fn(env, user); if (r && r.status === 200) data[k] = await r.json(); } catch (_) { /* раздел клиент загрузит сам */ }
   }));
   return json({ config, user: publicUser(user), session: 'ok', data });
+}
+
+
+// ---------- резервные копии сайта (только главные администраторы, ADMIN_IDS) ----------
+// Копия собирается по шагам (таблица за таблицей, кусками), чтобы каждый запрос был коротким и строка D1 не превышала лимит.
+// В копию входят настройки, система повышения и выплат, учёба (курсы, темы, лекции, экзамены, вопросы), переаттестации и выданные
+// доступы, база данных (статьи), состояние сверки законов и роли пользователей. Сессии, токены, отчёты, попытки, журнал — не входят.
+const BACKUP_TABLES = ['settings', 'prem_config', 'courses', 'topics', 'lectures', 'exams', 'exam_lectures', 'questions', 'reattestations', 'reatt_access', 'docs', 'law_doc_state', 'law_proposals', 'law_question_flags', 'users'];
+const BACKUP_USER_COLS = ['id', 'role', 'vp', 'reatt', 'leader', 'staff', 'senior', 'staff_position', 'staff_since'];
+const BACKUP_ROWS = 150, BACKUP_PART_BYTES = 800000;
+function requireBackupAdmin(user) { if (!user.super) throw new HttpError(403, 'Резервные копии доступны только главному администратору'); }
+async function tableCols(env, t) {
+  const { results } = await env.DB.prepare(`PRAGMA table_info(${t})`).all();
+  const cols = results.map(r => r.name);
+  return t === 'users' ? BACKUP_USER_COLS.filter(c => cols.includes(c)) : cols;
+}
+async function backupRow(env, id) {
+  const b = await env.DB.prepare('SELECT * FROM site_backups WHERE id = ?1').bind(id).first();
+  if (!b) throw new HttpError(404, 'Копия не найдена');
+  return { ...b, summary: parseJ(b.summary, {}) };
+}
+async function backupsList(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM site_backups ORDER BY id DESC LIMIT 100').all();
+  return json({ backups: results.map(b => ({ ...b, summary: parseJ(b.summary, {}) })), tables: BACKUP_TABLES });
+}
+async function backupCreate(request, env, user) {
+  const b = await readJson(request);
+  const kind = ['manual', 'auto', 'upload'].includes(b.kind) ? b.kind : 'manual';
+  const label = str(b.label, 120, { name: 'подпись копии' }) || (kind === 'auto' ? 'Перед восстановлением' : '');
+  const r = await env.DB.prepare('INSERT INTO site_backups (created_at, created_by, created_by_name, label, kind, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)')
+    .bind(Date.now(), user.id, user.ic_name || user.global_name || user.username || '', label, kind, 'building').run();
+  return json({ backup: await backupRow(env, r.meta.last_row_id), tables: BACKUP_TABLES });
+}
+// Пустая таблица тоже сохраняется частью без строк — при восстановлении она очистится.
+async function backupAddPart(env, id, tbl, cols, rows) {
+  let idx = ((await env.DB.prepare('SELECT MAX(idx) AS m FROM site_backup_parts WHERE backup_id = ?1').bind(id).first()).m ?? -1) + 1;
+  const stmts = []; let chunk = [], bytes = 0;
+  const flush = () => { if (!chunk.length) return; const data = JSON.stringify({ tbl, cols, rows: chunk });
+    stmts.push(env.DB.prepare('INSERT INTO site_backup_parts (backup_id, idx, tbl, nrows, data) VALUES (?1, ?2, ?3, ?4, ?5)').bind(id, idx++, tbl, chunk.length, data)); chunk = []; bytes = 0; };
+  for (const row of rows) { const n = JSON.stringify(row).length; if (n > BACKUP_PART_BYTES) throw new HttpError(413, `Таблица ${tbl}: слишком большая запись`); if (bytes + n > BACKUP_PART_BYTES) flush(); chunk.push(row); bytes += n; }
+  flush();
+  if (!stmts.length && !rows.length) stmts.push(env.DB.prepare('INSERT INTO site_backup_parts (backup_id, idx, tbl, nrows, data) VALUES (?1, ?2, ?3, 0, ?4)').bind(id, idx, tbl, JSON.stringify({ tbl, cols, rows: [] })));
+  if (stmts.length) await env.DB.batch(stmts);
+}
+async function backupStep(request, env, id) {
+  const bk = await backupRow(env, id); if (bk.status !== 'building' || bk.kind === 'upload') throw new HttpError(409, 'Копия уже собрана');
+  const b = await readJson(request);
+  const tbl = String(b.table || ''); if (!BACKUP_TABLES.includes(tbl)) throw new HttpError(400, 'Неизвестная таблица');
+  const offset = Math.max(0, Number(b.offset) || 0);
+  const cols = await tableCols(env, tbl);
+  const { results } = await env.DB.prepare(`SELECT ${cols.map(c => `"${c}"`).join(', ')} FROM ${tbl} ORDER BY rowid LIMIT ?1 OFFSET ?2`).bind(BACKUP_ROWS, offset).all();
+  if (results.length || offset === 0) await backupAddPart(env, id, tbl, cols, results.map(r => cols.map(c => r[c])));
+  return json({ table: tbl, rows: results.length, next: results.length === BACKUP_ROWS ? offset + BACKUP_ROWS : null });
+}
+async function backupUploadPart(request, env, id) {
+  const bk = await backupRow(env, id); if (bk.status !== 'building' || bk.kind !== 'upload') throw new HttpError(409, 'В эту копию нельзя загружать части');
+  const b = await readJson(request, 1500000);
+  const tbl = String(b.tbl || ''); if (!BACKUP_TABLES.includes(tbl)) throw new HttpError(400, 'Файл копии: неизвестная таблица ' + tbl.slice(0, 40));
+  const have = new Set(await tableCols(env, tbl));
+  if (!Array.isArray(b.cols) || !b.cols.length || b.cols.some(c => typeof c !== 'string' || !have.has(c))) throw new HttpError(400, `Файл копии: таблица ${tbl} — неизвестные столбцы`);
+  if (!Array.isArray(b.rows) || b.rows.length > 5000 || b.rows.some(r => !Array.isArray(r) || r.length !== b.cols.length || r.some(v => v !== null && !['string', 'number'].includes(typeof v)))) throw new HttpError(400, `Файл копии: таблица ${tbl} — повреждённые строки`);
+  if (tbl === 'users' && !b.cols.includes('id')) throw new HttpError(400, 'Файл копии: у пользователей нет id');
+  await backupAddPart(env, id, tbl, b.cols, b.rows);
+  return json({ ok: true });
+}
+async function backupFinish(env, user, id) {
+  const bk = await backupRow(env, id); if (bk.status !== 'building') throw new HttpError(409, 'Копия уже собрана');
+  const { results } = await env.DB.prepare('SELECT tbl, SUM(nrows) AS n, SUM(LENGTH(data)) AS sz, COUNT(*) AS c FROM site_backup_parts WHERE backup_id = ?1 GROUP BY tbl').bind(id).all();
+  if (!results.length) throw new HttpError(400, 'Копия пустая');
+  const summary = Object.fromEntries(results.map(r => [r.tbl, r.n]));
+  const size = results.reduce((s, r) => s + r.sz, 0), parts = results.reduce((s, r) => s + r.c, 0);
+  await env.DB.prepare("UPDATE site_backups SET status = 'ready', size = ?2, parts = ?3, summary = ?4 WHERE id = ?1").bind(id, size, parts, JSON.stringify(summary)).run();
+  await audit(env, user, 'backup.create', String(id), { kind: bk.kind, size, parts });
+  return json({ backup: await backupRow(env, id) });
+}
+async function backupPart(env, id, idx) {
+  const r = await env.DB.prepare('SELECT data FROM site_backup_parts WHERE backup_id = ?1 AND idx = ?2').bind(id, idx).first();
+  if (!r) throw new HttpError(404, 'Часть копии не найдена');
+  return json(parseJ(r.data, {}));
+}
+// Восстановление по частям: часть = одна транзакция (batch). Первая часть таблицы очищает её. Пользователи не удаляются — у них
+// восстанавливаются только роли. Перед первой частью нужна свежая (до 15 минут) автоматическая копия текущего состояния.
+async function backupRestore(request, env, user, id) {
+  const bk = await backupRow(env, id); if (bk.status !== 'ready') throw new HttpError(409, 'Копия ещё не собрана');
+  const b = await readJson(request);
+  const idx = Math.max(0, Number(b.idx) || 0);
+  if (idx === 0) {
+    const pre = b.pre_backup_id ? await env.DB.prepare('SELECT * FROM site_backups WHERE id = ?1').bind(idParam(b.pre_backup_id)).first() : null;
+    if (!pre || pre.kind !== 'auto' || pre.status !== 'ready' || pre.created_at < Date.now() - 15 * 60 * 1000 || pre.id === id) throw new HttpError(409, 'Сначала нужна автоматическая копия текущего состояния');
+  }
+  const part = await env.DB.prepare('SELECT * FROM site_backup_parts WHERE backup_id = ?1 AND idx = ?2').bind(id, idx).first();
+  if (!part) throw new HttpError(404, 'Часть копии не найдена');
+  const d = parseJ(part.data, null);
+  if (!d || !BACKUP_TABLES.includes(d.tbl) || !Array.isArray(d.cols) || !Array.isArray(d.rows)) throw new HttpError(400, 'Часть копии повреждена');
+  const have = new Set(await tableCols(env, d.tbl));
+  const keep = d.cols.map((c, i) => [c, i]).filter(([c]) => have.has(c));
+  const stmts = [];
+  if (d.tbl === 'users') {
+    const ui = d.cols.indexOf('id'); const set = keep.filter(([c]) => c !== 'id');
+    if (ui < 0 || !set.length) throw new HttpError(400, 'Часть копии повреждена');
+    for (const r of d.rows) stmts.push(env.DB.prepare(`UPDATE users SET ${set.map(([c], j) => `"${c}" = ?${j + 2}`).join(', ')} WHERE id = ?1`).bind(r[ui], ...set.map(([, i]) => r[i])));
+  } else {
+    const first = !(await env.DB.prepare('SELECT 1 AS x FROM site_backup_parts WHERE backup_id = ?1 AND tbl = ?2 AND idx < ?3 LIMIT 1').bind(id, d.tbl, idx).first());
+    if (first) stmts.push(env.DB.prepare(`DELETE FROM ${d.tbl}`));
+    const sql = `INSERT OR REPLACE INTO ${d.tbl} (${keep.map(([c]) => `"${c}"`).join(', ')}) VALUES (${keep.map((_, j) => '?' + (j + 1)).join(', ')})`;
+    for (const r of d.rows) stmts.push(env.DB.prepare(sql).bind(...keep.map(([, i]) => r[i] === undefined ? null : r[i])));
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  const last = idx >= bk.parts - 1;
+  if (last) {
+    await env.DB.prepare('UPDATE site_backups SET restored_at = ?2, restored_by = ?3 WHERE id = ?1').bind(id, Date.now(), user.id).run();
+    await audit(env, user, 'backup.restore', String(id), { parts: bk.parts, label: bk.label });
+  }
+  return json({ idx, table: d.tbl, rows: d.rows.length, done: last, next: last ? null : idx + 1 });
+}
+async function backupDelete(env, user, id) {
+  await backupRow(env, id);
+  await env.DB.batch([env.DB.prepare('DELETE FROM site_backup_parts WHERE backup_id = ?1').bind(id), env.DB.prepare('DELETE FROM site_backups WHERE id = ?1').bind(id)]);
+  await audit(env, user, 'backup.delete', String(id), null);
+  return json({ ok: true });
 }
 
 async function route(request, env, ctx) {
@@ -3932,6 +4104,8 @@ async function route(request, env, ctx) {
     await audit(env, user, 'promo.update', null, { ladder: v.ladder.length });
     return json(await promoConfig(env));
   }
+  if (p === '/api/promo/courses' && M === 'PUT') { requireCap(user, 'admin'); return promoCoursesPut(request, env, user); }
+  if (p === '/api/promo/eligibility' && M === 'GET') return json(await promoEligibility(env, user, url.searchParams.get('rank') || user.rank));
   if (p === '/api/promo/reset' && M === 'POST') { requireCap(user, 'admin'); await env.DB.prepare("DELETE FROM prem_config WHERE k = 'promo'").run(); await audit(env, user, 'promo.reset', null, null); return json(await promoConfig(env)); }
 
   if (p === '/api/lectures' && M === 'GET') return listLectures(env, user);
@@ -3979,6 +4153,7 @@ async function route(request, env, ctx) {
   if (p.startsWith('/api/admin/')) {
     requireRole(user, 'examiner'); // минимум — проверяющий; ниже уточняется
     const A = () => requireRole(user, 'admin');
+    const G = () => requireCap(user, 'grant'); // выдача ролей и доступов: администратор сайта или руководство (СС)
     if (p === '/api/admin/stats' && M === 'GET') return adminStats(env);
     // лекции
     if (p === '/api/admin/lectures' && M === 'GET') { A(); return adminLectures(env); }
@@ -4024,14 +4199,14 @@ async function route(request, env, ctx) {
     if (p === '/api/admin/media' && M === 'POST') { A(); return uploadMedia(request, env, user); }
     if ((m = /^\/api\/admin\/media\/(\d+)$/.exec(p))) { A(); if (M === 'PUT') return replaceMedia(request, env, user, idParam(m[1])); if (M === 'DELETE') return deleteMedia(env, user, idParam(m[1])); }
     // переаттестация
-    if (p === '/api/admin/reatt' && M === 'GET') { A(); return adminReatt(env); }
+    if (p === '/api/admin/reatt' && M === 'GET') { G(); return adminReatt(env); }
     if (p === '/api/admin/reatt' && M === 'POST') { A(); return createReatt(request, env, user); }
     if (p === '/api/admin/reatt/preview' && M === 'POST') { A(); return previewReatt(request, env, null); }
     if ((m = /^\/api\/admin\/reatt\/(\d+)$/.exec(p))) { A(); const rid = idParam(m[1]);
       if (M === 'GET') return json({ item: await adminReattOne(env, rid) }); if (M === 'PUT') return updateReatt(request, env, user, rid); if (M === 'DELETE') return deleteReatt(env, user, rid); }
     if ((m = /^\/api\/admin\/reatt\/(\d+)\/preview$/.exec(p)) && M === 'POST') { A(); return previewReatt(request, env, idParam(m[1])); }
-    if ((m = /^\/api\/admin\/reatt\/(\d+)\/access$/.exec(p))) { A(); if (M === 'GET') return adminReattAccess(env, idParam(m[1])); if (M === 'POST') return adminReattGrant(request, env, user, idParam(m[1])); }
-    if ((m = /^\/api\/admin\/reatt\/access\/(\d+)$/.exec(p)) && M === 'DELETE') { A(); return adminReattRevoke(env, user, idParam(m[1])); }
+    if ((m = /^\/api\/admin\/reatt\/(\d+)\/access$/.exec(p))) { G(); if (M === 'GET') return adminReattAccess(env, idParam(m[1])); if (M === 'POST') return adminReattGrant(request, env, user, idParam(m[1])); }
+    if ((m = /^\/api\/admin\/reatt\/access\/(\d+)$/.exec(p)) && M === 'DELETE') { G(); return adminReattRevoke(env, user, idParam(m[1])); }
     if ((m = /^\/api\/admin\/questions\/(\d+)$/.exec(p))) {
       A(); const id = idParam(m[1]);
       if (M === 'PUT') return saveQuestion(request, env, user, null, id);
@@ -4041,7 +4216,7 @@ async function route(request, env, ctx) {
     if (p === '/api/admin/users' && M === 'GET') return adminUsers(env, url);
     if ((m = /^\/api\/admin\/users\/(\d{5,25})$/.exec(p))) {
       if (M === 'GET') return adminUser(env, m[1]);
-      if (M === 'PUT') { A(); return updateUser(request, env, user, m[1]); }
+      if (M === 'PUT') { G(); return updateUser(request, env, user, m[1]); }
     }
     if ((m = /^\/api\/admin\/users\/(\d{5,25})\/reset-progress$/.exec(p)) && M === 'POST') { A(); return resetProgress(request, env, user, m[1]); }
     if ((m = /^\/api\/admin\/users\/(\d{5,25})\/reset-attempts$/.exec(p)) && M === 'POST') { A(); return resetAttempts(request, env, user, m[1]); }
@@ -4095,6 +4270,20 @@ async function route(request, env, ctx) {
       if (!result.ok) throw new HttpError(result.status, result.error);
       await audit(env, user, 'laws.flag.ack', m[1], { note: String(b.note || '').slice(0, 300) });
       return json(result);
+    }
+    // резервные копии — только главный администратор
+    if (p === '/api/admin/backups' || p.startsWith('/api/admin/backups/')) {
+      requireBackupAdmin(user);
+      if (p === '/api/admin/backups' && M === 'GET') return backupsList(env);
+      if (p === '/api/admin/backups' && M === 'POST') return backupCreate(request, env, user);
+      if ((m = /^\/api\/admin\/backups\/(\d+)$/.exec(p)) && M === 'GET') return json({ backup: await backupRow(env, idParam(m[1])) });
+      if ((m = /^\/api\/admin\/backups\/(\d+)$/.exec(p)) && M === 'DELETE') return backupDelete(env, user, idParam(m[1]));
+      if ((m = /^\/api\/admin\/backups\/(\d+)\/step$/.exec(p)) && M === 'POST') return backupStep(request, env, idParam(m[1]));
+      if ((m = /^\/api\/admin\/backups\/(\d+)\/upload$/.exec(p)) && M === 'POST') return backupUploadPart(request, env, idParam(m[1]));
+      if ((m = /^\/api\/admin\/backups\/(\d+)\/finish$/.exec(p)) && M === 'POST') return backupFinish(env, user, idParam(m[1]));
+      if ((m = /^\/api\/admin\/backups\/(\d+)\/part\/(\d+)$/.exec(p)) && M === 'GET') return backupPart(env, idParam(m[1]), Number(m[2]));
+      if ((m = /^\/api\/admin\/backups\/(\d+)\/restore$/.exec(p)) && M === 'POST') return backupRestore(request, env, user, idParam(m[1]));
+      throw new HttpError(404, 'Не найдено');
     }
     if (p === '/api/admin/settings' && M === 'GET') { A(); return json({ settings: await getSettings(env) }); }
     if (p === '/api/admin/settings' && M === 'PUT') { A(); return putSettings(request, env, user); }

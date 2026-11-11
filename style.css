@@ -720,3 +720,19 @@ tr.inl-open>td{background:#15263a}
 .forms-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
 .form-tile{display:flex;justify-content:space-between;align-items:center;text-decoration:none;color:var(--txt);margin:0}
 .form-tile:hover{border-color:#9ec5ff}
+/* рапорт на повышение во встроенном виде */
+.rep .route{font-family:Oswald,sans-serif;font-size:17px;margin-bottom:8px}
+.rep .route span{color:#e7c75a}
+.rep .crit{list-style:none;padding:0;margin:0;font-size:13.5px;line-height:1.6}
+.rep .crit li.ok{color:#8fd18f}.rep .crit li.no{color:#ff9e8f}
+.rep .crit b{color:#e9e6dc;font-weight:600;margin-left:4px}
+.rep .crit-note{font-size:12.5px;margin-top:6px;padding:7px 9px;border-radius:4px;background:#25201a}
+.rep .crit-note.ok{background:#1d2b1d;color:#a8e0a8}.rep .crit-note.no{color:#ffc4a8}
+.rep .crit-note:empty{display:none}
+.rep .crit-note ul{margin:4px 0 0;padding-left:18px}
+.rep .btn.gated{opacity:.45;cursor:not-allowed}
+.rep .promo-gate{margin-top:10px;font-size:13px;line-height:1.45}
+.rep .promo-gate a{color:#e7c75a}
+.rep .promo-gate:empty{display:none}
+.req-t td.c,.req-t th.c{text-align:center}.req-t th.c{max-width:120px;font-weight:500}
+.chip.ok{border-color:#2f6b2f;color:#a8e0a8}

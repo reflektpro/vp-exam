@@ -199,8 +199,37 @@ async function premiumsPage() {
 }
 
 // ---------- система повышения ----------
+// Обязательные курсы учёбы: без них рапорт на повышение не скачивается. Общий список и по званиям (ступеням).
+function promoCoursesHtml(req, courses, cById, C, edit) {
+  const tag = (id) => { const c = cById.get(id); return c ? `<a class="chip ${c.complete ? 'ok' : ''}" href="#/course/${id}">${esc(c.title)}${c.complete ? ' ✔' : ''}</a>` : ''; };
+  const ranks = Object.entries(req.by_rank || {}).filter(([, l]) => l.length);
+  const view = (req.all.length || ranks.length) ? `<div class="card flat" id="promoReq"><h3>Обязательные курсы</h3><p class="small mut">Пока они не пройдены, рапорт на повышение не скачивается.</p>
+    ${req.all.length ? `<div class="chips">${req.all.map(tag).join('')}</div>` : ''}
+    ${ranks.map(([r, l]) => `<div class="kv"><span>${esc(r)}</span><b class="chips">${l.map(tag).join('')}</b></div>`).join('')}</div>` : '';
+  if (!edit) return view;
+  const ck = (rank, id) => { const on = rank ? (req.by_rank[rank] || []).includes(id) : req.all.includes(id); return `<td class="c"><input type="checkbox" data-r="${esc(rank)}" data-c="${id}" ${on ? 'checked' : ''} aria-label="${esc((rank || 'Все звания') + ': ' + (cById.get(id) || {}).title)}"></td>`; };
+  return view + `<details class="card flat" id="promoReqEdit"><summary><b>Обязательные курсы — изменить</b></summary>
+    <div class="tscroll"><table class="req-t"><tr><th>Звание</th>${courses.map(c => `<th class="c small">${esc(c.title)}</th>`).join('')}</tr>
+      <tr><td><b>Все звания</b></td>${courses.map(c => ck('', c.id)).join('')}</tr>
+      ${C.ladder.map(st => `<tr><td>${esc(st.rank)} → ${esc(st.to)}</td>${courses.map(c => ck(st.rank, c.id)).join('')}</tr>`).join('')}</table></div></details>`;
+}
+function bindPromoCourses(req) {
+  $$('#promoReqEdit input[type=checkbox]').forEach(cb => cb.onchange = async () => {
+    const id = Number(cb.dataset.c), r = cb.dataset.r;
+    const next = { all: [...req.all], by_rank: JSON.parse(JSON.stringify(req.by_rank || {})) };
+    const list = r ? (next.by_rank[r] = next.by_rank[r] || []) : next.all;
+    if (cb.checked) { if (!list.includes(id)) list.push(id); } else list.splice(list.indexOf(id), 1);
+    cb.disabled = true;
+    try { const x = await api('PUT', '/api/promo/courses', next); req.all = x.courses_req.all; req.by_rank = x.courses_req.by_rank; toast('Обязательные курсы сохранены'); const det = $('#promoReqEdit'); const open = det && det.open; await render({ silent: true }); const d2 = $('#promoReqEdit'); if (d2 && open) d2.open = true; }
+    catch (e) { cb.checked = !cb.checked; toast(e.message, true); cb.disabled = false; }
+  });
+}
 route('/promo', async () => {
-  const d = await api('GET', '/api/promo');
+  const [d, cl] = await Promise.all([api('GET', '/api/promo'), api('GET', '/api/courses').catch(() => ({ courses: [] }))]);
+  const swap = d.missing_points !== false;
+  const req = d.courses_req || { all: [], by_rank: {} };
+  const courses = (cl.courses || []).filter(c => c.id);
+  const cById = new Map(courses.map(c => [c.id, c]));
   const C = d.config, names = new Map(d.items.map(i => [i.key, i.name]));
   const edit = hashQ().get('edit') === '1' && d.can_edit;
   const need = (n) => Object.entries(n).map(([k, v]) => `<span class="chip">${esc(names.get(k) || k)} × ${v}</span>`).join('') || '<span class="small mut">—</span>';
@@ -208,11 +237,13 @@ route('/promo', async () => {
   if (!edit) {
     setView(`<h1>Система повышения</h1>
       ${d.can_edit ? `<p><a class="btn gold" href="#/promo?edit=1">Изменить правила</a>${d.custom ? ' <span class="small mut">изменено ' + fmtDate(d.updated_at) + '</span>' : ''}</p>` : ''}
-      <p class="mut small">Для повышения нужно набрать баллы за период и выполнить обязательные пункты ступени. Каждый недостающий пункт можно заменить <b>${C.points_per_item}</b> баллами сверх нормы (кроме лекций, экзаменов и стажировок). Рапорт на повышение — на <a href="${esc(CFG.REPORTS_URL.replace(/otchet\.html$/, 'povyshenie.html'))}" target="_blank" rel="noopener">сайте бланков</a>: он считает всё сам.</p>
+      <p class="mut small">Для повышения нужно набрать баллы за период и выполнить обязательные пункты ступени.${swap ? ` Каждый недостающий пункт можно заменить <b>${C.points_per_item}</b> баллами сверх нормы (кроме лекций, экзаменов и стажировок).` : ' Все обязательные пункты нужно выполнить — баллами они не заменяются.'} <a href="#/promo/raport">Рапорт на повышение</a> считает всё сам.</p>
+      ${promoCoursesHtml(req, courses, cById, C, d.can_edit)}
       <div class="ladder">${C.ladder.map((st, i) => `<div class="lstep"><div class="lnum">${i + 1}</div><div style="flex:1"><div class="row between"><b>${esc(st.rank)} → ${esc(st.to)}</b><span class="badge gold">${st.points} баллов</span></div>
         <div class="chips">${need(st.need)}</div></div></div>`).join('')}</div>
       <div class="card flat"><h3>Баллы за действия</h3><table><tr><th>Действие</th><th>Раздел</th><th>Баллы</th></tr>${ptsItems.map(i => `<tr><td>${esc(i.name)}</td><td class="small mut">${GROUP_RU[i.group] || ''}</td><td class="num">${C.pts[i.key]}</td></tr>`).join('')}</table>
         <p class="small mut">Остальные пункты отчёта баллов для повышения не дают.</p></div>`);
+    if (d.can_edit) bindPromoCourses(req);
     return;
   }
   const opts = (sel) => d.items.map(i => `<option value="${esc(i.key)}" ${i.key === sel ? 'selected' : ''}>${esc(i.name)}</option>`).join('');
@@ -222,6 +253,7 @@ route('/promo', async () => {
   setView(`<p><a href="#/promo">← Система повышения</a></p><h1>Правила повышения</h1>
     <datalist id="rankList">${RANKS.map(r => `<option>${r}</option>`).join('')}</datalist>
     <div class="card"><label class="f" style="max-width:320px"><span>Баллов за один недостающий пункт</span><input id="ppi" type="number" min="1" value="${C.points_per_item}"></label>
+      ${d.missing_points === false ? '<p class="small mut">Сейчас недостающие пункты баллами не закрываются — включается в <a href="#/admin/settings">параметрах сайта</a>.</p>' : ''}
       <h3>Ступени</h3><div class="tscroll"><table id="ladT"><tr><th>Звание</th><th>Следующее</th><th>Баллы</th><th>Обязательные пункты</th><th></th></tr>${C.ladder.map(stepRow).join('')}</table></div>
       <button type="button" class="btn sm" id="addStep">+ ступень</button></div>
     <div class="card"><h3>Баллы за действия</h3><div class="tscroll"><table id="ptsT"><tr><th>Действие</th><th>Баллы</th></tr>${d.items.map(i => `<tr><td>${esc(i.name)}<div class="small mut">${GROUP_RU[i.group] || ''}</div></td><td><input type="number" min="0" data-k="${esc(i.key)}" value="${C.pts[i.key] || 0}" style="width:90px"></td></tr>`).join('')}</table></div></div>

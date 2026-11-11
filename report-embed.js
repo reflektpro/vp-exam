@@ -9,6 +9,71 @@ window.VP_DOC_CONFIG = {
   city: 'Москва'
 };
 window.VP_REPORT_BASE = 'report/';
+const PROMO_FORM_HTML = `<div class="layout v2">
+  <aside class="panel form-panel" id="form">
+    <h2>Рапорт на повышение</h2>
+    <div class="row2">
+      <label class="plab">Номер рапорта
+        <span class="numrow"><input id="num" autocomplete="off"><button type="button" class="mini" id="numNext" title="Следующий номер по счётчику этого браузера">след.</button></span>
+      </label>
+      <label class="plab">Дата подачи<input type="date" id="date"></label>
+    </div>
+    <h3>I. Общие сведения</h3>
+    <div class="q">1. Военнослужащий</div>
+    <div class="row2">
+      <label class="plab">Текущее звание<input class="req" id="fromRank" list="ranks" placeholder="Лейтенант"></label>
+      <label class="plab">Номер удостоверения<input class="req" id="fromStatic" placeholder="12345"></label>
+    </div>
+    <label class="plab">Имя Фамилия<input class="req" id="fromName" placeholder="Шерман Ассман" autocomplete="off"></label>
+    <div class="q">2. Подразделение и должность</div>
+    <div class="row2">
+      <label class="plab">Подразделение<input class="req" id="fromUnit" list="units" placeholder="Батальон военной полиции"></label>
+      <label class="plab">Должность<input class="req" id="fromPos" list="positions" placeholder="Инспектор ВП"></label>
+    </div>
+    <div class="q">3. Звание и период службы в текущем звании</div>
+    <label class="plab">Испрашиваемое звание<input class="req" id="target" list="ranks" placeholder="подставится по системе повышений"></label>
+    <div class="week-dates"><input type="date" id="fromDate" class="req" title="в текущем звании с"><span>—</span><input type="date" id="toDate" class="req" title="по"></div>
+
+    <h3>Калькулятор повышения</h3>
+    <div class="route" id="route"></div>
+    <div class="bar"><div class="bar-fill" id="barFill"></div><span id="barText">0 баллов</span></div>
+    <ul class="crit" id="crit"></ul>
+    <div class="crit-note" id="critNote"></div>
+
+    <h3>II. Результаты служебной деятельности</h3>
+    <label class="chk"><input type="checkbox" id="showPts" checked> Указывать баллы в документе</label>
+    <div class="acts-hint">Отмечай выполненное за период службы в текущем звании и прикладывай ссылки, по одной на строку. Пункты разбиты по официальной градации: основная отчётность, дополнительная отчётность, работа ГУ ВП.</div>
+    <div id="acts"></div>
+
+    <h3>III. Итоговая информация</h3>
+    <label class="plab q">7. Общий результат работы за период<textarea id="result" rows="2"></textarea></label>
+    <div class="norm-hint">Пусто — подставится автоматически: «выполнено мероприятий и служебных действий: N». Общее количество баллов печатается отдельной строкой перед датой.</div>
+    <label class="plab q">8. Дополнительные сведения<textarea id="extra" rows="2" placeholder="другие заслуги, поощрения; пусто — «отсутствуют»"></textarea></label>
+    <h3>Выгрузка</h3>
+    <label class="chk"><input type="checkbox" id="stampOn" checked> Ставить печать</label>
+    <button class="btn primary" id="pdf">Скачать PDF</button>
+    <button class="btn" id="png">Скачать PNG</button>
+    <button class="btn ghost" id="clear">Обнулить достижения</button>
+    <div id="promoGate"></div>
+    <div class="status" id="status"></div>
+    <div class="note">PDF — векторный текст, ссылки на доказательства видны и кликабельны. PNG — тот же документ без ссылок: вместо адресов «Приложение №N». Данные хранятся только в этом браузере и никуда не отправляются.</div>
+  </aside>
+  <section class="preview-wrap">
+    <div class="pv-bar"><span>Предпросмотр</span><span id="pvPages"></span>
+      <span class="pv-mode"><label><input type="radio" name="pvMode" value="preview" checked> PDF</label><label><input type="radio" name="pvMode" value="png"> PNG</label></span></div>
+    <div class="preview" id="preview"></div>
+  </section>
+</div>
+<datalist id="ranks">
+  <option>Рядовой</option><option>Ефрейтор</option><option>Младший сержант</option><option>Сержант</option>
+  <option>Старший сержант</option><option>Старшина</option><option>Прапорщик</option><option>Старший прапорщик</option>
+  <option>Младший лейтенант</option><option>Лейтенант</option><option>Старший лейтенант</option><option>Капитан</option>
+  <option>Майор</option><option>Подполковник</option><option>Полковник</option><option>Генерал-майор</option><option>Генерал-лейтенант</option><option>Генерал-полковник</option><option>Генерал армии</option>
+</datalist>
+<datalist id="positions">
+  <option>Стажёр ВП</option><option>Инспектор ВП</option><option>Дознаватель ВП</option><option>Инструктор ВП</option><option>Зам. Ком. Бат ВП</option><option>Ком. Бат ВП</option><option>Инспектор военной комендатуры</option><option>Дознаватель военной комендатуры</option><option>Заместитель коменданта гарнизона</option><option>Комендант гарнизона</option>
+</datalist>
+<datalist id="units"><option>Батальон военной полиции</option><option>Военная комендатура</option></datalist>`;
 const REPORT_FORM_HTML = `<div class="layout v2">
   <aside class="panel form-panel" id="form">
     <h2>Еженедельный отчёт</h2>
@@ -86,7 +151,7 @@ function repScript(src) {
 function reportLibs() {
   if (!RepLib.core) {
     const v = '?v=' + encodeURIComponent(window.VP_VERSION || '');
-    const core = ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'criteria.js', 'otchet.js'].map(f => repScript('report/' + f + v));
+    const core = ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'criteria.js', 'otchet.js', 'povyshenie.js'].map(f => repScript('report/' + f + v));
     RepLib.core = Promise.all(core);
     window.VP_PDF_READY = Promise.all(['vendor/pdfmake.min.js', 'vendor/pdf.min.js'].map(f => repScript('report/' + f + v)));
     RepLib.core.catch(() => { RepLib.core = null; });
@@ -99,7 +164,7 @@ function warmReport() {
   if (warmReport.done || !can('vp')) return; warmReport.done = true;
   const v = '?v=' + encodeURIComponent(window.VP_VERSION || '');
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1500));
-  idle(() => ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'criteria.js', 'otchet.js', 'vendor/pdfmake.min.js', 'vendor/pdf.min.js'].forEach(f => {
+  idle(() => ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'criteria.js', 'otchet.js', 'povyshenie.js', 'vendor/pdfmake.min.js', 'vendor/pdf.min.js'].forEach(f => {
     const l = document.createElement('link'); l.rel = 'prefetch'; l.as = 'script'; l.href = 'report/' + f + v; document.head.appendChild(l);
   }));
 }
@@ -157,4 +222,40 @@ route('/reports', async () => {
   repAutofill(App.me);
   box.classList.remove('rep-wait');
   go(eco);
+}, { cap: 'vp' });
+
+// ---------- рапорт на повышение прямо в портале ----------
+// Скачать PDF/PNG можно, когда пройдены обязательные курсы учёбы (общие и для текущего звания). Допуск считает сервер
+// (GET /api/promo/eligibility); старый сервер без этой проверки — выгрузка открыта, как раньше.
+function promoGateHtml(g) {
+  if (!g || g.allowed) return '';
+  const list = g.missing.map(c => `<a href="#/course/${c.id}">${esc(c.title)}</a>`).join(', ');
+  return `<div class="alert warn small promo-gate">Скачать рапорт можно после ${g.missing.length > 1 ? 'курсов' : 'курса'}: ${list}.</div>`;
+}
+route('/promo/raport', async () => {
+  App.busy = true; onCleanup(() => { App.busy = false; });
+  const libs = reportLibs(); libs.catch(() => {});
+  const elig = (rank) => api('GET', '/api/promo/eligibility' + (rank ? '?rank=' + encodeURIComponent(rank) : '')).catch(() => ({ allowed: true, missing: [] }));
+  const [pc, g0] = await Promise.all([api('GET', '/api/promo-config').catch(() => null), elig('')]);
+  let gate = g0;
+  setView(`<h1>Рапорт на повышение</h1><div class="rep" id="repBox">${PROMO_FORM_HTML}</div>`);
+  const box = $('#repBox');
+  const paint = () => {
+    const el = $('#promoGate'); if (!el) return;
+    el.innerHTML = promoGateHtml(gate);
+    ['pdf', 'png'].forEach(id => { const b = document.getElementById(id); if (b) { b.classList.toggle('gated', !gate.allowed); b.setAttribute('aria-disabled', gate.allowed ? 'false' : 'true'); } });
+  };
+  paint();
+  box.classList.add('rep-wait');
+  try { await libs; } catch (e) { if (box.isConnected) $('#status').innerHTML = `<div class="send-err">${esc(e.message)}</div>`; return; }
+  if (!box.isConnected) return;
+  repPromo(pc);
+  const eco = { me: App.me, api, missingPoints: !(pc && pc.missing_points === false), gate: () => gate };
+  window.VPPromoMount(eco);
+  repAutofill(App.me);
+  box.classList.remove('rep-wait');
+  let t = null, asked = (App.me && App.me.rank) || '';
+  const rankEl = $('#fromRank');
+  if (rankEl && rankEl.value.trim().toLowerCase() !== asked.toLowerCase()) { asked = rankEl.value.trim(); gate = await elig(asked); paint(); }
+  if (rankEl) rankEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(async () => { const r = rankEl.value.trim(); if (r === asked) return; asked = r; const g = await elig(r); if (asked === r && box.isConnected) { gate = g; paint(); } }, 350); });
 }, { cap: 'vp' });
