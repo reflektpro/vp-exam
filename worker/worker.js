@@ -2783,6 +2783,7 @@ const PREM_DEFAULT = {
     { key: 'oath', name: 'Принятие присяги у ВА', group: 'main', pay: 5000, pay_name: 'Принятие присяги ВА', wk: 1 },
     // Дополнительная отчётность
     { key: 'kraz', name: 'Участие в КРАЗе', group: 'extra', pay: 13000, pay_name: 'Участие в КРАЗе' },
+    { key: 'kraz_otbitie', name: 'Успешное отбитие КРАЗа', group: 'extra', pay: 0, pay_name: '' },
     { key: 'mp_visit', name: 'Посетить МП', group: 'extra', pay: 5000, pay_name: 'Посетить МП' },
     { key: 'gmp', name: 'Посетить ГМП', group: 'extra', pay: 10500, pay_name: 'Посетить ГМП' },
     { key: 'poverka', name: 'Участие в вечерней поверке', group: 'extra', pay: 8500, pay_name: 'Участие в вечерней поверке' },
@@ -2875,7 +2876,14 @@ function weekDeadline(week, rules = PREM_DEFAULT.rules) { // epoch ms: день 
 async function premConfig(env) {
   const cfg = JSON.parse(JSON.stringify(PREM_DEFAULT));
   const { results } = await env.DB.prepare('SELECT k, v FROM prem_config').all();
-  for (const r of results) { const v = parseJ(r.v, null); if (v && PREM_CFG_KEYS.includes(r.k)) cfg[r.k] = r.k === 'rules' ? { ...PREM_DEFAULT.rules, ...v } : v; }
+  for (const r of results) {
+    const v = parseJ(r.v, null); if (!v || !PREM_CFG_KEYS.includes(r.k)) continue;
+    if (r.k === 'rules') cfg.rules = { ...PREM_DEFAULT.rules, ...v };
+    else if (r.k === 'items' && Array.isArray(v)) {
+      const have = new Set(v.map(i => i.key));
+      cfg.items = v.concat(PREM_DEFAULT.items.filter(i => !have.has(i.key)));
+    } else cfg[r.k] = v;
+  }
   return cfg;
 }
 function money(v, name, max = 100000000) { return int(v === '' || v == null ? 0 : Math.round(Number(v)), 0, max, name); }
@@ -3773,13 +3781,17 @@ async function dzEventDelete(request, env, actor, id, eid) {
 // ---------- система повышения ----------
 // Ступени (звание → следующее, баллы, обязательные пункты отчёта), баллы за пункты и сколько баллов заменяют недостающий пункт.
 // По умолчанию — как в promo-rules.js сайта бланков; администраторы меняют здесь, сайт бланков подхватывает изменения.
-const PROMO_DEFAULT = {"points_per_item":100,"pts":{"postavka":35,"otbitie":30,"training":30,"proc":0,"event6":30,"gmp_org":0,"pmp":0,"excursion":0,"oath":0,"kraz":0,"mp_visit":0,"gmp":40,"poverka":35,"post_kom":0,"post_shtab":0,"post_kpp1":0,"post_kpp2":0,"naryad":0,"sso":0,"patrol_city":0,"patrol_gar":0,"patrol_vch":0,"patrol":0,"lecture_va":0,"exam_va":0,"thanks":0,"city":20,"reattest":30,"vzysk":30,"vygovor":0,"prof":30,"prizyv":30,"guardhouse":75,"convoy":0,"complaint":0,"otrab":0,"obzhal":0,"docs":0,"inspect":0,"lecture_vp":0,"exam_vp":0,"soch":0},"ladder":[{"rank":"Сержант","to":"Старший сержант","points":150,"need":{"naryad":1,"prof":1,"training":1}},{"rank":"Старший сержант","to":"Старшина","points":250,"need":{"naryad":1,"training":1,"prof":2}},{"rank":"Старшина","to":"Прапорщик","points":350,"need":{"naryad":1,"prof":3,"inspect":5,"training":2}},{"rank":"Прапорщик","to":"Старший прапорщик","points":450,"need":{"naryad":2,"prof":4,"training":3}},{"rank":"Старший прапорщик","to":"Младший лейтенант","points":550,"need":{"training":3,"patrol":2,"prof":4}},{"rank":"Младший лейтенант","to":"Лейтенант","points":650,"need":{"patrol":1,"prof":4,"training":3,"prizyv":3}},{"rank":"Лейтенант","to":"Старший лейтенант","points":750,"need":{"patrol":1,"prof":6,"docs":5,"vzysk":3,"training":3}},{"rank":"Старший лейтенант","to":"Капитан","points":1500,"need":{"prof":7,"vzysk":5,"prizyv":3,"training":5}}]};
+const PROMO_DEFAULT = {"points_per_item":100,"pts":{"postavka":35,"otbitie":30,"training":30,"proc":0,"event6":30,"gmp_org":0,"pmp":0,"excursion":0,"oath":0,"kraz":0,"kraz_otbitie":35,"mp_visit":0,"gmp":40,"poverka":35,"post_kom":0,"post_shtab":0,"post_kpp1":0,"post_kpp2":0,"naryad":0,"sso":0,"patrol_city":0,"patrol_gar":0,"patrol_vch":0,"patrol":0,"lecture_va":0,"exam_va":0,"thanks":0,"city":20,"reattest":30,"vzysk":30,"vygovor":0,"prof":30,"prizyv":30,"guardhouse":75,"convoy":0,"complaint":0,"otrab":0,"obzhal":0,"docs":0,"inspect":0,"lecture_vp":0,"exam_vp":0,"soch":0},"ladder":[{"rank":"Сержант","to":"Старший сержант","points":150,"need":{"naryad":1,"prof":1,"training":1}},{"rank":"Старший сержант","to":"Старшина","points":250,"need":{"naryad":1,"training":1,"prof":2}},{"rank":"Старшина","to":"Прапорщик","points":350,"need":{"naryad":1,"prof":3,"inspect":5,"training":2}},{"rank":"Прапорщик","to":"Старший прапорщик","points":450,"need":{"naryad":2,"prof":4,"training":3}},{"rank":"Старший прапорщик","to":"Младший лейтенант","points":550,"need":{"training":3,"patrol":2,"prof":4}},{"rank":"Младший лейтенант","to":"Лейтенант","points":650,"need":{"patrol":1,"prof":4,"training":3,"prizyv":3}},{"rank":"Лейтенант","to":"Старший лейтенант","points":750,"need":{"patrol":1,"prof":6,"docs":5,"vzysk":3,"training":3}},{"rank":"Старший лейтенант","to":"Капитан","points":1500,"need":{"prof":7,"vzysk":5,"prizyv":3,"training":5}}]};
 async function promoConfig(env) {
   const r = await env.DB.prepare("SELECT v, updated_at FROM prem_config WHERE k = 'promo'").first();
   const v = r ? parseJ(r.v, null) : null;
   const st = await getSettings(env);
-  return { config: v ? { ...PROMO_DEFAULT, ...v } : JSON.parse(JSON.stringify(PROMO_DEFAULT)), custom: !!v, updated_at: r ? r.updated_at : null,
-    missing_points: st.promo_missing_points, courses_req: await promoCourses(env) };
+  const { results: courseRows } = await env.DB.prepare('SELECT id, title FROM courses').all();
+  const course_titles = {};
+  for (const c of courseRows) course_titles[c.id] = c.title;
+  const cfg = v ? { ...PROMO_DEFAULT, ...v, pts: { ...PROMO_DEFAULT.pts, ...(v.pts || {}) } } : JSON.parse(JSON.stringify(PROMO_DEFAULT));
+  return { config: cfg, custom: !!v, updated_at: r ? r.updated_at : null,
+    missing_points: st.promo_missing_points, courses_req: await promoCourses(env), course_titles };
 }
 // Обязательные курсы учёбы для повышения: общий список и по званиям (ступеням). Хранится в prem_config 'promo_courses'.
 async function promoCourses(env) {

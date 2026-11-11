@@ -104,7 +104,8 @@ if (fs.existsSync(PR)) {
   ok('сайт отчётов: каждый пункт есть в таблице выплат', acts.every(a => pk.has(a.key)), acts.filter(a => !pk.has(a.key)).map(a => a.key));
   ok('таблица выплат: каждый пункт есть на сайте отчётов', cfg.items.every(i => acts.some(a => a.key === i.key)));
   ok('названия, разделы и баллы совпадают', acts.every(a => pk.get(a.key).name === a.name && pk.get(a.key).group === a.group && (a.group !== 'main' || pk.get(a.key).wk === a.wk)));
-  ok('без выплаты только пункты вне приказа (наряд, организация патрулирования, выговор)', cfg.items.filter(i => !i.pay).map(i => i.key).join() === 'naryad,patrol,vygovor');
+  ok('без выплаты только пункты вне приказа (наряд, организация патрулирования, выговор, успешное отбитие КРАЗа)', cfg.items.filter(i => !i.pay).map(i => i.key).join() === 'kraz_otbitie,naryad,patrol,vygovor');
+  ok('Успешное отбитие КРАЗа: 35 баллов за раз', acts.find(a => a.key === 'kraz_otbitie') && acts.find(a => a.key === 'kraz_otbitie').pts === 35 && acts.find(a => a.key === 'kraz_otbitie').name === 'Успешное отбитие КРАЗа' && pk.get('kraz_otbitie').name === 'Успешное отбитие КРАЗа');
 }
 // адресат отчёта: дефолт по должности и отметке СС, ручной выбор, header.to (конец периода) не затирается
 {

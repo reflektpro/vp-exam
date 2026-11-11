@@ -36,6 +36,7 @@ window.PROMO = {
     { key: "oath",       name: "Принятие присяги у ВА", pts: 0, wk: 1, group: "main" },
     // ── Дополнительная отчётность ──
     { key: "kraz",       name: "Участие в КРАЗе", pts: 0, group: "extra" },
+    { key: "kraz_otbitie", name: "Успешное отбитие КРАЗа", pts: 35, group: "extra" },
     { key: "mp_visit",   name: "Посетить МП", pts: 0, group: "extra" },
     { key: "gmp",        name: "Посетить ГМП", pts: 40, group: "extra" },
     { key: "poverka",    name: "Участие в вечерней поверке", pts: 35, group: "extra" },

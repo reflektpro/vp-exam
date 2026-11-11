@@ -188,7 +188,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
 
   // ---------- 8. таблицы выплат (главный администратор) ----------
   await as(A, '/lead/config'); await page.waitForSelector('#tPos');
-  check('таблицы: 7 должностей, план 6 строк, 42 пункта', (await page.$$('#tPos tr')).length === 8 && (await page.$$('#tPlan tr[data-key]')).length === 6 && (await page.$$('#tItems tr[data-key]')).length === 42);
+  check('таблицы: 7 должностей, план 6 строк, 43 пункта', (await page.$$('#tPos tr')).length === 8 && (await page.$$('#tPlan tr[data-key]')).length === 6 && (await page.$$('#tItems tr[data-key]')).length === 43);
   check('план: «мероприятия внутри ВС РФ» — МП, тренировка, профилактика (без ГМП)', /Организовать МП, Проведение тренировки для военнослужащих, Организация профилактического мероприятия/.test(await page.textContent('#tPlan tr[data-key=event]')) && !/ГМП/.test(await page.textContent('#tPlan tr[data-key=event] summary')));
   await page.fill('#tItems tr[data-key=postavka] [data-f=pay]', '13500'); await page.click('[data-save=items]'); await page.waitForTimeout(600);
   r = await call('GET', '/api/lead/week', L); check('выплата за поставку 13 500 → база 509 000', r.d.rows.find(x => x.user_id === E1).base === 509000, r.d.rows.find(x => x.user_id === E1));
