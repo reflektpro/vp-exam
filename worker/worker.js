@@ -3289,10 +3289,12 @@ async function leadReview(request, env, actor, id) {
   return leadReport(env, id);
 }
 // --- состав, нарушения ---
+// Состав ГУ ВП: только сотрудники с ролью «ВП»; без неё — лишь те, кто ещё отмечен «в составе»/«СС» (чтобы их можно было снять).
 async function leadStaff(env) {
-  const { results } = await env.DB.prepare(`SELECT u.id, u.username, u.global_name, u.ic_name, u.static_id, u.staff, u.senior, u.leader, u.staff_position, u.staff_since, u.last_login_at,
-      (SELECT COUNT(*) FROM reports r WHERE r.user_id = u.id) AS reports FROM users u ORDER BY u.staff DESC, COALESCE(u.ic_name, u.global_name, u.username)`).all();
-  return json({ users: results.map(u => ({ ...u, staff: !!u.staff, senior: !!u.senior, leader: !!u.leader })), current_week: weekOf(Date.now()) });
+  const { results } = await env.DB.prepare(`SELECT u.id, u.username, u.global_name, u.ic_name, u.static_id, u.staff, u.senior, u.leader, u.staff_position, u.staff_since, u.last_login_at, u.vp,
+      (SELECT COUNT(*) FROM reports r WHERE r.user_id = u.id) AS reports FROM users u
+      WHERE u.vp = 1 OR u.staff = 1 OR u.senior = 1 ORDER BY u.staff DESC, COALESCE(u.ic_name, u.global_name, u.username)`).all();
+  return json({ users: results.map(u => ({ ...u, staff: !!u.staff, senior: !!u.senior, leader: !!u.leader, vp: !!u.vp })), current_week: weekOf(Date.now()) });
 }
 async function leadSetStaff(request, env, actor, uid) {
   const cfg = await premConfig(env); const b = await readJson(request);

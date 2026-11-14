@@ -122,6 +122,10 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   pc.ladder[0].points = 175; r = await call('PUT', '/api/promo', T.admin, { points_per_item: 120, pts: pc.pts, ladder: pc.ladder }); check('админ меняет требования системы повышения', r.status === 200 && r.d.custom, r.d);
   r = await call('GET', '/api/promo-config'); check('публичная конфигурация повышения для сайта бланков', r.d.custom && r.d.config.points_per_item === 120 && r.d.config.ladder[0].points === 175);
 
+  r = await call('GET', '/api/lead/staff', T.lead); const sIds = (r.d.users || []).map(x => x.id);
+  check('состав ГУ ВП: только с ролью «ВП» (или ещё отмеченные в составе)', r.status === 200 && sIds.includes(U.vp) && sIds.includes(U.vp2) && !sIds.includes(U.none) && !sIds.includes(U.reatt) && !sIds.includes(U.exam) && r.d.users.every(x => x.vp || x.staff || x.senior), sIds);
+  r = await call('GET', '/api/admin/users?q=', T.super); check('выдача ролей по-прежнему показывает всех', r.d.users.some(x => x.id === U.none) && r.d.users.some(x => x.id === U.reatt));
+
   // ---------- 6. интерфейс: шторка по ролям ----------
   const b = await chromium.launch({ args: ['--no-sandbox'] });
   const errs = [];
@@ -175,6 +179,33 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   const bc = [(await p.$$('table.prem th.bcol')).length, /Итого из фонда/.test(await p.textContent('main')), await p.textContent('#budgetTotal')]; check('руководство: «Итого из фонда» и «Наградная (бюджет)» — разные колонки и итоги', (await p.$$('table.prem th.bcol')).length === 1 && /Итого из фонда/.test(await p.textContent('main')) && /50\s000/.test(await p.textContent('#budgetTotal')), bc);
   await p.screenshot({ path: SHOTS + 'roles-lead.png', fullPage: true });
   await p.context().close();
+  // фильтр по ролям в «Пользователи и роли» (на клиенте, без новых запросов)
+  p = await open(T.super, '/admin/users'); await p.waitForSelector('#uf');
+  await p.evaluate(() => { sessionStorage.removeItem('vp_uf'); }); await p.click('#uf .chip[data-f=""]');
+  const reqs = []; p.on('request', q => { if (q.url().includes('/api/')) reqs.push(q.url()); });
+  const vis = () => p.$$eval('table.users-t tr[data-u]', trs => trs.filter(t => !t.hidden).map(t => ({ id: t.dataset.u, b: t.querySelector('.u-badges').textContent })));
+  const total = (await p.$$('table.users-t tr[data-u]')).length;
+  check('фильтр ролей: «Все» — показаны все, счётчик', (await vis()).length === total && new RegExp(`Показано ${total} из ${total}`).test(await p.textContent('#ufCnt')), await p.textContent('#ufCnt'));
+  await p.click('#uf .chip[data-f="vp"]'); let v = await vis();
+  check('фильтр ролей: только «ВП»', v.length > 0 && v.length < total && v.every(x => /ВП/.test(x.b)) && v.some(x => x.id === U.vp) && !v.some(x => x.id === U.none) && new RegExp(`Показано ${v.length} из ${total}`).test(await p.textContent('#ufCnt')), v);
+  await p.click('#uf .chip[data-f="reatt"]'); const v2 = await vis();
+  check('фильтр ролей: «ВП» И «Переаттестация»', v2.length <= v.length && v2.every(x => /ВП/.test(x.b) && /Переаттестация/.test(x.b)), v2);
+  await p.click('#uf .chip[data-f="reatt"]'); v = await vis();
+  const row = `table.users-t tr[data-u="${U.vp2}"]`;
+  check('фильтр ролей: сотрудник ВП в списке', await p.isVisible(row));
+  await p.uncheck(row + ' input[data-k="vp"]'); await p.waitForTimeout(600);
+  r = await call('GET', '/api/admin/users/' + U.vp2, T.super);
+  check('фильтр ролей: роль «ВП» снимается прямо из отфильтрованного списка', r.d.user && !r.d.user.vp && await p.isVisible(row), r.d.user);
+  await call('PUT', '/api/admin/users/' + U.vp2, T.super, { vp: true });
+  await p.click('#uf .chip[data-f="none"]'); v = await vis();
+  check('фильтр ролей: «Без ролей»', v.some(x => x.id === U.none) && v.every(x => /нет ролей/.test(x.b)), v);
+  await p.click('#uf .chip[data-f=""]');
+  check('фильтр ролей: «Все» сбрасывает', (await vis()).length === total && await p.getAttribute('#uf .chip[data-f=""]', 'aria-pressed') === 'true');
+  check('фильтр ролей: без новых запросов, кроме смены роли', reqs.every(u => /\/api\/admin\/users\/600000000000000006$/.test(u)), reqs);
+  await p.screenshot({ path: SHOTS + 'roles-users-filter.png', fullPage: true });
+  await p.context().close();
+  p = await open(T.exam, '/admin/users'); await p.waitForSelector('table.users-t');
+  check('фильтр ролей: у проверяющего (без выдачи ролей) фильтра нет', !(await p.$('#uf'))); await p.context().close();
   // курсы
   r = await call('POST', '/api/admin/lectures', T.admin, { title: 'Лекция 1. Устав', video_url: 'videos/a.mp4', duration_sec: 60, required: true, published: true }); const l1 = r.d.lecture && r.d.lecture.id;
   r = await call('POST', '/api/admin/courses', T.admin, { title: 'Курс молодого бойца', description: 'Основы службы', published: true, lecture_ids: [l1], exam_ids: [] }); const cid = r.d.course && r.d.course.id;

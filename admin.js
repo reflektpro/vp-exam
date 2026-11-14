@@ -719,6 +719,16 @@ route('/admin/media', async () => {
 }, { role: 'admin' });
 
 // ---------- кандидаты ----------
+// Фильтр списка людей по ролям (на клиенте, по уже загруженному списку): показываются те, у кого есть ВСЕ выбранные роли.
+const UF_ROLES = [
+  ['vp', 'ВП', u => !!u.vp], ['reatt', 'Переаттестация', u => !!u.reatt], ['leader', 'Руководство ГУ ВП', u => !!u.leader],
+  ['manager', 'Руководство (СС)', u => u.role === 'manager'], ['examiner', 'Проверяющий', u => u.role === 'examiner'],
+  ['admin', 'Администратор', u => !!u.super || u.role === 'admin'], ['blocked', 'Заблокирован', u => !!u.blocked],
+  ['none', 'Без ролей', u => !u.vp && !u.reatt && !u.leader && !u.super && (!u.role || u.role === 'candidate')],
+];
+const UF = { sel: new Set() };
+try { (JSON.parse(sessionStorage.getItem('vp_uf') || '[]') || []).forEach(k => UF_ROLES.some(x => x[0] === k) && UF.sel.add(k)); } catch (_) {}
+const ufMatch = (u) => [...UF.sel].every(k => { const f = UF_ROLES.find(x => x[0] === k); return !f || f[2](u); });
 route('/admin/users', async () => {
   const q = new URLSearchParams((location.hash.split('?')[1]) || '').get('q') || '';
   const r = await api('GET', '/api/admin/users?q=' + encodeURIComponent(q));
@@ -728,11 +738,28 @@ route('/admin/users', async () => {
   setView(`<h1>Пользователи и роли</h1>${adminNav('/admin/users')}
     <form class="row" id="sf" style="margin-bottom:14px"><input name="q" value="${esc(q)}" placeholder="Поиск: Discord ID, ник, игровое имя, статик" style="max-width:420px"><button class="btn">Найти</button></form>
     ${adm ? '<p class="small mut">Роли меняются прямо в таблице. Карточка человека — по клику на строку.</p>' : ''}
+    ${adm ? `<div class="chips uf-bar" id="uf"><button type="button" class="chip${UF.sel.size ? '' : ' on'}" data-f="" aria-pressed="${UF.sel.size ? 'false' : 'true'}">Все</button>${UF_ROLES.map(([k, t]) => `<button type="button" class="chip${UF.sel.has(k) ? ' on' : ''}" data-f="${k}" aria-pressed="${UF.sel.has(k)}">${t}</button>`).join('')}<span class="small mut uf-cnt" id="ufCnt"></span></div>` : ''}
     <div class="tscroll"><table class="users-t"><tr><th>Пользователь</th><th>Игровое имя / статик</th><th>Роли</th>${adm ? '<th>Назначить</th>' : ''}<th>Лекции</th><th>Попытки</th><th>Последний вход</th></tr>
     ${r.users.map(rowHtml).join('')}</table></div>`);
   $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/admin/users?q=' + encodeURIComponent(ev.target.q.value); };
   bindRows();
   if (!adm) return;
+  const ufApply = () => {
+    let n = 0;
+    $$('table.users-t tr[data-u]').forEach(tr => { const u = r.users.find(x => String(x.id) === tr.dataset.u); const ok = !u || ufMatch(u); tr.hidden = !ok; if (ok) n++; });
+    $('#ufCnt').textContent = `Показано ${n} из ${r.users.length}`;
+    $$('#uf .chip').forEach(b => { const on = b.dataset.f ? UF.sel.has(b.dataset.f) : !UF.sel.size; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    try { sessionStorage.setItem('vp_uf', JSON.stringify([...UF.sel])); } catch (_) {}
+  };
+  $('#uf').onclick = (ev) => {
+    const b = ev.target.closest('.chip'); if (!b) return;
+    const k = b.dataset.f;
+    if (!k) UF.sel.clear();
+    else if (UF.sel.has(k)) UF.sel.delete(k);
+    else { if (k === 'none') UF.sel.clear(); else UF.sel.delete('none'); UF.sel.add(k); }
+    ufApply();
+  };
+  ufApply();
   $$('.inl-roles').forEach(box => box.addEventListener('change', async (ev) => {
     const el = ev.target; const k = el.dataset.k; if (!k) return;
     const u = r.users.find(x => String(x.id) === box.dataset.u); if (!u) return;
