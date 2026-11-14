@@ -7,6 +7,8 @@
 - `questions.json` — вопросы банка (категория экзамена), ext_id `<slug>-qNN`.
 - `meta.json` — статус, название документа, лекции, какие экзамены публиковать.
 
+Схемы к тексту: `python3 tools/content/schemes.py` → `content/schemes/<имя>.svg` (SVG рисуется кодом). В `vygruzka.md` блок «```схема Подпись» / `::имя` / «```» сразу после абзаца; build.js встраивает SVG в текст лекции и выгрузки, сайт показывает его после очистки (`safeSvg` в portal.js). Для прода: `node tools/content/mig-schemes.js <NNNN>_….sql` (вставки через replace, тексты не переписываются).
+
 Сборка: `node tools/content/build.js` → `content/build/content.json`; локально: `node tools/content/apply-local.js`.
 OOC-правила генерируются из официального текста: `python3 tools/content/rules2md.py tools/content/specs/<slug>.json`; уставы (по главам): `python3 tools/content/chap2md.py tools/content/specs/<slug>.json`.
 

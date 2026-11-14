@@ -1,12 +1,16 @@
 // Сборка контента тем: content/<slug>/{meta.json, vygruzka.md, video_plan.md, questions.json} → content/build/content.json
 // vygruzka.md — полная выгрузка; разделы с пометкой <!-- lec: N --> идут в короткую лекцию N, <!-- lec: - --> — только в выгрузку.
+// Схемы: блок «```схема Подпись / ::имя / ```» — строка ::имя заменяется содержимым content/schemes/<имя>.svg (tools/content/schemes.py).
 // Проверка: объём лекций ≈ 70% выгрузки (допуск 55–85%), 4–5 лекций; длительность лекции — по 160 слов/мин.
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '../../content');
 const out = [];
 for (const slug of fs.readdirSync(ROOT).filter(d => fs.existsSync(path.join(ROOT, d, 'meta.json'))).sort()) {
   const dir = path.join(ROOT, slug), meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
-  const src = fs.readFileSync(path.join(dir, 'vygruzka.md'), 'utf8');
+  const src = fs.readFileSync(path.join(dir, 'vygruzka.md'), 'utf8').replace(/^::([a-z0-9-]+)\s*$/mg, (m, n) => {
+    const f = path.join(ROOT, 'schemes', n + '.svg'); if (!fs.existsSync(f)) throw new Error(`${slug}: нет схемы ${n}`);
+    return fs.readFileSync(f, 'utf8').trim();
+  });
   if (meta.keep_lectures) { // лекции уже есть на сайте (тема ПК) — собираем только выгрузку, план и вопросы
     const vp0 = fs.existsSync(path.join(dir, 'video_plan.md')) ? fs.readFileSync(path.join(dir, 'video_plan.md'), 'utf8') : '';
     out.push({ slug, status: meta.status || 'draft', keep_lectures: true, doc: { ...meta.doc, body: src.replace(/^<!-- lec: [0-9-]+ -->\s*$/mg, '').trim() }, lectures: [], video_plan: vp0, questions: [] });
@@ -20,7 +24,7 @@ for (const slug of fs.readdirSync(ROOT).filter(d => fs.existsSync(path.join(ROOT
     doc += '\n' + text + '\n';
     if (n !== '-') { if (!lec.has(Number(n))) throw new Error(`${slug}: раздел для лекции ${n}, которой нет в meta.json`); lec.get(Number(n)).push(text); }
   }
-  const plain = (s) => s.replace(/[#>*|`\-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const plain = (s) => s.replace(/^```схема.*\n[\s\S]*?^```\s*$/mg, ' ').replace(/[#>*|`\-]/g, ' ').replace(/\s+/g, ' ').trim();
   const lectures = meta.lectures.map(l => {
     const body = (l.intro ? l.intro.trim() + '\n\n' : '') + lec.get(l.n).join('\n\n') + (l.outro ? '\n\n' + l.outro.trim() : '');
     if (!lec.get(l.n).length) throw new Error(`${slug}: у лекции ${l.n} нет разделов`);

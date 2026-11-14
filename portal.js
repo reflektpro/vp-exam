@@ -283,20 +283,44 @@ route('/promo\\?.*', () => App.routes.find(r => r.p === '/promo').fn(), { cap: '
 
 // ---------- база данных (документация) ----------
 // Разметка статей: # заголовок, ## подзаголовок, - список, 1. нумерованный, **жирный**, `код`, [текст](https://ссылка), пустая строка — новый абзац.
+// Схема: строка «```схема Подпись», затем разметка <svg>…</svg>, затем строка «```». SVG встраивается в текст (без загрузок) после очистки safeSvg.
 function mdInline(t) {
   return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[\s(«])\*([^*\s][^*]*?)\*(?=[\s.,;:!?)»]|$)/g, '$1<i>$2</i>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|#\/[^\s)]*)\)/g, (m, a, h) => `<a href="${h}"${h[0] === '#' ? '' : ' target="_blank" rel="noopener noreferrer"'}>${a}</a>`);
+}
+// Очистка SVG-схемы: только элементы и атрибуты рисования; без скриптов, ссылок, стилей, внешних ресурсов. Ошибка разбора — схема не показывается.
+const SVG_TAGS = new Set(['svg', 'g', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path', 'text', 'tspan', 'title', 'desc']);
+const SVG_ATTRS = /^(xmlns|viewBox|width|height|x|y|x1|y1|x2|y2|cx|cy|r|rx|ry|d|points|dx|dy|fill|stroke|stroke-width|stroke-dasharray|stroke-linecap|stroke-linejoin|opacity|fill-opacity|stroke-opacity|transform|font-family|font-size|font-weight|font-style|text-anchor|dominant-baseline)$/;
+function safeSvg(src) {
+  try {
+    const doc = new DOMParser().parseFromString(String(src || '').trim(), 'image/svg+xml'), root = doc.documentElement;
+    if (!root || root.localName !== 'svg' || doc.getElementsByTagName('parsererror').length) return '';
+    const NS = 'http://www.w3.org/2000/svg';
+    const clean = (el) => {
+      for (const a of [...el.attributes]) if (!SVG_ATTRS.test(a.name) || /url\s*\(|script:|&#|\\/i.test(a.value)) el.removeAttribute(a.name);
+      for (const n of [...el.childNodes]) {
+        if (n.nodeType === 1) { if (n.namespaceURI !== NS || !SVG_TAGS.has(n.localName)) n.remove(); else clean(n); }
+        else if (n.nodeType !== 3) n.remove();
+      }
+    };
+    clean(root);
+    return new XMLSerializer().serializeToString(root);
+  } catch (e) { return ''; }
 }
 function md(src) {
   const out = []; let list = null, para = [];
   const flushP = () => { if (para.length) { out.push(`<p>${para.map(mdInline).join('<br>')}</p>`); para = []; } };
   const flushL = () => { if (list) { out.push(`<${list.t}>${list.items.map(i => `<li>${mdInline(i)}</li>`).join('')}</${list.t}>`); list = null; } };
   let quote = null, table = null;
+  let fig = null;
+  const flushF = () => { if (fig) { const svg = safeSvg(fig.src.join('\n')); if (svg) out.push(`<figure class="lec-fig"><div class="lec-svg" role="img"${fig.cap ? ` aria-label="${esc(fig.cap)}"` : ''}>${svg}</div>${fig.cap ? `<figcaption>${mdInline(fig.cap)}</figcaption>` : ''}</figure>`); fig = null; } };
   const flushQ = () => { if (quote) { out.push(`<blockquote>${md(quote.join('\n'))}</blockquote>`); quote = null; } };
   const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
   const flushT = () => { if (table) { const [h, ...rows] = table.filter(r => !/^\|?\s*:?-{2,}/.test(r.trim())); out.push(`<div class="tscroll"><table class="mdt"><tr>${cells(h).map(c => `<th>${mdInline(c)}</th>`).join('')}</tr>${rows.map(r => `<tr>${cells(r).map(c => `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('')}</table></div>`); table = null; } };
   for (const raw of String(src || '').split(/\r?\n/)) {
     const line = raw.trimEnd(); let m;
+    if (fig) { if (/^\s*```\s*$/.test(line)) flushF(); else fig.src.push(line); continue; }
+    if ((m = /^\s*```схема\s*(.*)$/.exec(line))) { flushP(); flushL(); flushQ(); flushT(); fig = { cap: m[1].trim(), src: [] }; continue; }
     if ((m = /^\s*>\s?(.*)$/.exec(line))) { flushP(); flushL(); flushT(); (quote = quote || []).push(m[1]); continue; } else flushQ();
     if (/^\s*\|.*\|\s*$/.test(line)) { flushP(); flushL(); (table = table || []).push(line); continue; } else flushT();
     if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { flushP(); flushL(); out.push('<hr>'); continue; }
@@ -306,7 +330,7 @@ function md(src) {
     if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { flushP(); if (!list || list.t !== 'ol') { flushL(); list = { t: 'ol', items: [] }; } list.items.push(m[1]); continue; }
     flushL(); para.push(line);
   }
-  flushP(); flushL(); flushQ(); flushT();
+  flushP(); flushL(); flushQ(); flushT(); flushF();
   return out.join('');
 }
 route('/docs', () => docsPage());

@@ -743,3 +743,6 @@ select.chip.pc-add{width:auto;max-width:150px;color:var(--gold2);border-style:da
 .pc-all b{font-weight:400}
 button.chip{cursor:pointer;color:var(--txt);font:inherit;font-size:13px}.uf-bar{align-items:center;margin:0 0 12px}.uf-cnt{margin-left:6px}
 .users-t tr[hidden]{display:none!important}
+.lec-fig{margin:16px auto 20px;max-width:560px}
+.lec-svg svg{display:block;width:100%;height:auto;border-radius:6px}
+.lec-fig figcaption{font-size:.85em;line-height:1.45;color:var(--mut);margin-top:7px;text-align:center}
