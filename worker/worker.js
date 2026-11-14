@@ -323,6 +323,7 @@ async function lectureStates(env, userId) {
   const { results: prog } = await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(userId).all();
   const pm = new Map(prog.map(p => [p.lecture_id, p]));
   const blocked = new Set(); // «строго по порядку» — внутри каждой темы (лекции без темы — внутри курса)
+  const sup = isSuper(env, userId); // главному администратору (ADMIN_IDS) учёба открыта без порядка; прохождение не засчитывается само
   const out = [];
   for (const l of lectures) {
     const p = pm.get(l.id);
@@ -330,13 +331,13 @@ async function lectureStates(env, userId) {
     let status = 'not_started';
     if (p && p.completed_at) status = 'watched';
     else if (p && (p.max_pos > 0 || p.watched_sec > 0)) status = 'in_progress';
-    const locked = settings.sequential_lectures && blocked.has(ck) && status !== 'watched';
+    const locked = !sup && settings.sequential_lectures && blocked.has(ck) && status !== 'watched';
     if (locked) status = 'locked';
     out.push({ lecture: l, progress: p || null, status, locked });
     if (l.required && !(p && p.completed_at)) blocked.add(ck);
   }
   const allRequiredDone = lectures.filter(l => l.required).every(l => { const p = pm.get(l.id); return p && p.completed_at; });
-  return { items: out, allRequiredDone, sequential: settings.sequential_lectures, topics };
+  return { items: out, allRequiredDone, sequential: settings.sequential_lectures, topics, super: sup };
 }
 // Темы: «связанная» тема (link_topic_id) показывает лекции, выгрузку и видео исходной темы — прохождение общее (напр. «Основы ГУ ВП» в «Стажёр ВП»).
 function topicRoot(tmap, id) { const t = tmap.get(id); return t && t.link_topic_id && tmap.has(t.link_topic_id) ? t.link_topic_id : id; }
@@ -368,7 +369,7 @@ function examRequirement(exam, st, links) {
   else if (mode === 'topics') { const tids = new Set(examTopicIds(exam).map(id => topicRoot(st.topics, id))); items = st.items.filter(i => i.lecture.required && tids.has(i.lecture.topic_id)); }
   const lectures = items.map(i => ({ id: i.lecture.id, title: i.lecture.title, watched: !!(i.progress && i.progress.completed_at), locked: !!i.locked }));
   const left = lectures.filter(l => !l.watched);
-  return { mode, lectures, left, done: left.length === 0 };
+  return { mode, lectures, left, done: left.length === 0 || !!st.super }; // главному администратору экзамены открыты без лекций
 }
 function lecturesReason(req) {
   const names = req.left.slice(0, 5).map(l => '«' + l.title + '»').join(', ') + (req.left.length > 5 ? ` и ещё ${req.left.length - 5}` : '');
