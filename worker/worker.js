@@ -26,18 +26,43 @@ export default {
     const cors = corsHeaders(request, env);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     let res;
+    const write = request.method !== 'GET' && request.method !== 'HEAD' && !MEMO_KEEP_RE.test(new URL(request.url).pathname);
+    if (write) memoClear(); // запись (POST/PUT/DELETE), кроме частых пользовательских, — кэш справочников изолята сбрасывается до и после
     try {
       res = await route(request, env, ctx);
     } catch (e) {
       if (e instanceof HttpError) res = json({ error: e.message }, e.status);
       else { console.error(e && e.stack || e); res = json({ error: 'Внутренняя ошибка сервера' }, 500); }
     }
+    if (write) memoClear();
     const h = new Headers(res.headers);
     for (const [k, v] of Object.entries(cors)) h.set(k, v);
     h.set('X-Content-Type-Options', 'nosniff');
     return new Response(res.body, { status: res.status, headers: h });
   },
 };
+
+// ---------- кэш справочников в памяти изолята ----------
+// Общие для всех пользователей данные (настройки, опубликованные лекции, темы, экзамены, связи экзамен↔лекции, пул банка вопросов)
+// читаются из D1 не чаще раза в TTL на изолят; внутри одного запроса — один раз (общий промис). Любой POST/PUT/DELETE в этом
+// изоляте сбрасывает кэш целиком (см. fetch); другие изоляты увидят правку не позже TTL. Прогресс пользователей не кэшируется.
+// Значения отдаются копиями — вызывающий код может менять их свободно.
+const MEMO = new Map();
+const MEMO_TTL = { courses: 30000, settings: 30000, lectures: 30000, topics: 30000, exams: 30000, links: 30000, qcount: 30000, bank: 60000 };
+globalThis[Symbol.for('vp-exam.memo')] = MEMO; // локальный тестовый обёрточный worker сбрасывает его после прямых правок БД
+// Частые записи пользователей, которые не трогают кэшируемые таблицы (прогресс лекций, попытки, отчёты, профиль, сессии, руководство, личные дела) — кэш не сбрасывают.
+const MEMO_KEEP_RE = /^\/(auth\/exchange|api\/(logout|me|lectures\/\d+\/heartbeat|exams\/\d+\/start|attempts\/\d+\/(answers|submit|upload)|reatt\/[a-z0-9_-]+\/start|reports|lead\/(week|reports|staff|budget|violations)(\/.*)?|people(\/.*)?))\/?$/;
+function memoClear() { MEMO.clear(); }
+async function memo(key, fn) {
+  const ttl = MEMO_TTL[key.split(':')[0]] || 30000, now = Date.now();
+  let e = MEMO.get(key);
+  if (!e || now - e.t >= ttl) {
+    e = { t: now, p: fn() };
+    MEMO.set(key, e);
+    e.p.catch(() => { if (MEMO.get(key) === e) MEMO.delete(key); });
+  }
+  return structuredClone(await e.p);
+}
 
 // ---------- helpers ----------
 function json(data, status = 200, extra = {}) {
@@ -171,7 +196,7 @@ async function audit(env, actor, action, target, details) {
 }
 
 async function getSettings(env) {
-  const { results } = await env.DB.prepare('SELECT k, v FROM settings').all();
+  const results = await memo('settings', async () => (await env.DB.prepare('SELECT k, v FROM settings').all()).results);
   const s = { site_title: 'ГУ ВП — портал', welcome_text: '', sequential_lectures: '1', promo_missing_points: '1' };
   for (const r of results) s[r.k] = r.v;
   // promo_missing_points — заменять ли недостающий пункт ступени лишними баллами (система повышения)
@@ -316,9 +341,9 @@ async function authExchange(request, env) {
 async function lectureStates(env, userId) {
   const settings = await getSettings(env);
   // лекции скрытых (неопубликованных) курсов кандидатам не показываются; лекции без курса — общий раздел
-  const { results: lectures } = await env.DB.prepare(`SELECT l.id, l.title, l.description, l.video_url, l.duration_sec, l.position, l.required, l.published, l.course_id, l.created_at, l.updated_at, (l.body != '') AS has_body, l.topic_id FROM lectures l LEFT JOIN courses c ON c.id = l.course_id LEFT JOIN topics t ON t.id = l.topic_id
-    WHERE l.published = 1 AND (l.course_id IS NULL OR c.id IS NULL OR c.published = 1) AND (l.topic_id IS NULL OR t.id IS NULL OR t.published = 1) ORDER BY l.position, l.id`).all();
-  const { results: trows } = await env.DB.prepare('SELECT * FROM topics ORDER BY position, id').all();
+  const lectures = await memo('lectures', async () => (await env.DB.prepare(`SELECT l.id, l.title, l.description, l.video_url, l.duration_sec, l.position, l.required, l.published, l.course_id, l.created_at, l.updated_at, (l.body != '') AS has_body, l.topic_id FROM lectures l LEFT JOIN courses c ON c.id = l.course_id LEFT JOIN topics t ON t.id = l.topic_id
+    WHERE l.published = 1 AND (l.course_id IS NULL OR c.id IS NULL OR c.published = 1) AND (l.topic_id IS NULL OR t.id IS NULL OR t.published = 1) ORDER BY l.position, l.id`).all()).results);
+  const trows = await memo('topics', async () => (await env.DB.prepare('SELECT * FROM topics ORDER BY position, id').all()).results);
   const topics = new Map(trows.map(t => [t.id, t]));
   const { results: prog } = await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(userId).all();
   const pm = new Map(prog.map(p => [p.lecture_id, p]));
@@ -354,9 +379,8 @@ function topicProgress(st, rootId) {
 // Порядок «строго по порядку» на допуск к экзамену не влияет — он ограничивает только очерёдность просмотра лекций.
 function examMode(e) { return !e.requires_lectures ? 'none' : (e.lecture_mode === 'selected' ? 'selected' : e.lecture_mode === 'topics' ? 'topics' : 'all'); }
 async function examLinks(env, examId) {
-  const { results } = examId
-    ? await env.DB.prepare('SELECT exam_id, lecture_id FROM exam_lectures WHERE exam_id = ?1').bind(examId).all()
-    : await env.DB.prepare('SELECT exam_id, lecture_id FROM exam_lectures').all();
+  const all = await memo('links', async () => (await env.DB.prepare('SELECT exam_id, lecture_id FROM exam_lectures').all()).results);
+  const results = examId ? all.filter(r => r.exam_id === examId) : all;
   const m = new Map();
   for (const r of results) { if (!m.has(r.exam_id)) m.set(r.exam_id, []); m.get(r.exam_id).push(r.lecture_id); }
   return m;
@@ -460,20 +484,21 @@ function examPublic(e) {
     cooldown_min: e.cooldown_min, pass_pct: e.pass_pct, requires_lectures: !!e.requires_lectures, from_bank: e.bank_count > 0 && !!e.bank_category };
 }
 // Сколько вопросов будет в попытке: для экзамена из банка — bank_count (не больше, чем позволяют topic), иначе — вопросы экзамена.
-async function examQCount(env, e, own) {
+async function examQCount(env, e, own, bank) {
   if (!(e.bank_count > 0 && e.bank_category)) return own;
   const cats = String(e.bank_category).split(',').map(x => x.trim()).filter(Boolean);
-  const pool = (await bankIndex(env)).filter(q => (q.kind || 'question') === 'question' && cats.some(p => catMatch(p, q.category)));
+  const pool = (bank || await bankIndex(env)).filter(q => (q.kind || 'question') === 'question' && cats.some(p => catMatch(p, q.category)));
   return Math.min(e.bank_count, distinctCapacity(pool));
 }
 async function listExams(env, user) {
   const st = await lectureStates(env, user.id);
   const links = await examLinks(env);
   const results = await visibleExams(env);
+  const qm = await examOwnCounts(env);
+  const bank = results.some(e => e.bank_count > 0 && e.bank_category) ? await bankIndex(env) : null; // пул банка — один раз на весь список
   const out = [];
   for (const e of results) {
-    const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(e.id).first();
-    out.push({ ...examPublic(e), question_count: await examQCount(env, e, qc.c), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
+    out.push({ ...examPublic(e), question_count: await examQCount(env, e, qm.get(e.id) || 0, bank), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
   }
   return json({ exams: out, all_required_done: st.allRequiredDone, sequential_lectures: st.sequential });
 }
@@ -483,18 +508,21 @@ async function examReqFor(env, user, exam) {
   return examRequirement(exam, st, await examLinks(env, exam.id));
 }
 async function visibleExams(env) {
-  const { results } = await env.DB.prepare(`SELECT e.* FROM exams e LEFT JOIN courses c ON c.id = e.course_id
-    WHERE e.published = 1 AND (e.course_id IS NULL OR c.id IS NULL OR c.published = 1) ORDER BY e.position, e.id`).all();
-  return results;
+  return memo('exams', async () => (await env.DB.prepare(`SELECT e.* FROM exams e LEFT JOIN courses c ON c.id = e.course_id
+    WHERE e.published = 1 AND (e.course_id IS NULL OR c.id IS NULL OR c.published = 1) ORDER BY e.position, e.id`).all()).results);
+}
+// Сколько собственных вопросов у каждого экзамена (exam_id > 0) — одним запросом на список.
+async function examOwnCounts(env) {
+  const rows = await memo('qcount', async () => (await env.DB.prepare('SELECT exam_id, COUNT(*) AS c FROM questions WHERE exam_id > 0 GROUP BY exam_id').all()).results);
+  return new Map(rows.map(r => [r.exam_id, r.c]));
 }
 // Учебный отдел: курсы (курс → лекции по порядку → экзамен курса). Лекции/экзамены без курса — в разделе «Без курса».
 async function listCourses(env, user) {
   const st = await lectureStates(env, user.id);
   const links = await examLinks(env);
-  const { results: courses } = await env.DB.prepare('SELECT * FROM courses WHERE published = 1 ORDER BY position, id').all();
+  const courses = await memo('courses', async () => (await env.DB.prepare('SELECT * FROM courses WHERE published = 1 ORDER BY position, id').all()).results);
   const exams = await visibleExams(env);
-  const { results: qc } = await env.DB.prepare('SELECT exam_id, COUNT(*) AS c FROM questions WHERE exam_id > 0 GROUP BY exam_id').all();
-  const qm = new Map(qc.map(r => [r.exam_id, r.c]));
+  const qm = await examOwnCounts(env);
   const known = new Set(courses.map(c => c.id));
   const groups = courses.map(c => ({ id: c.id, title: c.title, description: c.description || '', subtitle: c.subtitle || '', track: c.track || 'rank', position: c.position, lectures: [], exams: [], topics: [] }));
   const other = { id: 0, title: 'Без курса', description: '', subtitle: '', track: 'rank', lectures: [], exams: [], topics: [] };
@@ -543,8 +571,8 @@ async function getTopic(env, user, id) {
   const exams = [];
   for (const e of await visibleExams(env)) {
     const ids = examTopicIds(e); if (!ids.includes(id) && !ids.includes(root)) continue;
-    const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(e.id).first();
-    exams.push({ ...examPublic(e), topic_titles: ids.map(x => st.topics.get(x)).filter(Boolean).map(x => x.title), question_count: await examQCount(env, e, qc.c), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
+    const qm = await examOwnCounts(env);
+    exams.push({ ...examPublic(e), topic_titles: ids.map(x => st.topics.get(x)).filter(Boolean).map(x => x.title), question_count: await examQCount(env, e, qm.get(e.id) || 0), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
   }
   const siblings = [...st.topics.values()].filter(x => x.course_id === t.course_id && (x.published || admin)).map(x => ({ id: x.id, title: x.title, status: x.status }));
   return json({ topic: { id: t.id, title: t.title, description: t.description || '', status: t.status, published: !!t.published, linked: root !== id ? { id: root, title: rt.title, course_id: rt.course_id } : null,
@@ -1680,9 +1708,8 @@ function reattCommon(g) {
     position: int(g('position', 0), 0, 1000000, 'порядок', 0),
   };
 }
-async function bankIndex(env) {
-  const { results } = await env.DB.prepare("SELECT id, category, kind, type, topic FROM questions WHERE exam_id = 0 AND active = 1 AND type != 'info'").all();
-  return results;
+async function bankIndex(env) { // кэш изолята (TTL 60 с, сброс при любой записи); ~2500 строк за чтение
+  return memo('bank', async () => (await env.DB.prepare("SELECT id, category, kind, type, topic FROM questions WHERE exam_id = 0 AND active = 1 AND type != 'info'").all()).results);
 }
 // Случайно n вопросов из списка так, чтобы в попытке не было двух вопросов с одинаковым topic (общий набор usedTopics на всю попытку).
 // Вопросы без topic ограничений не имеют. Возвращает выбранные строки.

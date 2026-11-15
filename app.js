@@ -309,7 +309,7 @@ function textReader(l) {
   };
   paint();
   send();
-  const t1 = setInterval(tick, 1000), t2 = setInterval(() => { if (!done) send(); }, 5000);
+  const t1 = setInterval(tick, 1000), t2 = setInterval(() => { if (!done && !document.hidden) send(); }, 5000); // вкладка скрыта — время не идёт, запросы не нужны
   const vis = () => { lastTick = Date.now(); paint(); };
   document.addEventListener('visibilitychange', vis);
   App.cleanup.push(() => { stopped = true; clearInterval(t1); clearInterval(t2); document.removeEventListener('visibilitychange', vis); if (!done && pos > 0) api('POST', `/api/lectures/${l.id}/heartbeat`, { position: Math.round(pos * 10) / 10, event: 'leave' }).catch(() => {}); });

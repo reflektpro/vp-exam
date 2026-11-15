@@ -52,6 +52,7 @@ function answerFor(p, s, wrong) {
   const sqlFile = '/tmp/e2e_course_pk.sql'; fs.writeFileSync(sqlFile, JSON.parse(fs.readFileSync('/tmp/e2e_course_pk.json', 'utf8')).batches.join('\n'));
   const wr = `PATH=/workspace/vp_exam_test/node_modules/.bin:$PATH wrangler d1 execute DB --local -c ${__dirname}/wrangler.toml --file ${sqlFile}`;
   execSync(wr, { stdio: 'ignore' }); execSync(wr, { stdio: 'ignore' });   // дважды — проверка идемпотентности
+  await fetch(API + '/__test/flush').catch(() => {}); // кэш справочников worker — после правки БД в обход API
   const cnt = (await sql(`SELECT (SELECT COUNT(*) FROM questions WHERE category = ?1) q, (SELECT COUNT(DISTINCT topic) FROM questions WHERE category = ?1) t,
     (SELECT COUNT(*) FROM questions WHERE category = ?1 AND (topic IS NULL OR topic = '')) nt, (SELECT COUNT(*) FROM courses WHERE title = ?2) c,
     (SELECT COUNT(*) FROM lectures WHERE body != '') l, (SELECT COUNT(*) FROM exams WHERE bank_category = ?1) e`, [CAT, TITLE]))[0];

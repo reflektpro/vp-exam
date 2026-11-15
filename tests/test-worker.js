@@ -9,6 +9,7 @@ async function setRoles(env, id, url) {
   await env.DB.prepare('UPDATE users SET vp = ?1, reatt = ?2, leader = ?3, role = ?4 WHERE id = ?5').bind(r.has('vp') ? 1 : 0, r.has('reatt') ? 1 : 0, r.has('leader') ? 1 : 0, role, id).run();
 }
 async function sha256(s) { const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join(''); }
+function flushMemo() { const m = globalThis[Symbol.for('vp-exam.memo')]; if (m) m.clear(); }
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -42,7 +43,14 @@ export default {
       if (env.TEST_MODE !== '1' || !local) return new Response('forbidden', { status: 403 });
       const b = await request.json();
       const r = await env.DB.prepare(b.sql).bind(...(b.args || [])).all();
+      flushMemo();
       return new Response(JSON.stringify({ results: r.results || [] }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    // сброс кэша справочников worker после правки БД в обход API (wrangler d1 execute из теста)
+    if (url.pathname === '/__test/flush') {
+      const local = ['localhost', '127.0.0.1'].includes(url.hostname);
+      if (env.TEST_MODE !== '1' || !local) return new Response('forbidden', { status: 403 });
+      flushMemo(); return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json' } });
     }
     return real.fetch(request, env, ctx);
   },
