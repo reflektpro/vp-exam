@@ -118,6 +118,21 @@ async function render(opts) {
   }
   setView('<div class="alert warn">Страница не найдена.</div><a class="btn" href="#/">На главную</a>');
 }
+// Перерисовать текущую страницу на месте после действия: без заготовки и анимации, прокрутка и фокус остаются там, где были.
+function focusSel(el) {
+  if (!el || el === document.body || !el.tagName) return null;
+  if (el.id) return '#' + CSS.escape(el.id);
+  const host = el.closest('[data-uid],[data-key],[data-u]'), cls = [...el.classList].map(c => '.' + CSS.escape(c)).join('');
+  if (!host || !cls) return null;
+  const at = ['data-uid', 'data-key', 'data-u'].find(x => host.hasAttribute(x));
+  return `[${at}="${CSS.escape(host.getAttribute(at))}"] ${el.tagName.toLowerCase()}${cls}`;
+}
+async function rerender() {
+  const y = window.scrollY, sel = focusSel(document.activeElement);
+  await render({ silent: true });
+  window.scrollTo(0, y);
+  const el = sel && document.querySelector(sel); if (el) try { el.focus({ preventScroll: true }); } catch (_) {}
+}
 function hasRole(role) { const l = { candidate: 0, examiner: 1, manager: 2, admin: 3 }; return App.me && (l[App.me.role] || 0) >= l[role]; }
 function noAccess(c) { return `<div class="card noacc"><h2>Раздел недоступен</h2><p>Этот раздел открывается с ролью ${CAP_RU[c] || ''}. Роли назначает администратор — обратитесь к руководству ГУ ВП.</p>
   <p class="small mut">Без ролей доступны «База данных» и профиль.</p><div class="row"><a class="btn" href="#/">На главную</a><a class="btn" href="#/docs">База данных</a></div></div>`; }

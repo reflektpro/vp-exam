@@ -129,8 +129,10 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   // наградная
   await page.fill(`tr[data-uid="${E1}"] .m-award`, '50000'); await page.dispatchEvent(`tr[data-uid="${E1}"] .m-award`, 'change'); await page.waitForSelector('.toast.err');
   check('наградная < 100 000 → ошибка', /от 100/.test(await page.textContent('#toast')), await page.textContent('#toast'));
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight)); const wy0 = await page.evaluate(() => window.scrollY);
   await page.fill(`tr[data-uid="${E1}"] .m-award`, '300000'); await page.dispatchEvent(`tr[data-uid="${E1}"] .m-award`, 'change');
   await page.waitForFunction(() => /9\s191\s000/.test(document.querySelector('tr[data-uid="500000000000000001"]')?.textContent || ''));
+  check('неделя: после сохранения наградной прокрутка не сброшена', Math.abs((await page.evaluate(() => window.scrollY)) - wy0) <= 2, [wy0, await page.evaluate(() => window.scrollY)]);
   check('наградная 300 000 → доля остатка 9 191 000, итого всё так же 10 000 000', /9\s191\s000/.test(await rowTxt(E1)) && /10\s000\s000/.test(await rowTxt(E1)), await rowTxt(E1));
   r = await call('PUT', `/api/lead/week/${WEEK}/manual/${E1}`, L, { ss: 100000 }); check('премия СС не старшему составу → ошибка', r.status === 400);
   r = await call('PUT', `/api/lead/week/${WEEK}/manual/${E2}`, L, { ss: 600000 }); check('премия СС > 500 000 → ошибка', r.status === 400);
@@ -147,8 +149,27 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   // ---------- 4. проверка отчёта по пунктам ----------
   await page.click(`tr[data-uid="${E1}"] a[href^="#/lead/report/"]`); await page.waitForSelector('.ritem');
   check('отчёт: ссылки-доказательства кликабельны', (await page.$$eval('.ritem[data-key=postavka] .links a', a => a.map(x => x.href))).join() === 'https://disk.yandex.ru/d/post1,https://disk.yandex.ru/d/post2');
+  // проверка на месте: страница не перезагружается и не перерисовывается, прокрутка остаётся, лишних запросов нет
+  const reqs = []; const onReq = (q) => { if (/\/api\/lead\/reports\/\d+/.test(q.url())) reqs.push(q.method() + ' ' + q.url().replace(API, '')); }; page.on('request', onReq);
+  await page.evaluate(() => { window.__noReload = 1; document.querySelector('#planCard').dataset.mark = '1'; document.querySelector('.ritem[data-key=postavka] .icom').value = 'черновик комментария'; });
+  await page.locator('.ritem[data-key=pmp]').evaluate(el => el.scrollIntoView({ block: 'center' })); await page.waitForTimeout(200);
+  const y0 = await page.evaluate(() => window.scrollY);
+  check('длинный отчёт: прокручен вниз до пункта ПМП', y0 > 200, y0);
   await page.fill('.ritem[data-key=pmp] .icom', 'нет бодикамеры'); await page.click('.ritem[data-key=pmp] .i-rej');
   await page.waitForSelector('.ritem.rej[data-key=pmp]');
+  await page.waitForTimeout(300);
+  const st = await page.evaluate(() => ({ y: window.scrollY, mark: window.__noReload, card: document.querySelector('#planCard').dataset.mark, draft: document.querySelector('.ritem[data-key=postavka] .icom').value, badge: document.querySelector('.ritem[data-key=pmp] .badge').textContent }));
+  check('после «Отклонить»: без перезагрузки и полной перерисовки, прокрутка на месте, черновик в другом пункте цел', st.mark === 1 && st.card === '1' && Math.abs(st.y - y0) <= 2 && st.draft === 'черновик комментария' && st.badge === 'отклонён', { st, y0 });
+  check('после действия — один POST, без повторного GET', reqs.length === 1 && /^POST .*\/review$/.test(reqs[0]), reqs);
+  await page.evaluate(() => { document.querySelector('.ritem[data-key=postavka] .icom').value = ''; });
+  reqs.length = 0;
+  await page.locator('.ritem[data-key=otbitie] .i-ok').scrollIntoViewIfNeeded(); await page.waitForTimeout(150);
+  const y1 = await page.evaluate(() => window.scrollY);
+  await page.locator('.ritem[data-key=otbitie] .i-ok').dblclick();
+  await page.waitForSelector('.ritem.acc[data-key=otbitie]'); await page.waitForTimeout(300);
+  { const y2 = await page.evaluate(() => window.scrollY), nr = await page.evaluate(() => window.__noReload); check('двойной клик «Принять» → один запрос, пункт принят, прокрутка на месте', reqs.filter(x => x.startsWith('POST')).length === 1 && Math.abs(y2 - y1) <= 2 && nr === 1, { reqs, y1, y2, nr }); }
+  await page.click('.ritem[data-key=otbitie] .i-clr'); await page.waitForSelector('.ritem[data-key=otbitie]:not(.acc)');
+  page.off('request', onReq);
   const prem = async () => page.textContent('.grid.two .card:nth-child(2)');
   check('отклонён пункт ПМП → 385 баллов, минимальный план, база пересчитана (110 000 + 281 500 − 20% = 335 200)', /335\s200/.test(await prem()) && /Минимальный/.test(await page.textContent('.grid.two .card:first-child')) && /385/.test(await page.textContent('.grid.two .card:first-child')), await prem());
   check('карточка премии: «Доля остатка фонда»', /Доля остатка фонда/.test(await prem()) && !/Дополнительная/.test(await prem()));
@@ -159,6 +180,7 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   await page.click('#allOk'); await page.waitForFunction(() => document.querySelectorAll('.ritem.acc').length === document.querySelectorAll('.ritem').length);
   await page.fill('#rf [name=comment]', 'Принято, молодец'); await page.click('#rf [data-st=approved]'); await page.waitForTimeout(500);
   await page.waitForSelector('.card .badge.ok');
+  check('решение по отчёту — тоже на месте (без перезагрузки), плашка «Принят»', await page.evaluate(() => window.__noReload === 1) && /Принят/.test(await page.textContent('#repBadges')));
   check('отчёт принят, база 509 000, итого из фонда 10 000 000', /Принят/.test(await page.textContent('.card')) && /509\s000/.test(await prem()) && /10\s000\s000/.test(await prem()), await prem());
   await page.selectOption('#pos', 'insp_kom'); await page.waitForTimeout(600); await page.waitForSelector('#pos');
   check('руководство исправляет должность → оклад Инспектора Комендатуры (275 000)', /275\s000/.test(await prem()), await prem());

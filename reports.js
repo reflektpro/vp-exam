@@ -89,13 +89,13 @@ leadRoute('/lead', async () => {
     : '<div class="alert info">За эту неделю нет отчётов, а состав ГУ ВП ещё не отмечен (раздел «Состав»).</div>'}`);
   bindWeekPicker('/lead');
   $('#toFilter').onchange = (e) => { location.hash = '#/lead?' + qs({ to: e.target.value }); };
-  $('#fundF').onsubmit = async (ev) => { ev.preventDefault(); try { await api('PUT', `/api/lead/week/${d.week}/fund`, { fund: ev.target.fund.value, note: ev.target.note.value }); toast('Фонд сохранён'); render(); } catch (e) { toast(e.message, true); } };
-  const lb = $('#leftBtn'); if (lb) lb.onclick = async () => { if (!confirm(`Перенести остаток ${RUB(T.remaining)} в бюджет ГУ ВП?`)) return; try { await api('POST', `/api/lead/week/${d.week}/leftover`); toast('Остаток перенесён'); render(); } catch (e) { toast(e.message, true); } };
+  $('#fundF').onsubmit = async (ev) => { ev.preventDefault(); try { await api('PUT', `/api/lead/week/${d.week}/fund`, { fund: ev.target.fund.value, note: ev.target.note.value }); toast('Фонд сохранён'); rerender(); } catch (e) { toast(e.message, true); } };
+  const lb = $('#leftBtn'); if (lb) lb.onclick = async () => { if (!confirm(`Перенести остаток ${RUB(T.remaining)} в бюджет ГУ ВП?`)) return; try { await api('POST', `/api/lead/week/${d.week}/leftover`); toast('Остаток перенесён'); rerender(); } catch (e) { toast(e.message, true); } };
   $$('tr[data-uid]').forEach(tr => {
     const r = d.rows.find(x => x.user_id === tr.dataset.uid);
     const save = async () => {
       const v = (c) => { const el = tr.querySelector(c); return el ? el.value : 0; };
-      try { await api('PUT', `/api/lead/week/${d.week}/manual/${r.user_id}`, { award: v('.m-award'), ss: v('.m-ss'), award_budget: v('.m-ab') }); toast('Сохранено'); render(); }
+      try { await api('PUT', `/api/lead/week/${d.week}/manual/${r.user_id}`, { award: v('.m-award'), ss: v('.m-ss'), award_budget: v('.m-ab') }); toast('Сохранено'); rerender(); }
       catch (e) { toast(e.message, true); }
     };
     tr.querySelectorAll('input').forEach(i => i.onchange = save);
@@ -148,12 +148,14 @@ function zipStore(files) {
 }
 
 // ---------- один отчёт ----------
+// Проверка отчёта: после каждого действия (пункт, количество, решение, комментарий, должность, адресат) страница не перерисовывается —
+// ответ POST /review (тот же, что GET) обновляет на месте только изменённые пункты, плашки статуса, баллы, план и премию; прокрутка и фокус остаются.
 route('/lead/report/:id', async (id) => {
   if (!isLead()) { setView(noAccess('lead')); return; }
-  const d = await api('GET', '/api/lead/reports/' + encodeURIComponent(id));
-  const r = d.report, c = d.calc, cfgItems = new Map(d.config.items.map(i => [i.key, i]));
-  const h = r.header || {};
-  const itemRow = (it) => { const rv = it.review || {}; const pay = (cfgItems.get(it.key) || {}).pay || 0;
+  let d = await api('GET', '/api/lead/reports/' + encodeURIComponent(id));
+  const path = '/api/lead/reports/' + encodeURIComponent(id);
+  const cfgOf = () => new Map(d.config.items.map(i => [i.key, i]));
+  const itemRow = (it) => { const rv = it.review || {}; const pay = (cfgOf().get(it.key) || {}).pay || 0;
     return `<div class="ritem ${rv.status === 'rejected' ? 'rej' : rv.status === 'ok' ? 'acc' : ''}" data-key="${esc(it.key)}">
       <div class="row between"><div><b>${esc(it.name)}</b> — штук: <b>${it.n}</b>${it.vp != null ? ` · баллы: ${it.vp}` : ''}${it.points != null ? ` · баллы благодарностей: ${it.points}` : ''}${it.custom ? ' <span class="badge">свой пункт, без выплаты</span>' : ` <span class="small mut">${RUB(pay)} за 1</span>`}</div>
         <div class="row">${rv.status ? `<span class="badge ${rv.status === 'ok' ? 'ok' : 'err'}">${rv.status === 'ok' ? 'принят' + (rv.n_ok != null ? ` (${rv.n_ok} из ${it.n})` : '') : 'отклонён'}</span>` : '<span class="badge">не проверен</span>'}
@@ -161,19 +163,10 @@ route('/lead/report/:id', async (id) => {
           <button class="btn sm i-ok">Принять</button><button class="btn sm danger i-rej">Отклонить</button>${rv.status ? '<button class="btn sm i-clr" title="Снять отметку">↺</button>' : ''}</div></div>
       ${it.links && it.links.length ? `<ol class="links">${it.links.map(u => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a></li>`).join('')}</ol>` : '<div class="small neg">ссылок нет</div>'}
       <input class="icom" placeholder="комментарий к пункту" value="${esc(rv.comment || '')}"></div>`; };
-  setView(`<p><a href="#/lead?week=${r.week}">← Неделя ${weekLabel(r.week)}</a></p>
-    <div class="card"><div class="row between"><h2 style="margin:0">Отчёт: ${esc(h.rank || '')} ${esc(h.name || '')}</h2><div class="row">${repBadge(r.status)}${r.late ? '<span class="badge err">после срока — без премии</span>' : ''}${r.edited_after_deadline ? '<span class="badge warn">изменён после срока</span>' : ''}</div></div>
-      <p class="small mut">Discord: ${esc(d.user ? (d.user.global_name || d.user.username) : r.user_id)} (${esc(r.user_id)}) · удостоверение ${esc(h.static_id || '—')} · ${esc(h.unit || '')} · период ${esc(weekLabel(r.week))}
-        · первая отправка ${fmtDate(r.first_submitted_at)} · версия ${r.version} от ${fmtDate(r.submitted_at)} · срок ${fmtDate(r.deadline)}</p>
-      <p class="rep-to-line"><b>Кому:</b> ${esc(r.addressee_to || '')}</p>
-      <div class="row"><label>Должность (из отчёта, можно исправить): <select id="pos" style="width:auto">${d.config.positions.map(p => `<option value="${p.key}" ${p.key === r.position ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
-        <label>Адресат: <select id="toSel" style="width:auto">${(d.config.addressees || []).map(a => `<option value="${esc(a.key)}" ${a.key === r.addressee ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
-        <span>Баллы отчёта: <b>${r.points}</b></span></div>
-      ${h.result ? `<p><b>Общий результат:</b> ${esc(h.result)}</p>` : ''}${h.extra ? `<p><b>Дополнительные сведения:</b> ${esc(h.extra)}</p>` : ''}</div>
-    <div class="grid two">
-      <div class="card flat"><h3>План недели: ${r.plan ? `<span class="badge ${PLAN_RU[r.plan.level][1]}">${PLAN_RU[r.plan.level][0]}</span>` : ''}</h3>
-        <table><tr><th>Строка плана</th><th>Засчитано</th><th>Мин.</th><th>Норм.</th></tr>${r.plan.lines.map(l => `<tr><td>${esc(l.name)}</td><td class="num">${l.got}</td><td class="num ${l.ok_min ? 'pos' : 'neg'}">${l.min}</td><td class="num ${l.ok_normal ? 'pos' : 'neg'}">${l.normal}</td></tr>`).join('')}</table></div>
-      <div class="card flat"><h3>Премия</h3>${c ? (c.eligible ? `
+  const badgesHtml = (r) => `${repBadge(r.status)}${r.late ? '<span class="badge err">после срока — без премии</span>' : ''}${r.edited_after_deadline ? '<span class="badge warn">изменён после срока</span>' : ''}`;
+  const planHtml = (r) => `<h3>План недели: ${r.plan ? `<span class="badge ${PLAN_RU[r.plan.level][1]}">${PLAN_RU[r.plan.level][0]}</span>` : ''}</h3>
+        <table><tr><th>Строка плана</th><th>Засчитано</th><th>Мин.</th><th>Норм.</th></tr>${r.plan.lines.map(l => `<tr><td>${esc(l.name)}</td><td class="num">${l.got}</td><td class="num ${l.ok_min ? 'pos' : 'neg'}">${l.min}</td><td class="num ${l.ok_normal ? 'pos' : 'neg'}">${l.normal}</td></tr>`).join('')}</table>`;
+  const premHtml = (c) => `<h3>Премия</h3>${c ? (c.eligible ? `
         <div class="kv"><span>Оклад (${TIER_RU[c.oklad_tier]})</span><b>${RUB(c.oklad)}</b></div>
         <div class="kv"><span>Выплаты за действия</span><b>${RUB(c.actions)}</b></div>
         <div class="kv"><span>Вычет ${c.deduct_pct}%</span><b>${c.deduction ? '−' + RUB(c.deduction) : '—'}</b></div>
@@ -181,31 +174,69 @@ route('/lead/report/:id', async (id) => {
         <div class="kv"><span>Доля остатка фонда</span><b>${RUB(c.add)}</b></div><div class="kv"><span>Наградная (фонд)</span><b>${RUB(c.award)}</b></div>
         <div class="kv"><span>Премия СС</span><b>${RUB(c.ss)}</b></div>
         <div class="kv total"><span>Итого из фонда</span><b>${RUB(c.total_fund)}</b></div>
-        <div class="budget-box"><div class="small mut">Наградная из бюджета ГУ ВП — отдельно</div><b>${RUB(c.award_budget)}</b></div>` : `<div class="alert err">Без премии: ${esc(c.reason)}</div>`) : ''}</div></div>
+        <div class="budget-box"><div class="small mut">Наградная из бюджета ГУ ВП — отдельно</div><b>${RUB(c.award_budget)}</b></div>` : `<div class="alert err">Без премии: ${esc(c.reason)}</div>`) : ''}`;
+  const reviewerHtml = (r) => d.reviewer ? `Проверял: ${esc(d.reviewer)} · ${fmtDate(r.reviewed_at)}` : '';
+  const r0 = d.report, h = r0.header || {};
+  setView(`<p><a href="#/lead?week=${r0.week}">← Неделя ${weekLabel(r0.week)}</a></p>
+    <div class="card"><div class="row between"><h2 style="margin:0">Отчёт: ${esc(h.rank || '')} ${esc(h.name || '')}</h2><div class="row" id="repBadges">${badgesHtml(r0)}</div></div>
+      <p class="small mut">Discord: ${esc(d.user ? (d.user.global_name || d.user.username) : r0.user_id)} (${esc(r0.user_id)}) · удостоверение ${esc(h.static_id || '—')} · ${esc(h.unit || '')} · период ${esc(weekLabel(r0.week))}
+        · первая отправка ${fmtDate(r0.first_submitted_at)} · версия ${r0.version} от ${fmtDate(r0.submitted_at)} · срок ${fmtDate(r0.deadline)}</p>
+      <p class="rep-to-line"><b>Кому:</b> <span id="repTo">${esc(r0.addressee_to || '')}</span></p>
+      <div class="row"><label>Должность (из отчёта, можно исправить): <select id="pos" style="width:auto">${d.config.positions.map(p => `<option value="${p.key}" ${p.key === r0.position ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+        <label>Адресат: <select id="toSel" style="width:auto">${(d.config.addressees || []).map(a => `<option value="${esc(a.key)}" ${a.key === r0.addressee ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+        <span>Баллы отчёта: <b id="repPts">${r0.points}</b></span></div>
+      ${h.result ? `<p><b>Общий результат:</b> ${esc(h.result)}</p>` : ''}${h.extra ? `<p><b>Дополнительные сведения:</b> ${esc(h.extra)}</p>` : ''}</div>
+    <div class="grid two">
+      <div class="card flat" id="planCard">${planHtml(r0)}</div>
+      <div class="card flat" id="premCard">${premHtml(d.calc)}</div></div>
     <div class="card"><div class="row between"><h3 style="margin:0">Пункты и доказательства</h3><button class="btn sm" id="allOk">Принять все непроверенные</button></div>
-      ${['main', 'extra', 'gu'].map(g => { const list = r.items.filter(i => i.group === g); return list.length ? `<h4>${GROUP_RU[g]}</h4>${list.map(itemRow).join('')}` : ''; }).join('')}</div>
+      ${['main', 'extra', 'gu'].map(g => { const list = r0.items.filter(i => i.group === g); return list.length ? `<h4>${GROUP_RU[g]}</h4>${list.map(itemRow).join('')}` : ''; }).join('')}</div>
     <form class="card" id="rf"><h3>Решение по отчёту</h3>
-      <label class="f"><span>Комментарий для сотрудника</span><textarea name="comment" maxlength="2000">${esc(r.comment)}</textarea></label>
+      <label class="f"><span>Комментарий для сотрудника</span><textarea name="comment" maxlength="2000">${esc(r0.comment)}</textarea></label>
       <div class="row"><button type="button" class="btn gold" data-st="approved">Принять отчёт</button><button type="button" class="btn danger" data-st="rejected">Отклонить отчёт</button><button type="button" class="btn" data-st="review">На проверке</button><button type="button" class="btn" data-st="">Сохранить комментарий</button></div>
-      ${d.reviewer ? `<p class="small mut">Проверял: ${esc(d.reviewer)} · ${fmtDate(r.reviewed_at)}</p>` : ''}</form>
+      <p class="small mut" id="repReviewer" ${d.reviewer ? '' : 'hidden'}>${reviewerHtml(r0)}</p></form>
     <div class="card flat danger-zone"><h3>Удалить отчёт</h3><p class="small mut">Если отчёт явно недостоверный или отправлен по ошибке. Копия отчёта и история правок сохранятся в журнале, премии недели пересчитаются, сотрудник сможет сдать неделю заново (если срок прошёл — уже после срока). Неделя без отчёта считается нарушением.</p>
       <div class="row"><input id="delReason" placeholder="причина удаления (видна в журнале)" style="flex:1;min-width:220px"><button type="button" class="btn danger" id="delRep">Удалить отчёт</button></div></div>
     ${d.history.length ? `<div class="card flat"><h3>История правок</h3><table><tr><th>Версия</th><th>Отправлена</th><th>Пункты</th></tr>${d.history.map(v => `<tr><td>${v.version}</td><td>${fmtDate(v.submitted_at)}${v.after_deadline ? ' <span class="badge warn">после срока</span>' : ''}</td><td class="small">${v.items.map(i => `${esc(i.name)}: ${i.n}`).join('; ')}</td></tr>`).join('')}</table></div>` : ''}`);
-  const send = async (body, msg) => { try { await api('POST', `/api/lead/reports/${r.id}/review`, body); toast(msg); render(); } catch (e) { toast(e.message, true); } };
-  $$('.ritem').forEach(el => {
-    const k = el.dataset.key, com = () => el.querySelector('.icom').value;
-    el.querySelector('.i-ok').onclick = () => send({ items: { [k]: { status: 'ok', n_ok: el.querySelector('.nok').value, comment: com() } } }, 'Пункт принят');
-    el.querySelector('.i-rej').onclick = () => send({ items: { [k]: { status: 'rejected', comment: com() } } }, 'Пункт отклонён');
-    const clr = el.querySelector('.i-clr'); if (clr) clr.onclick = () => send({ items: { [k]: null } }, 'Отметка снята');
-  });
-  $('#allOk').onclick = () => { const items = {}; r.items.filter(i => !i.review).forEach(i => { items[i.key] = { status: 'ok' }; }); if (!Object.keys(items).length) return toast('Все пункты уже проверены'); send({ items }, 'Пункты приняты'); };
-  $('#pos').onchange = () => send({ position: $('#pos').value }, 'Должность исправлена');
-  $('#toSel').onchange = () => send({ addressee: $('#toSel').value }, 'Адресат исправлен');
-  $('#delRep').onclick = async () => {
-    if (!confirm(`Удалить отчёт ${h.rank || ''} ${h.name || ''} за неделю ${weekLabel(r.week)}? Это нельзя отменить — копия останется только в журнале.`)) return;
-    try { await api('DELETE', '/api/lead/reports/' + r.id, { reason: $('#delReason').value }); toast('Отчёт удалён'); location.hash = '#/lead?week=' + r.week; } catch (e) { toast(e.message, true); }
+  // Обновление на месте по свежему ответу сервера: только изменившиеся пункты (остальные поля ввода не трогаются), шапка, план, премия.
+  const apply = (nd) => {
+    const y = window.scrollY, prev = new Map(d.report.items.map(i => [i.key, JSON.stringify(i)]));
+    d = nd; const r = d.report;
+    for (const it of r.items) {
+      if (prev.get(it.key) === JSON.stringify(it)) continue;
+      const el = document.querySelector(`.ritem[data-key="${CSS.escape(it.key)}"]`); if (!el) continue;
+      const tpl = document.createElement('div'); tpl.innerHTML = itemRow(it).trim(); const ne = tpl.firstElementChild;
+      el.replaceWith(ne); bindItem(ne);
+    }
+    $('#repBadges').innerHTML = badgesHtml(r); $('#repPts').textContent = r.points; $('#repTo').textContent = r.addressee_to || '';
+    $('#planCard').innerHTML = planHtml(r); $('#premCard').innerHTML = premHtml(d.calc);
+    if ($('#pos').value !== r.position) $('#pos').value = r.position; if ($('#toSel').value !== r.addressee) $('#toSel').value = r.addressee;
+    const rv = $('#repReviewer'); rv.innerHTML = reviewerHtml(r); rv.hidden = !d.reviewer;
+    if (window.scrollY !== y) window.scrollTo(0, y);
   };
-  $$('#rf [data-st]').forEach(b => b.onclick = () => send(b.dataset.st ? { status: b.dataset.st, comment: $('#rf').comment.value } : { comment: $('#rf').comment.value }, 'Сохранено'));
+  // Один запрос на действие; кнопки/поля заблокированы, пока он идёт (без двойных кликов).
+  const send = async (body, msg, ctl) => {
+    const els = (ctl || []).filter(Boolean); if (els.some(e => e.disabled)) return;
+    els.forEach(e => { e.disabled = true; }); App.busy = true;
+    try { const nd = await api('POST', `/api/lead/reports/${d.report.id}/review`, body); cachePut(path, nd); apply(nd); toast(msg); }
+    catch (e) { toast(e.message, true); }
+    finally { App.busy = false; els.forEach(e => { if (e.isConnected) e.disabled = false; }); }
+  };
+  function bindItem(el) {
+    const k = el.dataset.key, com = () => el.querySelector('.icom').value, btns = () => [...el.querySelectorAll('button')];
+    el.querySelector('.i-ok').onclick = () => send({ items: { [k]: { status: 'ok', n_ok: el.querySelector('.nok').value, comment: com() } } }, 'Пункт принят', btns());
+    el.querySelector('.i-rej').onclick = () => send({ items: { [k]: { status: 'rejected', comment: com() } } }, 'Пункт отклонён', btns());
+    const clr = el.querySelector('.i-clr'); if (clr) clr.onclick = () => send({ items: { [k]: null } }, 'Отметка снята', btns());
+  }
+  $$('.ritem').forEach(bindItem);
+  $('#allOk').onclick = () => { const items = {}; d.report.items.filter(i => !i.review).forEach(i => { items[i.key] = { status: 'ok' }; }); if (!Object.keys(items).length) return toast('Все пункты уже проверены'); send({ items }, 'Пункты приняты', [$('#allOk')]); };
+  $('#pos').onchange = () => send({ position: $('#pos').value }, 'Должность исправлена', [$('#pos')]);
+  $('#toSel').onchange = () => send({ addressee: $('#toSel').value }, 'Адресат исправлен', [$('#toSel')]);
+  $('#delRep').onclick = async () => {
+    if (!confirm(`Удалить отчёт ${h.rank || ''} ${h.name || ''} за неделю ${weekLabel(r0.week)}? Это нельзя отменить — копия останется только в журнале.`)) return;
+    try { await api('DELETE', '/api/lead/reports/' + r0.id, { reason: $('#delReason').value }); toast('Отчёт удалён'); location.hash = '#/lead?week=' + r0.week; } catch (e) { toast(e.message, true); }
+  };
+  $$('#rf [data-st]').forEach(b => b.onclick = () => send(b.dataset.st ? { status: b.dataset.st, comment: $('#rf').comment.value } : { comment: $('#rf').comment.value }, 'Сохранено', $$('#rf [data-st]')));
 });
 
 // ---------- нарушения ----------
@@ -221,7 +252,7 @@ leadRoute('/lead/violations', async () => {
   $$('[data-u]').forEach(b => b.onclick = async () => {
     const excused = b.dataset.e === '1'; const note = excused ? prompt('Причина снятия нарушения:', '') : '';
     if (excused && note === null) return;
-    try { await api('POST', '/api/lead/violations/excuse', { user_id: b.dataset.u, week: b.dataset.w, excused, note }); render(); } catch (e) { toast(e.message, true); }
+    try { await api('POST', '/api/lead/violations/excuse', { user_id: b.dataset.u, week: b.dataset.w, excused, note }); rerender(); } catch (e) { toast(e.message, true); }
   });
 });
 
@@ -250,8 +281,8 @@ leadRoute('/lead/budget', async () => {
   bindWeekPicker('/lead/budget');
   $('#bf').onsubmit = async (ev) => { ev.preventDefault(); const f = ev.target;
     const wk = f.week.value ? mondayOf(new Date(f.week.value + 'T12:00:00')) : d.week;
-    try { await api('POST', '/api/lead/budget', { kind: f.kind.value, amount: f.amount.value, user_id: f.user_id.value || undefined, week: wk, note: f.note.value }); toast('Операция записана'); render(); } catch (e) { toast(e.message, true); } };
-  $$('[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Удалить операцию? Она останется в журнале как удалённая.')) return; try { await api('DELETE', '/api/lead/budget/' + b.dataset.del); render(); } catch (e) { toast(e.message, true); } });
+    try { await api('POST', '/api/lead/budget', { kind: f.kind.value, amount: f.amount.value, user_id: f.user_id.value || undefined, week: wk, note: f.note.value }); toast('Операция записана'); rerender(); } catch (e) { toast(e.message, true); } };
+  $$('[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Удалить операцию? Она останется в журнале как удалённая.')) return; try { await api('DELETE', '/api/lead/budget/' + b.dataset.del); rerender(); } catch (e) { toast(e.message, true); } });
 });
 
 // ---------- состав ----------
@@ -269,7 +300,7 @@ leadRoute('/lead/staff', async () => {
       <td><input type="date" class="s-since" value="${esc(u.staff_since || '')}" style="width:auto"></td><td class="num">${u.reports}</td></tr>`).join('')}</table>`);
   $('#sf').onsubmit = (ev) => { ev.preventDefault(); location.hash = '#/lead/staff?q=' + encodeURIComponent(ev.target.q.value); };
   $$('tr[data-uid]').forEach(tr => {
-    const put = async (body) => { try { await api('PUT', '/api/lead/staff/' + tr.dataset.uid, body); toast('Сохранено'); render(); } catch (e) { toast(e.message, true); } };
+    const put = async (body) => { try { await api('PUT', '/api/lead/staff/' + tr.dataset.uid, body); toast('Сохранено'); rerender(); } catch (e) { toast(e.message, true); } };
     tr.querySelector('.s-staff').onchange = (e) => put({ staff: e.target.checked });
     tr.querySelector('.s-senior').onchange = (e) => put({ senior: e.target.checked });
     tr.querySelector('.s-pos').onchange = (e) => put({ staff_position: e.target.value });
@@ -313,6 +344,6 @@ leadRoute('/lead/config', async () => {
     items: () => $$('#tItems tr[data-key]').map(tr => { const it = C.items.find(i => i.key === tr.dataset.key); const o = { ...it }; tr.querySelectorAll('[data-f]').forEach(x => { o[x.dataset.f] = x.dataset.f === 'pay' ? Number(x.value) : x.dataset.f === 'wk' ? (x.value.trim() === 'n' ? 'n' : Number(x.value)) : x.value; }); return o; }),
     rules: () => { const o = {}; $$('#tRules [data-f]').forEach(x => { o[x.dataset.f] = Number(x.value); }); return o; },
   };
-  $$('[data-save]').forEach(b => b.onclick = async () => { try { await api('PUT', '/api/lead/config', { [b.dataset.save]: collect[b.dataset.save]() }); toast('Сохранено'); render(); } catch (e) { toast(e.message, true); } });
-  $$('[data-reset]').forEach(b => b.onclick = async () => { if (!confirm('Вернуть значения из приказа № 01_10?')) return; try { await api('POST', `/api/lead/config/${b.dataset.reset}/reset`); toast('Значения приказа восстановлены'); render(); } catch (e) { toast(e.message, true); } });
+  $$('[data-save]').forEach(b => b.onclick = async () => { try { await api('PUT', '/api/lead/config', { [b.dataset.save]: collect[b.dataset.save]() }); toast('Сохранено'); rerender(); } catch (e) { toast(e.message, true); } });
+  $$('[data-reset]').forEach(b => b.onclick = async () => { if (!confirm('Вернуть значения из приказа № 01_10?')) return; try { await api('POST', `/api/lead/config/${b.dataset.reset}/reset`); toast('Значения приказа восстановлены'); rerender(); } catch (e) { toast(e.message, true); } });
 });
