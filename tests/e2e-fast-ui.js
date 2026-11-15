@@ -78,7 +78,8 @@ const monday = (d = new Date()) => { const x = new Date(Date.UTC(d.getUTCFullYea
   check('вход: первым идёт один /api/bootstrap', /^GET \/api\/bootstrap/.test(first) && count(s.st, /^GET \/api\/(me|config)$/) === 0, s.st.req);
   check('вход: список курсов не перезапрашивается (пришёл в bootstrap)', count(s.st, /^GET \/api\/courses$/) === 0 && await s.p.locator('.course-card, #app .alert').count() > 0, s.st.req);
   // кэш: повторный заход в раздел без запросов, без заготовки
-  await s.p.click('#sec-exams'); await ready(s.p);
+  check('вход: список экзаменов в bootstrap не запрашивается', !s.st.req.some(x => /want=[^ ]*%2Fapi%2Fexams|\/api\/exams/.test(x)), s.st.req);
+  await s.p.click('#sec-reports'); await ready(s.p);
   s.st.req = [];
   await s.p.click('#sec-study'); await ready(s.p); await s.p.waitForTimeout(200);
   check('кэш: повторный заход в «Учёбу» без запросов', count(s.st, /^GET \/api\/courses/) === 0, s.st.req);

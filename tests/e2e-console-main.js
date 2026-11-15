@@ -13,9 +13,9 @@ const FORMS = 'http://localhost:8081/';
 const REPORT = 'http://localhost:8081/otchet.html';
 const SUPER = '417660389723996170';
 const SHOT = process.env.MAIN_SHOTS || process.env.SHOTS || '/tmp/console-main';
-const STAFF = ['Учёба', 'Экзамены', 'Переаттестация', 'Отчёты', 'Бланки', 'Премии', 'Повышение', 'База'];
+const STAFF = ['Учёба', 'Переаттестация', 'Отчёты', 'Бланки', 'Премии', 'Повышение', 'База'];
 const ADMIN = ['Люди и роли', 'Проверка', 'Курсы', 'Лекции', 'Конструктор', 'Банк вопросов', 'Доступ к тестам', 'Законодательство', 'Личные дела', 'Неделя', 'Нарушения', 'Бюджет', 'Состав', 'Журнал', 'Параметры', 'Изображения', 'Сводка баз', 'Таблицы выплат'];
-const EMPLOYEE = ['Учёба', 'Экзамены', 'Переаттестация', 'Отчёты', 'Премии', 'Повышение', 'База', 'Бланки'];
+const EMPLOYEE = ['Учёба', 'Переаттестация', 'Отчёты', 'Премии', 'Повышение', 'База', 'Бланки'];
 fs.mkdirSync(SHOT, { recursive: true });
 const results = [];
 const check = (name, cond, extra) => { results.push({ name, ok: !!cond }); console.log((cond ? 'PASS ' : 'FAIL ') + name + (!cond && extra !== undefined ? ' :: ' + String(extra).slice(0, 400) : '')); };
@@ -136,8 +136,14 @@ function railInfo(page) {
   await page.click('#sec-study'); await page.waitForSelector('.secacts'); await ready();
   await page.focus('#sec-study');
   await page.keyboard.press('ArrowRight');
-  await page.waitForFunction(() => location.hash === '#/exams', null, { timeout: 5000 }).catch(() => {}); await ready();
-  check('стрелка вправо открывает экзамены', (await page.textContent('#app h1')) === 'Экзамены' && (await page.getAttribute('#sec-exams', 'aria-selected')) === 'true');
+  await page.waitForFunction(() => location.hash === '#/reatt', null, { timeout: 5000 }).catch(() => {}); await ready();
+  check('стрелка вправо открывает следующий раздел (переаттестация)', (await page.evaluate(() => location.hash)) === '#/reatt' && (await page.getAttribute('#sec-reatt', 'aria-selected')) === 'true');
+  check('вкладки «Экзамены» у сотрудника нет', !(await page.$('#sec-exams')) && !(await page.evaluate(() => window.vpMenu().includes('#/exams'))));
+  await page.goto(SITE + '#/exams'); await ready();
+  check('прямая ссылка #/exams работает, подсвечена «Учёба»', (await page.textContent('#app h1')) === 'Экзамены' && (await page.getAttribute('#sec-study', 'aria-selected')) === 'true');
+  const exLink = await page.$('#app a[href^="#/exam/"]');
+  if (exLink) { const href = await exLink.getAttribute('href'); await page.goto(SITE + href); await ready(); check('прямая ссылка #/exam/… открывает экзамен', /^#\/exam\/\d+$/.test(await page.evaluate(() => location.hash)) && !!(await page.$('#app a[href^="#/course/"]'))); }
+  await page.goto(SITE + '#/study'); await ready();
   await page.click('#sec-study'); await page.waitForSelector('.secacts'); await ready();
   await page.focus('#sec-study');
   await page.keyboard.press('ArrowDown');
@@ -286,11 +292,11 @@ function railInfo(page) {
   await page.click('.mode[data-mode="staff"]');
   check('сотрудник возвращается', (await labels(page)).join('|') === STAFF.join('|') && (await page.evaluate(() => document.activeElement.id)) === 'sec-study' && (await ready().then(() => page.textContent('#app h1'))) === 'Учебный отдел');
 
-  const studyBox = await page.locator('#sec-exams').boundingBox();
-  const idleBg = await page.evaluate(() => getComputedStyle(document.querySelector('#sec-exams')).backgroundColor);
+  const studyBox = await page.locator('#sec-reatt').boundingBox();
+  const idleBg = await page.evaluate(() => getComputedStyle(document.querySelector('#sec-reatt')).backgroundColor);
   await page.mouse.move(studyBox.x + 12, studyBox.y + 12);
   await page.mouse.down();
-  const downBg = await page.evaluate(() => getComputedStyle(document.querySelector('#sec-exams')).backgroundColor);
+  const downBg = await page.evaluate(() => getComputedStyle(document.querySelector('#sec-reatt')).backgroundColor);
   await page.mouse.up();
   check('нажатие плитки заметно', downBg !== idleBg, idleBg + ' -> ' + downBg);
 

@@ -8,11 +8,7 @@ const STAFF_SECTIONS = [
   { id: 'study', label: 'Учёба', cap: 'vp', lead: 'Курсы по званиям и должностям: темы, лекции и экзамен в конце курса.',
     acts: [{ label: 'Курсы', href: '#/study', primary: true }, { label: 'Все лекции', href: '#/lectures' }],
     points: [['Курсы', 'Что назначено по должности и званию'], ['Экзамен курса', 'Открывается после лекций']],
-    match: /^\/(study|course|topic|lectures?)(\/|$)/, data: 'courses' },
-  { id: 'exams', label: 'Экзамены', cap: 'vp', lead: 'Список экзаменов сотрудника. Конкретный экзамен выбирается здесь.',
-    acts: [{ label: 'К списку экзаменов', href: '#/exams', primary: true }],
-    points: [['Список', 'Какие экзамены доступны сейчас'], ['Допуск', 'Закрытый экзамен ждёт просмотра лекций']],
-    match: /^\/(exams?|attempt)(\/|$)/, data: 'exams' },
+    match: /^\/(study|course|topic|lectures?|exams?|attempt)(\/|$)/, data: 'courses' },
   { id: 'reatt', label: 'Переаттестация', cap: 'reatt', lead: 'Только виды, к которым выдан доступ: срок и число попыток.',
     acts: [{ label: 'Мои переаттестации', href: '#/reatt', primary: true }],
     points: [['Допуск', 'Вид, до какого момента и сколько попыток осталось']],
@@ -48,7 +44,7 @@ const ADMIN_SECTIONS = [
   { id: 'lectures', label: 'Лекции', role: 'admin', lead: 'Видео или текст, длительность и публикация.',
     acts: [{ label: 'Открыть лекции', href: '#/admin/lectures', primary: true }],
     points: [['Материал', 'Ролик или текст и выложен ли он']], match: /^\/admin\/lectures?(\/|$)/, stats: s => [['Опубликовано лекций', `${s.lectures_published} из ${s.lectures}`]] },
-  { id: 'examEdit', label: 'Конструктор', role: 'admin', title: 'Конструктор экзаменов', lead: 'Создание экзамена и вопросов. Сдача сотрудником — в разделе «Экзамены».',
+  { id: 'examEdit', label: 'Конструктор', role: 'admin', title: 'Конструктор экзаменов', lead: 'Создание экзамена и вопросов. Сдача сотрудником — в курсе, в разделе «Учёба».',
     acts: [{ label: 'Открыть конструктор', href: '#/admin/exams', primary: true }],
     points: [['Черновик', 'Экзамен, пока его не видят кандидаты']], match: /^\/admin\/exams?(\/|$)/, stats: s => [['Экзаменов', s.exams]] },
   { id: 'bank', label: 'Банк вопросов', role: 'admin', lead: 'Вопросы переаттестации: фильтр, правка, добавление.',
@@ -107,7 +103,7 @@ const railEl = () => document.getElementById('rail');
 const primaryHref = (s) => ((s.acts || []).find(a => a.primary && a.href) || (s.acts || [])[0] || { href: '#/' }).href;
 
 // Запросы, которые делает страница раздела (запоминаются после первого захода) — для подгрузки заранее.
-const PF_DEFAULT = { '/study': ['/api/courses'], '/exams': ['/api/exams'], '/reatt': ['/api/reatt'], '/reports': ['/api/reports/my', '/api/report-config', '/api/promo-config'],
+const PF_DEFAULT = { '/study': ['/api/courses'], '/reatt': ['/api/reatt'], '/reports': ['/api/reports/my', '/api/report-config', '/api/promo-config'],
   '/admin/users': ['/api/admin/users?q='], '/admin/attempts': ['/api/admin/attempts?status=pending_review&kind='], '/admin/reatt': ['/api/admin/reatt'], '/admin/laws': ['/api/admin/laws'],
   '/lead': ['/api/lead/week'], '/lead/budget': ['/api/lead/budget', '/api/lead/staff'], '/admin/bank': ['/api/admin/bank/stats'] };
 let PF = {}; try { PF = JSON.parse(localStorage.getItem('vp_pf') || '{}') || {}; } catch (_) { PF = {}; }
