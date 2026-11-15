@@ -19,7 +19,7 @@ export default {
       const id = url.searchParams.get('id'), name = url.searchParams.get('name') || 'tester';
       const now = Date.now();
       await env.DB.prepare(`INSERT INTO users (id, username, global_name, role, created_at, last_login_at) VALUES (?1, ?2, ?2, 'candidate', ?3, ?3) ON CONFLICT(id) DO UPDATE SET last_login_at = ?3`).bind(id, name, now).run();
-      await setRoles(env, id, url);
+      await setRoles(env, id, url); flushMemo();
       const token = 'test_' + crypto.randomUUID().replace(/-/g, '');
       await env.DB.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)').bind(await sha256(token), id, now, now + 86400000).run();
       return new Response(JSON.stringify({ token }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
@@ -31,7 +31,7 @@ export default {
       const id = url.searchParams.get('id'), name = url.searchParams.get('name') || 'tester', ret = url.searchParams.get('return');
       const now = Date.now();
       await env.DB.prepare(`INSERT INTO users (id, username, global_name, role, created_at, last_login_at) VALUES (?1, ?2, ?2, 'candidate', ?3, ?3) ON CONFLICT(id) DO UPDATE SET last_login_at = ?3`).bind(id, name, now).run();
-      await setRoles(env, id, url);
+      await setRoles(env, id, url); flushMemo();
       const code = 'lc_' + crypto.randomUUID().replace(/-/g, '');
       await env.DB.prepare('INSERT INTO login_codes (code_hash, user_id, created_at) VALUES (?1, ?2, ?3)').bind(await sha256(code), id, now).run();
       const u = new URL(ret); u.searchParams.set('login_code', code);

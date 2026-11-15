@@ -32,6 +32,7 @@ async function apiRaw(method, path, body) {
   const h = {};
   const t = token(); if (t) h.Authorization = 'Bearer ' + t;
   if (body !== undefined) h['Content-Type'] = 'application/json';
+  if (method === 'GET' && t && Date.now() - (App.lastWrite || 0) < FRESH_MS) h['X-VP-Fresh'] = '1';
   let res;
   try { res = await fetch(CFG.API_BASE + path, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined }); }
   catch (e) { throw new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.'); }
@@ -44,8 +45,12 @@ async function apiRaw(method, path, body) {
 // ---------- кэш ответов ----------
 // Списки и сводки держатся в памяти: повторный заход в раздел открывается сразу, свежие данные догружаются в фоне.
 // Любое изменение (POST/PUT/DELETE) сбрасывает кэш целиком; записи старше CACHE_MAX не используются.
-const CACHE_RE = /^\/api\/(courses|exams(\/\d+)?|reatt|lectures|topics\/\d+|reports\/my|report-config|promo-config|premiums|promo|docs(\/\d+)?|people(\/\d+)?|my\/attempts|admin\/(stats|users(\/\d+)?|attempts(\/\d+)?|reatt(\/\d+(\/access)?)?|laws(\/history|\/docs\/[a-z0-9_]+)?|bank|bank\/stats|lectures|courses|exams(\/\d+)?|topics(\/\d+)?|settings|bases|media|audit)|lead\/(week|violations|budget|staff|config|deleted|reports\/\d+))(\?.*)?$/;
-const CACHE_FRESH = 30000, CACHE_MAX = 5 * 60000;
+const CACHE_RE = /^\/api\/(courses|exams(\/\d+)?|reatt|lectures|topics\/\d+|reports\/my|report-config|promo-config|premiums|promo|promo\/eligibility|docs(\/\d+)?|people(\/\d+)?|my\/attempts|admin\/(stats|users(\/\d+)?|attempts(\/\d+)?|reatt(\/\d+(\/access)?)?|laws(\/history|\/docs\/[a-z0-9_]+)?|bank|bank\/stats|lectures|courses|exams(\/\d+)?|topics(\/\d+)?|settings|bases|media|audit)|lead\/(week|violations|budget|staff|config|deleted|reports\/\d+|promo(\/\d+)?))(\?.*)?$/;
+const CACHE_FRESH = 60000, CACHE_MAX = 5 * 60000;
+// Пульс лекции и автосохранение ответов кэш не сбрасывают (пульс — только когда лекция засчитана); после остальных записей
+// 10 с запросы идут с X-VP-Fresh — сервер отвечает по свежим данным, а не из кэша изолята.
+const HOT_WRITE_RE = /^\/api\/(lectures\/\d+\/heartbeat|attempts\/\d+\/(answers|upload))$/;
+const FRESH_MS = 10000;
 const Cache = new Map(), Inflight = new Map();
 function cacheable(path) { return CACHE_RE.test(path); }
 function cachePut(path, data) { Cache.set(path, { data, t: Date.now() }); }
@@ -78,8 +83,14 @@ function revalidate(path) {
 }
 async function api(method, path, body, opt) {
   if (method !== 'GET') {
+    if (HOT_WRITE_RE.test(path)) {
+      const r = await apiRaw(method, path, body);
+      if (r && r.completed) { cacheClear(); App.lastWrite = Date.now(); }
+      else if (/heartbeat$/.test(path)) for (const k of [...Cache.keys()]) if (/^\/api\/(lectures|courses|topics)/.test(k)) Cache.delete(k); // прогресс в списках лекций догрузится при заходе
+      return r;
+    }
     try { return await apiRaw(method, path, body); }
-    finally { cacheClear(); }
+    finally { cacheClear(); App.lastWrite = Date.now(); }
   }
   if (App.once[path]) { const d = App.once[path]; delete App.once[path]; return d; }
   if (App.recording) App.recording.add(path);
@@ -304,12 +315,12 @@ function textReader(l) {
   };
   const tick = () => {
     const now = Date.now(), dt = (now - lastTick) / 1000; lastTick = now;
-    if (!document.hidden && !done) pos = Math.min(dur, pos + Math.min(dt, 6));
+    if (!document.hidden && !done) { const was = pos; pos = Math.min(dur, pos + Math.min(dt, 6)); if (was < dur && pos >= dur) send(); } // дочитал — засчитать сразу
     paint();
   };
   paint();
   send();
-  const t1 = setInterval(tick, 1000), t2 = setInterval(() => { if (!done && !document.hidden) send(); }, 5000); // вкладка скрыта — время не идёт, запросы не нужны
+  const t1 = setInterval(tick, 1000), t2 = setInterval(() => { if (!done && !document.hidden) send(); }, 15000); // вкладка скрыта — время не идёт, запросы не нужны
   const vis = () => { lastTick = Date.now(); paint(); };
   document.addEventListener('visibilitychange', vis);
   App.cleanup.push(() => { stopped = true; clearInterval(t1); clearInterval(t2); document.removeEventListener('visibilitychange', vis); if (!done && pos > 0) api('POST', `/api/lectures/${l.id}/heartbeat`, { position: Math.round(pos * 10) / 10, event: 'leave' }).catch(() => {}); });

@@ -14,7 +14,7 @@ const REPORT = 'http://localhost:8081/otchet.html';
 const SUPER = '417660389723996170';
 const SHOT = process.env.MAIN_SHOTS || process.env.SHOTS || '/tmp/console-main';
 const STAFF = ['Учёба', 'Переаттестация', 'Отчёты', 'Бланки', 'Премии', 'Повышение', 'База'];
-const ADMIN = ['Люди и роли', 'Проверка', 'Курсы', 'Лекции', 'Конструктор', 'Банк вопросов', 'Доступ к тестам', 'Законодательство', 'Личные дела', 'Неделя', 'Нарушения', 'Бюджет', 'Состав', 'Журнал', 'Параметры', 'Изображения', 'Сводка баз', 'Таблицы выплат'];
+const ADMIN = ['Люди и роли', 'Проверка', 'Курсы', 'Лекции', 'Конструктор', 'Банк вопросов', 'Доступ к тестам', 'Законодательство', 'Личные дела', 'Неделя', 'Рапорты', 'Нарушения', 'Бюджет', 'Состав', 'Журнал', 'Параметры', 'Изображения', 'Сводка баз', 'Таблицы выплат'];
 const EMPLOYEE = ['Учёба', 'Переаттестация', 'Отчёты', 'Премии', 'Повышение', 'База', 'Бланки'];
 fs.mkdirSync(SHOT, { recursive: true });
 const results = [];
@@ -253,7 +253,7 @@ function railInfo(page) {
     JSON.stringify({ geom, geomStaff }));
   await page.click('.mode[data-mode="admin"]');
   await page.focus('#sec-users');
-  for (let i = 0; i < 17; i++) await page.keyboard.press('ArrowRight');
+  for (let i = 0; i < 18; i++) await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => {
     const rail = document.getElementById('rail');
     return rail.scrollLeft > rail.scrollWidth - rail.clientWidth - 30;

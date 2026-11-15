@@ -347,3 +347,97 @@ leadRoute('/lead/config', async () => {
   $$('[data-save]').forEach(b => b.onclick = async () => { try { await api('PUT', '/api/lead/config', { [b.dataset.save]: collect[b.dataset.save]() }); toast('Сохранено'); rerender(); } catch (e) { toast(e.message, true); } });
   $$('[data-reset]').forEach(b => b.onclick = async () => { if (!confirm('Вернуть значения из приказа № 01_10?')) return; try { await api('POST', `/api/lead/config/${b.dataset.reset}/reset`); toast('Значения приказа восстановлены'); rerender(); } catch (e) { toast(e.message, true); } });
 });
+
+// ---------- рапорты на повышение ----------
+// Проверка как у еженедельного отчёта: каждый пункт засчитывается (можно меньше штук) или отклоняется с комментарием,
+// решение сохраняется сразу; по ответу POST /review карточка обновляется на месте — прокрутка и черновики комментариев остаются.
+const PROMO_ST = { submitted: ['Отправлен', 'info'], review: ['На проверке', 'warn'], approved: ['Повышение одобрено', 'ok'], rejected: ['Отклонён', 'err'] };
+const promoBadge = (st) => { const x = PROMO_ST[st] || [st, '']; return `<span class="badge ${x[1]}">${esc(x[0])}</span>`; };
+leadRoute('/lead/promo', async () => {
+  const q = hashQ(), st = q.get('status') || 'open';
+  const d = await api('GET', '/api/lead/promo?status=' + encodeURIComponent(st));
+  const tabs = [['open', 'Ждут решения'], ['approved', 'Одобрены'], ['rejected', 'Отклонены'], ['', 'Все']];
+  setView(`<h1>Рапорты на повышение</h1>${leadNav('/lead/promo')}
+    <div class="row" style="margin-bottom:12px">${tabs.map(([k, t]) => `<a class="btn sm ${k === st ? 'gold' : ''}" href="#/lead/promo?status=${k}">${t}</a>`).join('')}</div>
+    ${d.raports.length ? `<div class="tscroll"><table><tr><th>Сотрудник</th><th>Ступень</th><th>Статус</th><th>Баллы (засчитано / заявлено)</th><th>Не проверено</th><th>Отправлен</th></tr>
+    ${d.raports.map(r => `<tr class="click" data-href="#/lead/promo/${r.id}"><td><b>${esc(r.name)}</b><div class="small mut">${esc(r.static_id || r.user_id)}</div></td><td>${esc(r.rank)} → ${esc(r.target)}</td>
+      <td><a href="#/lead/promo/${r.id}">${promoBadge(r.status)}</a></td><td class="num">${r.points} / ${r.claimed}${r.need_points != null ? ` <span class="small mut">из ${r.need_points}</span>` : ''}</td><td class="num">${r.pending} из ${r.items}</td><td>${fmtDate(r.submitted_at)}${r.version > 1 ? ` <span class="small mut">версия ${r.version}</span>` : ''}</td></tr>`).join('')}</table></div>`
+      : '<div class="alert info">Рапортов нет.</div>'}`);
+  $$('tr[data-href]').forEach(tr => tr.onclick = (e) => { if (!e.target.closest('a')) location.hash = tr.dataset.href; });
+});
+route('/lead/promo/:id', async (id) => {
+  if (!isLead()) { setView(noAccess('lead')); return; }
+  const path = '/api/lead/promo/' + encodeURIComponent(id);
+  let d = await api('GET', path);
+  const itemRow = (it) => { const rv = it.review || {};
+    return `<div class="ritem ${rv.status === 'rejected' ? 'rej' : rv.status === 'ok' ? 'acc' : ''}" data-key="${esc(it.key)}">
+      <div class="row between"><div><b>${esc(it.name)}</b> — штук: <b>${it.n}</b>${it.custom ? ' <span class="badge">свой пункт, без баллов</span>' : ` <span class="small mut">${it.pts} баллов за 1</span>`}</div>
+        <div class="row">${rv.status ? `<span class="badge ${rv.status === 'ok' ? 'ok' : 'err'}">${rv.status === 'ok' ? 'засчитан' + (rv.n_ok != null ? ` (${rv.n_ok} из ${it.n})` : '') : 'отклонён'}</span>` : '<span class="badge">не проверен</span>'}
+          <input type="number" class="nok" min="0" max="${it.n}" value="${rv.n_ok != null ? rv.n_ok : it.n}" title="Засчитано штук" style="width:70px">
+          <button class="btn sm i-ok">Засчитать</button><button class="btn sm danger i-rej">Отклонить</button>${rv.status ? '<button class="btn sm i-clr" title="Снять отметку">↺</button>' : ''}</div></div>
+      ${it.links && it.links.length ? `<ol class="links">${it.links.map(u => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a></li>`).join('')}</ol>` : '<div class="small neg">ссылок нет</div>'}
+      <input class="icom" placeholder="комментарий к пункту" value="${esc(rv.comment || '')}"></div>`; };
+  const sumHtml = (s) => {
+    const ok = (b) => b ? 'pos' : 'neg';
+    if (!s.step) return `<h3>Итог</h3><div class="alert warn small">Для звания «${esc(s.rank)}» ступень повышения не описана — критерии не проверяются.</div><div class="kv"><span>Засчитано баллов</span><b>${s.points}</b></div><div class="kv"><span>Заявлено</span><b>${s.claimed}</b></div>`;
+    const lines = [];
+    if (s.left.points) lines.push(`${s.left.points} баллов`);
+    if (s.left.items) lines.push(`${s.left.items} обязательн. пункт(ов)${s.missing_points ? `, каждый можно заменить ${s.points_per_item} баллами сверх нормы` : ''}`);
+    if (s.left.courses.length) lines.push((s.left.courses.length > 1 ? 'курсы ' : 'курс ') + s.left.courses.map(c => `«${esc(c.title)}»`).join(', '));
+    return `<h3>Итог: ${esc(s.step.rank)} → ${esc(s.step.to)} ${s.met ? '<span class="badge ok">критерии выполнены</span>' : '<span class="badge err">не хватает</span>'}</h3>
+      <table><tr><th>Критерий</th><th>Засчитано</th><th>Нужно</th></tr>
+        <tr><td>Баллы</td><td class="num ${ok(s.points >= s.step.points)}">${s.points}</td><td class="num">${s.step.points}</td></tr>
+        ${s.need.map(x => `<tr><td>${esc(x.name)}</td><td class="num ${ok(!x.lack)}">${x.have}</td><td class="num">${x.need}</td></tr>`).join('')}
+        ${s.courses.map(c => `<tr><td>Курс «${esc(c.title)}»</td><td class="${ok(c.done)}">${c.done ? 'пройден' : 'не пройден'}</td><td></td></tr>`).join('')}</table>
+      <p class="small mut">Заявлено баллов: ${s.claimed} · не проверено пунктов: ${s.pending}${s.rejected ? ` · отклонено: ${s.rejected}` : ''} · ${s.missing_points ? `недостающий пункт заменяют ${s.points_per_item} баллов сверх нормы${s.covered ? ` (сейчас заменено: ${s.covered})` : ''}` : 'замена пунктов баллами выключена'}</p>
+      ${s.met ? '' : `<div class="alert err small">Не хватает: ${lines.join('; ')}.</div>`}`;
+  };
+  const reviewerHtml = (r) => d.reviewer ? `Проверял: ${esc(d.reviewer)} · ${fmtDate(r.reviewed_at)}` : '';
+  const r0 = d.raport, h = r0.header || {};
+  setView(`<p><a href="#/lead/promo">← Рапорты на повышение</a></p>
+    <div class="card"><div class="row between"><h2 style="margin:0">Рапорт: ${esc(h.rank || r0.rank)} ${esc(h.name || '')}</h2><div class="row" id="prBadges">${promoBadge(r0.status)}</div></div>
+      <p class="small mut">Discord: ${esc(d.user ? (d.user.global_name || d.user.username) : r0.user_id)} (${esc(r0.user_id)}) · удостоверение ${esc(h.static_id || '—')} · ${esc(h.unit || '')}${h.position ? ' · ' + esc(h.position) : ''}
+        · в звании ${esc(h.from || '—')} — ${esc(h.to || '—')} · рапорт № ${esc(h.number || '—')} от ${esc(h.date || '—')} · версия ${r0.version} от ${fmtDate(r0.submitted_at)}</p>
+      <p><b>Испрашиваемое звание:</b> ${esc(r0.target)}</p>
+      ${h.result ? `<p><b>Общий результат:</b> ${esc(h.result)}</p>` : ''}${h.extra ? `<p><b>Дополнительные сведения:</b> ${esc(h.extra)}</p>` : ''}</div>
+    <div class="card flat" id="sumCard">${sumHtml(r0.summary)}</div>
+    <div class="card"><div class="row between"><h3 style="margin:0">Пункты и доказательства</h3><button class="btn sm" id="allOk">Засчитать все непроверенные</button></div>
+      ${['main', 'extra', 'gu'].map(g => { const list = r0.items.filter(i => i.group === g); return list.length ? `<h4>${GROUP_RU[g]}</h4>${list.map(itemRow).join('')}` : ''; }).join('')}</div>
+    <form class="card" id="rf"><h3>Решение по рапорту</h3>
+      <label class="f"><span>Комментарий для сотрудника</span><textarea name="comment" maxlength="2000">${esc(r0.comment)}</textarea></label>
+      <div class="row"><button type="button" class="btn gold" data-st="approved">Одобрить повышение</button><button type="button" class="btn danger" data-st="rejected">Отклонить рапорт</button><button type="button" class="btn" data-st="review">На проверке</button><button type="button" class="btn" data-st="">Сохранить комментарий</button></div>
+      <p class="small mut" id="prReviewer" ${d.reviewer ? '' : 'hidden'}>${reviewerHtml(r0)}</p></form>`);
+  const apply = (nd) => {
+    const prev = new Map(d.raport.items.map(i => [i.key, JSON.stringify(i)]));
+    // якорь — первый видимый пункт: итог над пунктами меняет высоту, а пункт перед глазами не должен уезжать
+    const anchorKey = ([...document.querySelectorAll('.ritem')].find(e => e.getBoundingClientRect().bottom > 0) || { dataset: {} }).dataset.key;
+    const topOf = (k) => { const e = k && document.querySelector(`.ritem[data-key="${CSS.escape(k)}"]`); return e ? e.getBoundingClientRect().top : null; };
+    const t0 = topOf(anchorKey);
+    d = nd; const r = d.raport;
+    for (const it of r.items) {
+      if (prev.get(it.key) === JSON.stringify(it)) continue;
+      const el = document.querySelector(`.ritem[data-key="${CSS.escape(it.key)}"]`); if (!el) continue;
+      const tpl = document.createElement('div'); tpl.innerHTML = itemRow(it).trim(); const ne = tpl.firstElementChild;
+      el.replaceWith(ne); bindItem(ne);
+    }
+    $('#prBadges').innerHTML = promoBadge(r.status); $('#sumCard').innerHTML = sumHtml(r.summary);
+    const rv = $('#prReviewer'); rv.innerHTML = reviewerHtml(r); rv.hidden = !d.reviewer;
+    const t1 = topOf(anchorKey); if (t0 != null && t1 != null && Math.abs(t1 - t0) > 1) window.scrollBy(0, t1 - t0);
+  };
+  const send = async (body, msg, ctl) => {
+    const els = (ctl || []).filter(Boolean); if (els.some(e => e.disabled)) return;
+    els.forEach(e => { e.disabled = true; }); App.busy = true;
+    try { const nd = await api('POST', `/api/lead/promo/${d.raport.id}/review`, body); cachePut(path, nd); apply(nd); toast(msg); }
+    catch (e) { toast(e.message, true); }
+    finally { App.busy = false; els.forEach(e => { if (e.isConnected) e.disabled = false; }); }
+  };
+  function bindItem(el) {
+    const k = el.dataset.key, com = () => el.querySelector('.icom').value, btns = () => [...el.querySelectorAll('button')];
+    el.querySelector('.i-ok').onclick = () => send({ items: { [k]: { status: 'ok', n_ok: el.querySelector('.nok').value, comment: com() } } }, 'Пункт засчитан', btns());
+    el.querySelector('.i-rej').onclick = () => send({ items: { [k]: { status: 'rejected', comment: com() } } }, 'Пункт отклонён', btns());
+    const clr = el.querySelector('.i-clr'); if (clr) clr.onclick = () => send({ items: { [k]: null } }, 'Отметка снята', btns());
+  }
+  $$('.ritem').forEach(bindItem);
+  $('#allOk').onclick = () => { const items = {}; d.raport.items.filter(i => !i.review).forEach(i => { items[i.key] = { status: 'ok' }; }); if (!Object.keys(items).length) return toast('Все пункты уже проверены'); send({ items }, 'Пункты засчитаны', [$('#allOk')]); };
+  $$('#rf [data-st]').forEach(b => b.onclick = () => send(b.dataset.st ? { status: b.dataset.st, comment: $('#rf').comment.value } : { comment: $('#rf').comment.value }, 'Сохранено', $$('#rf [data-st]')));
+});

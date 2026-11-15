@@ -55,6 +55,9 @@ const PROMO_FORM_HTML = `<div class="layout v2">
     <button class="btn" id="png">Скачать PNG</button>
     <button class="btn ghost" id="clear">Обнулить достижения</button>
     <div id="promoGate"></div>
+    <h3>Проверка руководством</h3>
+    <button type="button" class="btn primary" id="promoSend">Отправить на проверку</button>
+    <div class="status" id="promoSendStatus"></div>
     <div class="status" id="status"></div>
     <div class="note">PDF — векторный текст, ссылки на доказательства видны и кликабельны. PNG — тот же документ без ссылок: вместо адресов «Приложение №N». Данные хранятся только в этом браузере и никуда не отправляются.</div>
   </aside>
@@ -232,13 +235,28 @@ function promoGateHtml(g) {
   const list = g.missing.map(c => `<a href="#/course/${c.id}">${esc(c.title)}</a>`).join(', ');
   return `<div class="alert warn small promo-gate">Скачать рапорт можно после ${g.missing.length > 1 ? 'курсов' : 'курса'}: ${list}.</div>`;
 }
+// Мой рапорт на повышение: статус, отметки проверяющего по пунктам и итог по засчитанному.
+const PROMO_MY_ST = { submitted: ['Отправлен', 'info'], review: ['На проверке', 'warn'], approved: ['Повышение одобрено', 'ok'], rejected: ['Отклонён', 'err'] };
+const promoMyBadge = (st) => { const x = PROMO_MY_ST[st] || [st, '']; return `<span class="badge ${x[1]}">${esc(x[0])}</span>`; };
+function promoMineHtml(d) {
+  const r = d && d.raport;
+  if (!r) return '<div class="card flat" id="promoMine"><h3>Мой рапорт</h3><p class="mut">Рапорт ещё не отправлялся. Заполните бланк и нажмите «Отправить на проверку».</p></div>';
+  const s = r.summary || {};
+  return `<div class="card flat" id="promoMine"><div class="row between"><h3 style="margin:0">Мой рапорт: ${esc(r.rank)} → ${esc(r.target)}</h3>${promoMyBadge(r.status)}</div>
+    <p class="small mut">Версия ${r.version} от ${fmtDate(r.submitted_at)}${r.reviewed_at ? ' · проверен ' + fmtDate(r.reviewed_at) : ''} · засчитано баллов: <b>${s.points}</b> из заявленных ${s.claimed}${s.step ? ` (нужно ${s.step.points})` : ''}</p>
+    ${r.comment ? `<div class="alert ${r.status === 'rejected' ? 'err' : 'info'} small">${esc(r.comment)}</div>` : ''}
+    <div class="tscroll"><table><tr><th>Пункт</th><th>Штук</th><th>Проверка</th><th>Комментарий</th></tr>${r.items.map(i => { const rv = i.review || {};
+      return `<tr><td>${esc(i.name)}</td><td class="num">${i.n}</td><td>${rv.status === 'ok' ? `<span class="badge ok">засчитан${rv.n_ok != null ? ` ${rv.n_ok} из ${i.n}` : ''}</span>` : rv.status === 'rejected' ? '<span class="badge err">отклонён</span>' : '<span class="badge">не проверен</span>'}</td><td class="small">${esc(rv.comment || '')}</td></tr>`; }).join('')}</table></div>
+    ${r.status === 'submitted' || r.status === 'review' ? '<p class="small mut">Повторная отправка обновит этот рапорт: отметки по неизменённым пунктам сохранятся.</p>' : ''}</div>`;
+}
 route('/promo/raport', async () => {
   App.busy = true; onCleanup(() => { App.busy = false; });
   const libs = reportLibs(); libs.catch(() => {});
   const elig = (rank) => api('GET', '/api/promo/eligibility' + (rank ? '?rank=' + encodeURIComponent(rank) : '')).catch(() => ({ allowed: true, missing: [] }));
   const [pc, g0] = await Promise.all([api('GET', '/api/promo-config').catch(() => null), elig('')]);
   let gate = g0;
-  setView(`<h1>Рапорт на повышение</h1><div class="rep" id="repBox">${PROMO_FORM_HTML}</div>`);
+  const mine = await api('GET', '/api/promo/raports/my').catch(() => null);
+  setView(`<h1>Рапорт на повышение</h1><div class="rep" id="repBox">${PROMO_FORM_HTML}</div>${promoMineHtml(mine)}`);
   const box = $('#repBox');
   const paint = () => {
     const el = $('#promoGate'); if (!el) return;
@@ -260,4 +278,23 @@ route('/promo/raport', async () => {
   const rankEl = $('#fromRank');
   if (rankEl && rankEl.value.trim().toLowerCase() !== asked.toLowerCase()) { asked = rankEl.value.trim(); gate = await elig(asked); paint(); }
   if (rankEl) rankEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(async () => { const r = rankEl.value.trim(); if (r === asked) return; asked = r; const g = await elig(r); if (asked === r && box.isConnected) { gate = g; paint(); } }, 350); });
+  // отправка на проверку руководству: те же поля и отмеченные пункты, что в документе
+  const sendBtn = $('#promoSend'), st = $('#promoSendStatus');
+  if (sendBtn) sendBtn.onclick = async () => {
+    if (sendBtn.disabled) return;
+    const V = window.__vp, D = window.VPDOC, val = (id) => (document.getElementById(id) || {}).value || '';
+    if (!gate.allowed) { st.innerHTML = '<div class="send-err">Отправить рапорт можно после обязательных курсов учёбы.</div>'; return; }
+    if (D && D.check && !D.check(['date', 'fromRank', 'fromStatic', 'fromName', 'fromUnit', 'fromPos', 'target', 'toDate'])) { st.innerHTML = '<div class="send-err">Заполни подсвеченные красным поля.</div>'; return; }
+    const items = V.crit.items().map(i => ({ key: i.key, name: i.text, group: i.group, n: i.n, links: i.links, custom: !!i.custom }));
+    if (!items.length) { st.innerHTML = '<div class="send-err">Отметь выполненные пункты.</div>'; return; }
+    const c = V.compute(); if (c.step && !c.met && !confirm('Критерии повышения пока не выполнены. Всё равно отправить рапорт на проверку?')) return;
+    sendBtn.disabled = true; App.busy = true; st.textContent = 'Отправка…';
+    try {
+      const r = await api('POST', '/api/promo/raports', { header: { number: val('num'), date: val('date'), rank: val('fromRank').trim(), static_id: val('fromStatic').trim(), name: val('fromName').trim(), unit: val('fromUnit').trim(),
+        position: val('fromPos').trim(), target: val('target').trim(), from: val('fromDate'), to: val('toDate'), result: val('result').trim(), extra: val('extra').trim() }, items });
+      st.textContent = r.created ? 'Рапорт отправлен руководству.' : 'Рапорт обновлён.'; toast(r.created ? 'Рапорт отправлен' : 'Рапорт обновлён');
+      const m = $('#promoMine'); if (m) m.outerHTML = promoMineHtml({ raport: r.raport });
+    } catch (e) { st.innerHTML = `<div class="send-err">${esc(e.message)}</div>`; }
+    finally { App.busy = false; if (sendBtn.isConnected) sendBtn.disabled = false; }
+  };
 }, { cap: 'vp' });

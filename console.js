@@ -62,6 +62,9 @@ const ADMIN_SECTIONS = [
   { id: 'lead', label: 'Неделя', cap: 'lead', title: 'Неделя', lead: 'Сводная таблица отчётов и премий. Отсюда открывается конкретный отчёт.',
     acts: [{ label: 'Открыть неделю', href: '#/lead', primary: true }],
     points: [['Таблица', 'Кто сдал отчёт и какая премия']], match: /^\/lead(\/report(\/.*)?)?$/ },
+  { id: 'promoRev', label: 'Рапорты', cap: 'lead', title: 'Рапорты на повышение', lead: 'Проверка рапортов на повышение по пунктам и критериям ступени.',
+    acts: [{ label: 'Открыть рапорты', href: '#/lead/promo', primary: true }],
+    points: [['Проверка', 'Засчитанные пункты, баллы и курсы до следующего звания']], match: /^\/lead\/promo(\/.*)?$/ },
   { id: 'viol', label: 'Нарушения', cap: 'lead', lead: 'Несданные и сданные после срока отчёты.',
     acts: [{ label: 'Открыть нарушения', href: '#/lead/violations', primary: true }],
     points: [['Срок', 'Кто не сдал или сдал позже']], match: /^\/lead\/violations(\/|$)/ },
@@ -105,7 +108,7 @@ const primaryHref = (s) => ((s.acts || []).find(a => a.primary && a.href) || (s.
 // Запросы, которые делает страница раздела (запоминаются после первого захода) — для подгрузки заранее.
 const PF_DEFAULT = { '/study': ['/api/courses'], '/reatt': ['/api/reatt'], '/reports': ['/api/reports/my', '/api/report-config', '/api/promo-config'],
   '/admin/users': ['/api/admin/users?q='], '/admin/attempts': ['/api/admin/attempts?status=pending_review&kind='], '/admin/reatt': ['/api/admin/reatt'], '/admin/laws': ['/api/admin/laws'],
-  '/lead': ['/api/lead/week'], '/lead/budget': ['/api/lead/budget', '/api/lead/staff'], '/admin/bank': ['/api/admin/bank/stats'] };
+  '/lead': ['/api/lead/week'], '/lead/promo': ['/api/lead/promo?status=open'], '/lead/budget': ['/api/lead/budget', '/api/lead/staff'], '/admin/bank': ['/api/admin/bank/stats'] };
 let PF = {}; try { PF = JSON.parse(localStorage.getItem('vp_pf') || '{}') || {}; } catch (_) { PF = {}; }
 function pfPaths(routePath) { return (PF[routePath] || PF_DEFAULT[routePath] || []).filter(p => cacheable(p)); }
 function pfSection(s) { if (s) pfPaths(primaryHref(s).slice(1)).forEach(prefetch); }

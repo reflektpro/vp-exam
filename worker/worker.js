@@ -26,15 +26,20 @@ export default {
     const cors = corsHeaders(request, env);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     let res;
-    const write = request.method !== 'GET' && request.method !== 'HEAD' && !MEMO_KEEP_RE.test(new URL(request.url).pathname);
-    if (write) memoClear(); // запись (POST/PUT/DELETE), кроме частых пользовательских, — кэш справочников изолята сбрасывается до и после
+    const path = new URL(request.url).pathname, isWrite = request.method !== 'GET' && request.method !== 'HEAD';
+    // запись (POST/PUT/DELETE): правки сайта — кэш изолята сбрасывается целиком; пользовательские записи — сессии, данные людей и сводки руководства;
+    // пульс лекции и автосохранение ответов — ничего (до и после выполнения)
+    const kind = !isWrite ? '' : MEMO_HOT_RE.test(path) ? 'hot' : MEMO_KEEP_RE.test(path) ? 'user' : 'all';
+    const drop = () => { if (kind === 'all') memoClear(); else if (kind === 'user') { memoDrop('sess:'); memoDrop('u:'); memoDrop('lead:'); } };
+    drop();
+    if (request.headers.get('X-VP-Fresh') === '1') env = Object.assign(Object.create(env), { __fresh: true });
     try {
       res = await route(request, env, ctx);
     } catch (e) {
       if (e instanceof HttpError) res = json({ error: e.message }, e.status);
       else { console.error(e && e.stack || e); res = json({ error: 'Внутренняя ошибка сервера' }, 500); }
     }
-    if (write) memoClear();
+    drop();
     const h = new Headers(res.headers);
     for (const [k, v] of Object.entries(cors)) h.set(k, v);
     h.set('X-Content-Type-Options', 'nosniff');
@@ -48,15 +53,25 @@ export default {
 // изоляте сбрасывает кэш целиком (см. fetch); другие изоляты увидят правку не позже TTL. Прогресс пользователей не кэшируется.
 // Значения отдаются копиями — вызывающий код может менять их свободно.
 const MEMO = new Map();
-const MEMO_TTL = { courses: 30000, settings: 30000, lectures: 30000, topics: 30000, exams: 30000, links: 30000, qcount: 30000, docs: 30000, bank: 60000 };
+// sess — проверка токена (роль, бан, отзыв сессии видны другим изолятам не позже 30 с); u:<id>: — данные одного пользователя (15 с);
+// lead: — сводки руководства (15 с); cfg: — таблицы выплат и система повышения.
+const MEMO_TTL = { courses: 30000, settings: 30000, lectures: 30000, topics: 30000, exams: 30000, links: 30000, qcount: 30000, docs: 30000, bank: 60000,
+  cfg: 30000, sess: 30000, u: 15000, lead: 15000 };
 globalThis[Symbol.for('vp-exam.memo')] = MEMO; // локальный тестовый обёрточный worker сбрасывает его после прямых правок БД
 // Частые записи пользователей, которые не трогают кэшируемые таблицы (прогресс лекций, попытки, отчёты, профиль, сессии, руководство, личные дела) — кэш не сбрасывают.
-const MEMO_KEEP_RE = /^\/(auth\/exchange|api\/(logout|me|lectures\/\d+\/heartbeat|exams\/\d+\/start|attempts\/\d+\/(answers|submit|upload)|reatt\/[a-z0-9_-]+\/start|reports|lead\/(week|reports|staff|budget|violations)(\/.*)?|people(\/.*)?))\/?$/;
+const MEMO_KEEP_RE = /^\/(auth\/exchange|api\/(logout|me|lectures\/\d+\/heartbeat|exams\/\d+\/start|attempts\/\d+\/(answers|submit|upload)|reatt\/[a-z0-9_-]+\/start|reports|promo\/raports|lead\/(week|reports|staff|budget|violations|promo)(\/.*)?|people(\/.*)?))\/?$/;
+// Самые частые записи: пульс лекции (прогресс в кэше обновляется на месте) и автосохранение ответов — пользовательский кэш не трогают.
+const MEMO_HOT_RE = /^\/api\/(lectures\/\d+\/heartbeat|attempts\/\d+\/(answers|upload))\/?$/;
 function memoClear() { MEMO.clear(); }
+function memoDrop(prefix) { for (const k of [...MEMO.keys()]) if (k.startsWith(prefix)) MEMO.delete(k); }
+// Пользовательские данные и сводки: после своей записи клиент несколько секунд шлёт X-VP-Fresh — ответ читается из D1 заново
+// (другой изолят мог закэшировать состояние до записи).
+async function memoP(env, key, fn) { if (env && env.__fresh) MEMO.delete(key); return memo(key, fn); }
 async function memo(key, fn) {
   const ttl = MEMO_TTL[key.split(':')[0]] || 30000, now = Date.now();
   let e = MEMO.get(key);
   if (!e || now - e.t >= ttl) {
+    if (MEMO.size > 2000) for (const [k, x] of MEMO) if (now - x.t >= (MEMO_TTL[k.split(':')[0]] || 30000)) MEMO.delete(k); // устаревшие записи (сессии, данные людей) не копятся
     e = { t: now, p: fn() };
     MEMO.set(key, e);
     e.p.catch(() => { if (MEMO.get(key) === e) MEMO.delete(key); });
@@ -77,7 +92,7 @@ function corsHeaders(request, env) {
   if (origin && allowedOrigins(env).includes(origin)) {
     h['Access-Control-Allow-Origin'] = origin;
     h['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
-    h['Access-Control-Allow-Headers'] = 'Authorization, Content-Type';
+    h['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, X-VP-Fresh';
     h['Access-Control-Max-Age'] = '600';
   }
   return h;
@@ -209,8 +224,9 @@ async function authUser(request, env, { optional = false } = {}) {
   const m = /^Bearer\s+([A-Za-z0-9_\-]{20,200})$/.exec(h);
   if (!m) { if (optional) return null; throw new HttpError(401, 'Требуется вход'); }
   const th = await sha256(m[1]);
-  const row = await env.DB.prepare(
-    'SELECT u.*, s.expires_at AS s_exp FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?1').bind(th).first();
+  // кэш проверки токена (30 с): выход, смена ролей и бан в этом изоляте сбрасывают его сразу, в остальных — не позже TTL
+  const load = async () => env.DB.prepare('SELECT u.*, s.expires_at AS s_exp FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?1').bind(th).first();
+  const row = request.method === 'GET' || MEMO_HOT_RE.test(new URL(request.url).pathname) ? await memoP(env, 'sess:' + th, load) : await load();
   if (!row || row.s_exp < Date.now()) { if (optional) return null; throw new HttpError(401, 'Сессия истекла, войдите заново'); }
   if (row.blocked) throw new HttpError(403, 'Доступ заблокирован администратором');
   const user = row; delete user.s_exp;
@@ -338,14 +354,15 @@ async function authExchange(request, env) {
 }
 
 // ---------- lectures ----------
-async function lectureStates(env, userId) {
+async function lectureStates(env, userId, opt) {
   const settings = await getSettings(env);
   // лекции скрытых (неопубликованных) курсов кандидатам не показываются; лекции без курса — общий раздел
   const lectures = await memo('lectures', async () => (await env.DB.prepare(`SELECT l.id, l.title, l.description, l.video_url, l.duration_sec, l.position, l.required, l.published, l.course_id, l.created_at, l.updated_at, (l.body != '') AS has_body, l.topic_id FROM lectures l LEFT JOIN courses c ON c.id = l.course_id LEFT JOIN topics t ON t.id = l.topic_id
     WHERE l.published = 1 AND (l.course_id IS NULL OR c.id IS NULL OR c.published = 1) AND (l.topic_id IS NULL OR t.id IS NULL OR t.published = 1) ORDER BY l.position, l.id`).all()).results);
   const trows = await memo('topics', async () => (await env.DB.prepare('SELECT * FROM topics ORDER BY position, id').all()).results);
   const topics = new Map(trows.map(t => [t.id, t]));
-  const { results: prog } = await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(userId).all();
+  const prog = opt && opt.fresh ? (await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(userId).all()).results
+    : await memoP(env, 'u:' + userId + ':prog', async () => (await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(userId).all()).results);
   const pm = new Map(prog.map(p => [p.lecture_id, p]));
   const blocked = new Set(); // «строго по порядку» — внутри каждой темы (лекции без темы — внутри курса)
   const sup = isSuper(env, userId); // главному администратору (ADMIN_IDS) учёба открыта без порядка; прохождение не засчитывается само
@@ -414,9 +431,15 @@ async function listLectures(env, user) {
   const st = await lectureStates(env, user.id);
   return json({ lectures: st.items.map(i => lectureOut(i, false)), all_required_done: st.allRequiredDone });
 }
+// Состояние одной лекции: если по кэшу она закрыта или не найдена — перепроверка по свежему прогрессу (предыдущую могли засчитать в другом изоляте).
+async function lectureItem(env, user, id) {
+  let st = await lectureStates(env, user.id);
+  let it = st.items.find(i => i.lecture.id === id);
+  if (!it || it.locked) { st = await lectureStates(env, user.id, { fresh: true }); it = st.items.find(i => i.lecture.id === id); }
+  return it;
+}
 async function getLecture(env, user, id) {
-  const st = await lectureStates(env, user.id);
-  const it = st.items.find(i => i.lecture.id === id);
+  const it = await lectureItem(env, user, id);
   if (!it) throw new HttpError(404, 'Лекция не найдена');
   if (it.locked) throw new HttpError(403, 'Лекция пока недоступна: сначала просмотрите предыдущие');
   const o = lectureOut(it, true);
@@ -428,15 +451,15 @@ async function heartbeat(request, env, user, id) {
   const b = await readJson(request, 2000);
   const position = Number(b.position);
   if (!Number.isFinite(position) || position < 0) throw new HttpError(400, 'Некорректная позиция');
-  const st = await lectureStates(env, user.id);
-  const it = st.items.find(i => i.lecture.id === id);
+  const it = await lectureItem(env, user, id);
   if (!it) throw new HttpError(404, 'Лекция не найдена');
   if (it.locked) throw new HttpError(403, 'Лекция недоступна');
   const dur = it.lecture.duration_sec;
   if (!dur || dur <= 0) throw new HttpError(409, 'Для лекции не задана длительность');
   const now = Date.now();
   const pos = Math.min(position, dur);
-  let p = it.progress;
+  // античит считает по свежей строке прогресса (не из кэша: прошлый пульс мог уйти в другой изолят)
+  let p = await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1 AND lecture_id = ?2').bind(user.id, id).first();
   if (!p) {
     await env.DB.prepare('INSERT OR IGNORE INTO lecture_progress (user_id, lecture_id, max_pos, last_pos, watched_sec, last_hb_at, started_at) VALUES (?1, ?2, 0, 0, 0, NULL, ?3)')
       .bind(user.id, id, now).run();
@@ -454,15 +477,18 @@ async function heartbeat(request, env, user, id) {
     lastPos = pos; maxPos = Math.max(maxPos, pos); watched = Math.min(watched + credit, dur * 3);
     if (!completedAt && maxPos >= dur - COMPLETE_END_SLACK_SEC && watched >= dur * COMPLETE_WATCH_RATIO) completedAt = now;
   }
-  await env.DB.prepare('UPDATE lecture_progress SET max_pos = ?1, last_pos = ?2, watched_sec = ?3, last_hb_at = ?4, completed_at = ?5, rejected = rejected + ?6 WHERE user_id = ?7 AND lecture_id = ?8')
-    .bind(maxPos, lastPos, watched, now, completedAt, accepted ? 0 : 1, user.id, id).run();
+  const row = await env.DB.prepare('UPDATE lecture_progress SET max_pos = ?1, last_pos = ?2, watched_sec = ?3, last_hb_at = ?4, completed_at = ?5, rejected = rejected + ?6 WHERE user_id = ?7 AND lecture_id = ?8 RETURNING *')
+    .bind(maxPos, lastPos, watched, now, completedAt, accepted ? 0 : 1, user.id, id).first();
+  // кэш прогресса пользователя в этом изоляте обновляется на месте — без повторного чтения списка
+  const pe = MEMO.get('u:' + user.id + ':prog');
+  if (pe && row) pe.p = pe.p.then(list => { const i = list.findIndex(x => x.lecture_id === id); if (i >= 0) list[i] = row; else list.push(row); return list; });
   return json({ accepted, reason, max_pos: maxPos, last_pos: lastPos, watched_sec: Math.round(watched), completed: !!completedAt, duration_sec: dur });
 }
 
 // ---------- exams ----------
 // Попытки пользователя по экзаменам — одним запросом на список (вместо запроса на каждый экзамен).
 async function userExamAttempts(env, user) {
-  const { results } = await env.DB.prepare('SELECT id, exam_id, status, started_at, submitted_at, score_pct FROM attempts WHERE user_id = ?1 ORDER BY id DESC').bind(user.id).all();
+  const results = await memoP(env, 'u:' + user.id + ':atts', async () => (await env.DB.prepare('SELECT id, exam_id, status, started_at, submitted_at, score_pct FROM attempts WHERE user_id = ?1 ORDER BY id DESC').bind(user.id).all()).results);
   const m = new Map(); for (const a of results) { if (!m.has(a.exam_id)) m.set(a.exam_id, []); m.get(a.exam_id).push(a); }
   return m;
 }
@@ -601,7 +627,7 @@ async function docGates(env, user) {
   return async (docId) => {
     const ts = topics.filter(t => t.doc_id === docId && t.published);
     if (!ts.length) return null;
-    if (!done) { const { results } = await env.DB.prepare('SELECT lecture_id FROM lecture_progress WHERE user_id = ?1 AND completed_at IS NOT NULL').bind(user.id).all(); done = new Set(results.map(r => r.lecture_id)); }
+    if (!done) { const prog = await memoP(env, 'u:' + user.id + ':prog', async () => (await env.DB.prepare('SELECT * FROM lecture_progress WHERE user_id = ?1').bind(user.id).all()).results); done = new Set(prog.filter(r => r.completed_at).map(r => r.lecture_id)); }
     for (const t of ts) { const ls = req.filter(l => l.topic_id === t.id); if (ls.length > 0 && ls.every(l => done.has(l.id))) return null; }
     return ts[0].title;
   };
@@ -2917,7 +2943,7 @@ function weekDeadline(week, rules = PREM_DEFAULT.rules) { // epoch ms: день 
 // --- конфигурация ---
 async function premConfig(env) {
   const cfg = JSON.parse(JSON.stringify(PREM_DEFAULT));
-  const { results } = await env.DB.prepare('SELECT k, v FROM prem_config').all();
+  const results = await memo('cfg:prem', async () => (await env.DB.prepare('SELECT k, v FROM prem_config').all()).results);
   for (const r of results) {
     const v = parseJ(r.v, null); if (!v || !PREM_CFG_KEYS.includes(r.k)) continue;
     if (r.k === 'rules') cfg.rules = { ...PREM_DEFAULT.rules, ...v };
@@ -3176,12 +3202,12 @@ async function submitReport(request, env, user) {
   const points = weeklyPoints(cfg, r.items);
   const old = await env.DB.prepare('SELECT * FROM reports WHERE user_id = ?1 AND week = ?2').bind(user.id, r.week).first();
   const data = JSON.stringify({ header: r.header, items: r.items });
-  let id, version;
+  let id, version, saved = null;
   if (!old) {
     const late = now > deadline ? 1 : 0;
-    const row = await env.DB.prepare(`INSERT INTO reports (user_id, week, position, data, points, status, late, first_submitted_at, submitted_at, version, item_review, created_at, updated_at, addressee)
-      VALUES (?1, ?2, ?3, ?4, ?5, 'submitted', ?6, ?7, ?7, 1, '{}', ?7, ?7, ?8) RETURNING id`).bind(user.id, r.week, r.position, data, points, late, now, r.addressee).first();
-    id = row.id; version = 1;
+    saved = await env.DB.prepare(`INSERT INTO reports (user_id, week, position, data, points, status, late, first_submitted_at, submitted_at, version, item_review, created_at, updated_at, addressee)
+      VALUES (?1, ?2, ?3, ?4, ?5, 'submitted', ?6, ?7, ?7, 1, '{}', ?7, ?7, ?8) RETURNING *`).bind(user.id, r.week, r.position, data, points, late, now, r.addressee).first();
+    id = saved.id; version = 1;
   } else {
     // правка в том же отчёте: история версий; опоздание определяется первой отправкой; отметки проверки по изменённым пунктам сбрасываются
     const oldItems = parseJ(old.data, {}).items || [];
@@ -3189,13 +3215,14 @@ async function submitReport(request, env, user) {
     const om = new Map(oldItems.map(i => [i.key, i]));
     for (const k of Object.keys(review)) { const ni = r.items.find(i => i.key === k); if (!ni || !sameItem(om.get(k), ni)) delete review[k]; }
     version = (old.version || 1) + 1; id = old.id;
-    await env.DB.batch([
+    const out = await env.DB.batch([
       env.DB.prepare('INSERT INTO report_history (report_id, version, data, position, submitted_at, after_deadline) VALUES (?1, ?2, ?3, ?4, ?5, ?6)').bind(old.id, old.version || 1, old.data, old.position, old.submitted_at, old.submitted_at > deadline ? 1 : 0),
-      env.DB.prepare(`UPDATE reports SET position = ?1, data = ?2, points = ?3, status = 'submitted', item_review = ?4, submitted_at = ?5, version = ?6, updated_at = ?5, edited_after_deadline = CASE WHEN ?5 > ?7 THEN 1 ELSE edited_after_deadline END, addressee = ?9 WHERE id = ?8`)
+      env.DB.prepare(`UPDATE reports SET position = ?1, data = ?2, points = ?3, status = 'submitted', item_review = ?4, submitted_at = ?5, version = ?6, updated_at = ?5, edited_after_deadline = CASE WHEN ?5 > ?7 THEN 1 ELSE edited_after_deadline END, addressee = ?9 WHERE id = ?8 RETURNING *`)
         .bind(r.position, data, points, JSON.stringify(review), now, version, deadline, old.id, r.addressee),
     ]);
+    saved = out[1].results[0];
   }
-  return json({ report: await reportPublic(env, cfg, await env.DB.prepare('SELECT * FROM reports WHERE id = ?1').bind(id).first(), true), created: !old });
+  return json({ report: await reportPublic(env, cfg, saved, true), created: !old });
 }
 async function reportPublic(env, cfg, row, mine) {
   if (!row) return null;
@@ -3215,8 +3242,8 @@ async function myReports(env, user, url) {
   const cfg = await premConfig(env);
   const cur = weekOf(Date.now());
   const week = url.searchParams.get('week') ? weekParam(url.searchParams.get('week')) : cur;
-  const row = await env.DB.prepare('SELECT * FROM reports WHERE user_id = ?1 AND week = ?2').bind(user.id, week).first();
-  const { results } = await env.DB.prepare('SELECT id, week, status, late, submitted_at, version, comment, addressee FROM reports WHERE user_id = ?1 ORDER BY week DESC LIMIT 20').bind(user.id).all();
+  const row = await memoP(env, 'u:' + user.id + ':rep:' + week, async () => env.DB.prepare('SELECT * FROM reports WHERE user_id = ?1 AND week = ?2').bind(user.id, week).first());
+  const results = await memoP(env, 'u:' + user.id + ':reps', async () => (await env.DB.prepare('SELECT id, week, status, late, submitted_at, version, comment, addressee FROM reports WHERE user_id = ?1 ORDER BY week DESC LIMIT 20').bind(user.id).all()).results);
   return json({ week, current_week: cur, deadline: weekDeadline(week, cfg.rules), now: Date.now(), report: await reportPublic(env, cfg, row, true),
     recent: results.map(r => ({ ...r, late: !!r.late, addressee: r.addressee || 'gu', addressee_name: reportToInfo(r.addressee).name })),
     addressees: REPORT_TO, addressee_default: reportToDefault(user.staff_position || '', !!user.senior), user: publicUser(user) });
@@ -3231,12 +3258,12 @@ function requireLead(user) { requireCap(user, 'lead'); }
 function requireSuper(user) { if (!user.super) throw new HttpError(403, 'Изменять таблицы выплат может только главный администратор'); }
 async function weekData(env, week) {
   const cfg = await premConfig(env);
-  const [wk, rep, staff, man] = await Promise.all([
+  const [wk, rep, staff, man] = await memoP(env, 'lead:week:' + week, () => Promise.all([
     env.DB.prepare('SELECT * FROM prem_weeks WHERE week = ?1').bind(week).first(),
     env.DB.prepare('SELECT r.*, u.username, u.global_name, u.ic_name, u.static_id, u.rank, u.staff, u.senior FROM reports r JOIN users u ON u.id = r.user_id WHERE r.week = ?1').bind(week).all(),
     env.DB.prepare("SELECT id, username, global_name, ic_name, static_id, rank, staff, senior, staff_position, staff_since FROM users WHERE staff = 1 AND (staff_since IS NULL OR staff_since <= ?1)").bind(week).all(),
     env.DB.prepare('SELECT * FROM prem_manual WHERE week = ?1').bind(week).all(),
-  ]);
+  ]));
   const manual = new Map(man.results.map(m => [m.user_id, m]));
   const people = new Map();
   const nm = (u) => u.ic_name || u.global_name || u.username || u.id;
@@ -3355,9 +3382,9 @@ async function leadReview(request, env, actor, id) {
 // --- состав, нарушения ---
 // Состав ГУ ВП: только сотрудники с ролью «ВП»; без неё — лишь те, кто ещё отмечен «в составе»/«СС» (чтобы их можно было снять).
 async function leadStaff(env) {
-  const { results } = await env.DB.prepare(`SELECT u.id, u.username, u.global_name, u.ic_name, u.static_id, u.staff, u.senior, u.leader, u.staff_position, u.staff_since, u.last_login_at, u.vp,
+  const results = await memoP(env, 'lead:staff', async () => (await env.DB.prepare(`SELECT u.id, u.username, u.global_name, u.ic_name, u.static_id, u.staff, u.senior, u.leader, u.staff_position, u.staff_since, u.last_login_at, u.vp,
       (SELECT COUNT(*) FROM reports r WHERE r.user_id = u.id) AS reports FROM users u
-      WHERE u.vp = 1 OR u.staff = 1 OR u.senior = 1 ORDER BY u.staff DESC, COALESCE(u.ic_name, u.global_name, u.username)`).all();
+      WHERE u.vp = 1 OR u.staff = 1 OR u.senior = 1 ORDER BY u.staff DESC, COALESCE(u.ic_name, u.global_name, u.username)`).all()).results);
   return json({ users: results.map(u => ({ ...u, staff: !!u.staff, senior: !!u.senior, leader: !!u.leader, vp: !!u.vp })), current_week: weekOf(Date.now()) });
 }
 async function leadSetStaff(request, env, actor, uid) {
@@ -3402,7 +3429,7 @@ async function violationsData(env, cfg) {
   out.sort((a, b) => b.strikes - a.strikes || String(a.name).localeCompare(String(b.name), 'ru'));
   return { last_closed_week: lastClosed, users: out };
 }
-async function strikeMap(env, cfg) { const v = await violationsData(env, cfg); return new Map(v.users.map(u => [u.user_id, u.strikes])); }
+async function strikeMap(env, cfg) { const v = await memoP(env, 'lead:viol', () => violationsData(env, cfg)); return new Map(v.users.map(u => [u.user_id, u.strikes])); }
 async function leadExcuse(request, env, actor) {
   const b = await readJson(request);
   const uid = str(b.user_id, 25, { required: true, name: 'пользователь' }); const week = weekParam(b.week);
@@ -3848,11 +3875,12 @@ async function dzEventDelete(request, env, actor, id, eid) {
 // Ступени (звание → следующее, баллы, обязательные пункты отчёта), баллы за пункты и сколько баллов заменяют недостающий пункт.
 // По умолчанию — как в promo-rules.js сайта бланков; администраторы меняют здесь, сайт бланков подхватывает изменения.
 const PROMO_DEFAULT = {"points_per_item":100,"pts":{"postavka":35,"otbitie":30,"training":30,"proc":0,"event6":30,"gmp_org":0,"pmp":0,"excursion":0,"oath":0,"kraz":0,"kraz_otbitie":35,"mp_visit":0,"gmp":40,"poverka":35,"post_kom":0,"post_shtab":0,"post_kpp1":0,"post_kpp2":0,"naryad":0,"sso":0,"patrol_city":0,"patrol_gar":0,"patrol_vch":0,"patrol":0,"lecture_va":0,"exam_va":0,"thanks":0,"city":20,"reattest":30,"vzysk":30,"vygovor":0,"prof":30,"prizyv":30,"guardhouse":75,"convoy":0,"complaint":0,"otrab":0,"obzhal":0,"docs":0,"inspect":0,"lecture_vp":0,"exam_vp":0,"soch":0},"ladder":[{"rank":"Сержант","to":"Старший сержант","points":150,"need":{"naryad":1,"prof":1,"training":1}},{"rank":"Старший сержант","to":"Старшина","points":250,"need":{"naryad":1,"training":1,"prof":2}},{"rank":"Старшина","to":"Прапорщик","points":350,"need":{"naryad":1,"prof":3,"inspect":5,"training":2}},{"rank":"Прапорщик","to":"Старший прапорщик","points":450,"need":{"naryad":2,"prof":4,"training":3}},{"rank":"Старший прапорщик","to":"Младший лейтенант","points":550,"need":{"training":3,"patrol":2,"prof":4}},{"rank":"Младший лейтенант","to":"Лейтенант","points":650,"need":{"patrol":1,"prof":4,"training":3,"prizyv":3}},{"rank":"Лейтенант","to":"Старший лейтенант","points":750,"need":{"patrol":1,"prof":6,"docs":5,"vzysk":3,"training":3}},{"rank":"Старший лейтенант","to":"Капитан","points":1500,"need":{"prof":7,"vzysk":5,"prizyv":3,"training":5}}]};
+async function courseTitles(env) { return memo('courses:titles', async () => (await env.DB.prepare('SELECT id, title FROM courses').all()).results); }
 async function promoConfig(env) {
-  const r = await env.DB.prepare("SELECT v, updated_at FROM prem_config WHERE k = 'promo'").first();
+  const r = await memo('cfg:promo', async () => env.DB.prepare("SELECT v, updated_at FROM prem_config WHERE k = 'promo'").first());
   const v = r ? parseJ(r.v, null) : null;
   const st = await getSettings(env);
-  const { results: courseRows } = await env.DB.prepare('SELECT id, title FROM courses').all();
+  const courseRows = await courseTitles(env);
   const course_titles = {};
   for (const c of courseRows) course_titles[c.id] = c.title;
   const cfg = v ? { ...PROMO_DEFAULT, ...v, pts: { ...PROMO_DEFAULT.pts, ...(v.pts || {}) } } : JSON.parse(JSON.stringify(PROMO_DEFAULT));
@@ -3861,7 +3889,7 @@ async function promoConfig(env) {
 }
 // Обязательные курсы учёбы для повышения: общий список и по званиям (ступеням). Хранится в prem_config 'promo_courses'.
 async function promoCourses(env) {
-  const r = await env.DB.prepare("SELECT v FROM prem_config WHERE k = 'promo_courses'").first();
+  const r = await memo('cfg:promoc', async () => env.DB.prepare("SELECT v FROM prem_config WHERE k = 'promo_courses'").first());
   const v = r ? parseJ(r.v, null) : null;
   return { all: Array.isArray(v && v.all) ? v.all : [], by_rank: v && v.by_rank && typeof v.by_rank === 'object' ? v.by_rank : {} };
 }
@@ -3890,7 +3918,7 @@ async function promoEligibility(env, user, rank) {
   if (!need.length) return { allowed: true, required: [], missing: [] };
   const list = need.length ? (await (await listCourses(env, user)).json()).courses : [];
   const byId = new Map(list.map(c => [c.id, c]));
-  const titles = new Map((await env.DB.prepare('SELECT id, title FROM courses').all()).results.map(c => [c.id, c.title]));
+  const titles = new Map((await courseTitles(env)).map(c => [c.id, c.title]));
   const required = need.map(id => ({ id, title: titles.get(id) || ('Курс ' + id), done: !!(byId.get(id) && byId.get(id).complete) }));
   const missing = required.filter(c => !c.done);
   return { allowed: missing.length === 0, required, missing };
@@ -3910,6 +3938,157 @@ function promoInput(cfg, b) {
     return { rank, to, points: int(x.points, 0, 1000000, `ступень «${rank}»: баллы`), need };
   });
   return { points_per_item: ppi, pts, ladder };
+}
+
+// ---------- рапорты на повышение: подача из портала и проверка руководством ----------
+// Проверяющий засчитывает или отклоняет каждый пункт (можно засчитать меньше штук), решения сохраняются сразу.
+// Итог считается по засчитанному: баллы ступени, обязательные пункты (с заменой баллами, если включено), обязательные курсы.
+const PROMO_STATUS = ['submitted', 'review', 'approved', 'rejected'];
+function promoStep(pc, rank) { const r = String(rank || '').trim().toLowerCase(); return (pc.config.ladder || []).find(s => s.rank.toLowerCase() === r) || null; }
+function promoRaportInput(cfg, b) {
+  const h = b.header || {};
+  const header = {
+    number: str(h.number, 40, { name: 'номер' }), date: str(h.date, 20, { name: 'дата подачи' }),
+    rank: str(h.rank, 60, { required: true, name: 'текущее звание' }), name: str(h.name, 100, { required: true, name: 'имя фамилия' }),
+    static_id: str(h.static_id, 30, { required: true, name: 'номер удостоверения' }), unit: str(h.unit, 120, { name: 'подразделение' }),
+    position: str(h.position, 120, { name: 'должность' }), target: str(h.target, 60, { required: true, name: 'испрашиваемое звание' }),
+    from: str(h.from, 20, { name: 'начало периода' }), to: str(h.to, 20, { name: 'конец периода' }),
+    result: str(h.result, 2000, { name: 'общий результат' }), extra: str(h.extra, 2000, { name: 'дополнительные сведения' }),
+  };
+  const known = new Map(cfg.items.map(i => [i.key, i]));
+  if (!Array.isArray(b.items) || b.items.length > 200) throw new HttpError(400, 'Пункты рапорта: нужен список');
+  const seen = new Set();
+  const items = b.items.map((x, i) => {
+    const custom = !!x.custom;
+    const key = str(x.key, 40, { required: true, name: `пункт ${i + 1}` });
+    if (!/^[a-z0-9_]{1,40}$/i.test(key) || seen.has(key)) throw new HttpError(400, `Пункт ${i + 1}: некорректный или повторный ключ`); seen.add(key);
+    if (!custom && !known.has(key)) throw new HttpError(400, `Неизвестный пункт рапорта: ${key}`);
+    const k = known.get(key);
+    const o = { key, name: custom ? str(x.name, 200, { required: true, name: 'свой пункт' }) : k.name, group: custom ? (['main', 'extra', 'gu'].includes(x.group) ? x.group : 'extra') : k.group,
+      n: int(x.n, 0, 1000, `количество «${custom ? x.name : k.name}»`), links: cleanLinks(x.links) };
+    if (custom) o.custom = true;
+    return o;
+  }).filter(x => x.n > 0);
+  if (!items.length) throw new HttpError(400, 'В рапорте нет ни одного выполненного пункта');
+  return { header, items };
+}
+// Живой итог: claimed — заявлено, points — засчитано (только принятые пункты), need — обязательные пункты ступени.
+function promoSummary(pc, rank, items, review, courses) {
+  const C = pc.config, pts = C.pts || {}, ppi = C.points_per_item || 100, swap = pc.missing_points !== false;
+  const acc = {}; let points = 0, claimed = 0, pending = 0, rejected = 0;
+  for (const it of items || []) {
+    const rv = (review || {})[it.key] || {};
+    if (!rv.status) pending++; else if (rv.status === 'rejected') rejected++;
+    if (it.custom) continue;
+    const p = pts[it.key] || 0; claimed += p * it.n;
+    if (rv.status !== 'ok') continue;
+    const n = rv.n_ok != null ? Math.min(rv.n_ok, it.n) : it.n;
+    acc[it.key] = (acc[it.key] || 0) + n; points += p * n;
+  }
+  const cs = (courses || []).map(c => ({ id: c.id, title: c.title, done: !!c.done }));
+  const out = { rank: String(rank || ''), step: null, points, claimed, pending, rejected, points_per_item: ppi, missing_points: swap, courses: cs, need: [], met: false };
+  const step = promoStep(pc, rank);
+  if (!step) return out;
+  const names = new Map((pc.items || []).map(i => [i.key, i.name]));
+  out.step = { rank: step.rank, to: step.to, points: step.points };
+  out.need = Object.entries(step.need || {}).map(([k, need]) => { const have = acc[k] || 0; return { key: k, name: names.get(k) || k, need, have, lack: Math.max(0, need - have) }; });
+  const lack = out.need.reduce((s, x) => s + x.lack, 0);
+  const canCover = swap ? Math.floor(Math.max(0, points - step.points) / ppi) : 0;
+  out.covered = Math.min(lack, canCover);
+  const cLeft = cs.filter(c => !c.done);
+  out.left = { points: Math.max(0, step.points - points), items: Math.max(0, lack - canCover), courses: cLeft };
+  out.met = points >= step.points && lack <= canCover && !cLeft.length;
+  return out;
+}
+async function promoCfgItems(env) { const pc = await promoConfig(env); const cfg = await premConfig(env); pc.items = cfg.items.map(i => ({ key: i.key, name: i.name, group: i.group })); return { pc, cfg }; }
+function promoRaportPublic(pc, row, courses) {
+  if (!row) return null;
+  const d = parseJ(row.data, {}), review = parseJ(row.item_review, {});
+  const pts = pc.config.pts || {};
+  return { id: row.id, user_id: row.user_id, status: row.status, rank: row.rank, target: row.target, header: d.header || {},
+    items: (d.items || []).map(i => ({ ...i, pts: i.custom ? 0 : (pts[i.key] || 0), review: review[i.key] || null })),
+    comment: row.comment || '', version: row.version, first_submitted_at: row.first_submitted_at, submitted_at: row.submitted_at, reviewed_at: row.reviewed_at, reviewed_by: row.reviewed_by,
+    summary: promoSummary(pc, row.rank, d.items, review, courses) };
+}
+async function promoSubmit(request, env, user) {
+  await rateLimit(env, 'promo:' + user.id, 20, 600);
+  const { pc, cfg } = await promoCfgItems(env);
+  const b = await readJson(request, 400000);
+  b.header = { ...(b.header || {}) };
+  if (user.ic_name) b.header.name = user.ic_name; if (user.rank) b.header.rank = user.rank; if (user.static_id) b.header.static_id = user.static_id;
+  const r = promoRaportInput(cfg, b);
+  const elig = await promoEligibility(env, user, r.header.rank);
+  if (!elig.allowed) throw new HttpError(403, 'Рапорт можно отправить после обязательных курсов: ' + elig.missing.map(c => '«' + c.title + '»').join(', '));
+  const now = Date.now(), data = JSON.stringify(r);
+  const open = await env.DB.prepare("SELECT * FROM promo_reports WHERE user_id = ?1 AND status IN ('submitted', 'review') ORDER BY id DESC LIMIT 1").bind(user.id).first();
+  let row;
+  if (!open) {
+    row = await env.DB.prepare(`INSERT INTO promo_reports (user_id, status, rank, target, data, item_review, comment, version, first_submitted_at, submitted_at, created_at, updated_at)
+      VALUES (?1, 'submitted', ?2, ?3, ?4, '{}', '', 1, ?5, ?5, ?5, ?5) RETURNING *`).bind(user.id, r.header.rank, r.header.target, data, now).first();
+  } else {
+    // правка открытого рапорта: отметки проверки по изменённым пунктам сбрасываются, остальные остаются
+    const om = new Map((parseJ(open.data, {}).items || []).map(i => [i.key, i]));
+    const review = parseJ(open.item_review, {});
+    for (const k of Object.keys(review)) { const ni = r.items.find(i => i.key === k); const oi = om.get(k); if (!ni || !oi || ni.n !== oi.n || JSON.stringify(ni.links) !== JSON.stringify(oi.links)) delete review[k]; }
+    row = await env.DB.prepare(`UPDATE promo_reports SET rank = ?1, target = ?2, data = ?3, item_review = ?4, status = 'submitted', version = version + 1, submitted_at = ?5, updated_at = ?5 WHERE id = ?6 RETURNING *`)
+      .bind(r.header.rank, r.header.target, data, JSON.stringify(review), now, open.id).first();
+  }
+  await audit(env, user, 'promo.raport', String(row.id), { version: row.version, items: r.items.length });
+  return json({ raport: promoRaportPublic(pc, row, elig.required), created: !open });
+}
+async function promoMy(env, user) {
+  const { pc } = await promoCfgItems(env);
+  const results = await memoP(env, 'u:' + user.id + ':promo', async () => (await env.DB.prepare('SELECT * FROM promo_reports WHERE user_id = ?1 ORDER BY id DESC LIMIT 20').bind(user.id).all()).results);
+  const last = results[0] || null;
+  const elig = last ? await promoEligibility(env, user, last.rank) : null;
+  return json({ raport: last ? promoRaportPublic(pc, last, elig.required) : null,
+    recent: results.map(r => ({ id: r.id, status: r.status, rank: r.rank, target: r.target, version: r.version, submitted_at: r.submitted_at, reviewed_at: r.reviewed_at, comment: r.comment || '' })) });
+}
+const promoName = (u) => u ? (u.ic_name || u.global_name || u.username || u.id) : '';
+async function leadPromoList(env, url) {
+  const st = url.searchParams.get('status') || '';
+  const { pc } = await promoCfgItems(env);
+  const where = st === 'open' ? "WHERE p.status IN ('submitted', 'review')" : PROMO_STATUS.includes(st) ? 'WHERE p.status = ?1' : '';
+  const q = env.DB.prepare(`SELECT p.id, p.user_id, p.status, p.rank, p.target, p.data, p.item_review, p.version, p.submitted_at, p.reviewed_at, u.ic_name, u.global_name, u.username, u.static_id
+    FROM promo_reports p LEFT JOIN users u ON u.id = p.user_id ${where} ORDER BY CASE WHEN p.status IN ('submitted', 'review') THEN 0 ELSE 1 END, p.submitted_at DESC LIMIT 300`);
+  const results = await memoP(env, 'lead:promo:' + st, async () => (await (where.includes('?1') ? q.bind(st) : q).all()).results);
+  return json({ raports: results.map(r => { const d = parseJ(r.data, {}), s = promoSummary(pc, r.rank, d.items, parseJ(r.item_review, {}), []);
+    return { id: r.id, user_id: r.user_id, name: r.ic_name || (d.header && d.header.name) || promoName(r), static_id: r.static_id || (d.header && d.header.static_id) || '', status: r.status, rank: r.rank, target: r.target,
+      version: r.version, submitted_at: r.submitted_at, reviewed_at: r.reviewed_at, points: s.points, claimed: s.claimed, need_points: s.step ? s.step.points : null, pending: s.pending, items: (d.items || []).length }; }) });
+}
+async function leadPromoGet(env, id) {
+  const { pc } = await promoCfgItems(env);
+  const row = await env.DB.prepare('SELECT * FROM promo_reports WHERE id = ?1').bind(id).first();
+  if (!row) throw new HttpError(404, 'Рапорт не найден');
+  const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(row.user_id).first();
+  const elig = u ? await promoEligibility(env, { ...u, super: isSuper(env, u.id) }, row.rank) : { required: [] };
+  const reviewer = row.reviewed_by ? await env.DB.prepare('SELECT username, global_name, ic_name FROM users WHERE id = ?1').bind(row.reviewed_by).first() : null;
+  return json({ raport: promoRaportPublic(pc, row, elig.required), user: u ? { id: u.id, name: promoName(u), username: u.username, global_name: u.global_name, rank: u.rank || '', static_id: u.static_id || '' } : null,
+    reviewer: reviewer ? promoName(reviewer) : null });
+}
+async function leadPromoReview(request, env, actor, id) {
+  const row = await env.DB.prepare('SELECT id, data, item_review, status, comment FROM promo_reports WHERE id = ?1').bind(id).first();
+  if (!row) throw new HttpError(404, 'Рапорт не найден');
+  const b = await readJson(request);
+  const d = parseJ(row.data, {}), review = parseJ(row.item_review, {});
+  if (b.items && typeof b.items === 'object') {
+    for (const [k, v] of Object.entries(b.items)) {
+      const it = (d.items || []).find(i => i.key === k); if (!it) throw new HttpError(400, 'Нет такого пункта в рапорте: ' + k);
+      if (v === null || v.status === 'pending') { delete review[k]; continue; }
+      if (!['ok', 'rejected'].includes(v.status)) throw new HttpError(400, 'Статус пункта: ok или rejected');
+      const o = { status: v.status, comment: str(v.comment, 500, { name: 'комментарий к пункту' }), by: actor.id, at: Date.now() };
+      if (v.status === 'ok' && v.n_ok != null && v.n_ok !== '') { o.n_ok = int(v.n_ok, 0, it.n, `засчитано штук «${it.name}» (0…${it.n})`); if (o.n_ok === it.n) delete o.n_ok; }
+      review[k] = o;
+    }
+  }
+  let status = row.status;
+  if (b.status !== undefined) { if (!PROMO_STATUS.includes(b.status)) throw new HttpError(400, 'Решение по рапорту: submitted, review, approved, rejected'); status = b.status; }
+  else if (status === 'submitted' && b.items) status = 'review';
+  const comment = b.comment !== undefined ? str(b.comment, 2000, { name: 'комментарий' }) : row.comment;
+  await env.DB.prepare('UPDATE promo_reports SET item_review = ?1, status = ?2, comment = ?3, reviewed_by = ?4, reviewed_at = ?5, updated_at = ?5 WHERE id = ?6')
+    .bind(JSON.stringify(review), status, comment, actor.id, Date.now(), id).run();
+  await audit(env, actor, 'promo.review', String(id), { status, items: b.items ? Object.keys(b.items).length : 0 });
+  return leadPromoGet(env, id);
 }
 
 // ---------- база данных (документация) ----------
@@ -4185,6 +4364,8 @@ async function route(request, env, ctx) {
     return json(await promoConfig(env));
   }
   if (p === '/api/promo/courses' && M === 'PUT') { requireCap(user, 'admin'); return promoCoursesPut(request, env, user); }
+  if (p === '/api/promo/raports/my' && M === 'GET') return promoMy(env, user);
+  if (p === '/api/promo/raports' && M === 'POST') return promoSubmit(request, env, user);
   if (p === '/api/promo/eligibility' && M === 'GET') return json(await promoEligibility(env, user, url.searchParams.get('rank') || user.rank));
   if (p === '/api/promo/reset' && M === 'POST') { requireCap(user, 'admin'); await env.DB.prepare("DELETE FROM prem_config WHERE k = 'promo'").run(); await audit(env, user, 'promo.reset', null, null); return json(await promoConfig(env)); }
 
@@ -4217,9 +4398,12 @@ async function route(request, env, ctx) {
     if ((m = /^\/api\/lead\/reports\/(\d+)$/.exec(p)) && M === 'DELETE') return leadDeleteReport(request, env, user, idParam(m[1]));
     if (p === '/api/lead/deleted' && M === 'GET') return leadDeletedReports(env, url);
     if ((m = /^\/api\/lead\/reports\/(\d+)\/review$/.exec(p)) && M === 'POST') return leadReview(request, env, user, idParam(m[1]));
+    if (p === '/api/lead/promo' && M === 'GET') return leadPromoList(env, url);
+    if ((m = /^\/api\/lead\/promo\/(\d+)$/.exec(p)) && M === 'GET') return leadPromoGet(env, idParam(m[1]));
+    if ((m = /^\/api\/lead\/promo\/(\d+)\/review$/.exec(p)) && M === 'POST') return leadPromoReview(request, env, user, idParam(m[1]));
     if (p === '/api/lead/staff' && M === 'GET') return leadStaff(env);
     if ((m = /^\/api\/lead\/staff\/(\d{5,25})$/.exec(p)) && M === 'PUT') return leadSetStaff(request, env, user, m[1]);
-    if (p === '/api/lead/violations' && M === 'GET') return json(await violationsData(env, await premConfig(env)));
+    if (p === '/api/lead/violations' && M === 'GET') { const cfg = await premConfig(env); return json(await memoP(env, 'lead:viol', () => violationsData(env, cfg))); }
     if (p === '/api/lead/violations/excuse' && M === 'POST') return leadExcuse(request, env, user);
     if (p === '/api/lead/budget' && M === 'GET') return leadBudget(env, url);
     if (p === '/api/lead/budget' && M === 'POST') return leadBudgetAdd(request, env, user);
