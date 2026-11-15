@@ -48,7 +48,7 @@ export default {
 // изоляте сбрасывает кэш целиком (см. fetch); другие изоляты увидят правку не позже TTL. Прогресс пользователей не кэшируется.
 // Значения отдаются копиями — вызывающий код может менять их свободно.
 const MEMO = new Map();
-const MEMO_TTL = { courses: 30000, settings: 30000, lectures: 30000, topics: 30000, exams: 30000, links: 30000, qcount: 30000, bank: 60000 };
+const MEMO_TTL = { courses: 30000, settings: 30000, lectures: 30000, topics: 30000, exams: 30000, links: 30000, qcount: 30000, docs: 30000, bank: 60000 };
 globalThis[Symbol.for('vp-exam.memo')] = MEMO; // локальный тестовый обёрточный worker сбрасывает его после прямых правок БД
 // Частые записи пользователей, которые не трогают кэшируемые таблицы (прогресс лекций, попытки, отчёты, профиль, сессии, руководство, личные дела) — кэш не сбрасывают.
 const MEMO_KEEP_RE = /^\/(auth\/exchange|api\/(logout|me|lectures\/\d+\/heartbeat|exams\/\d+\/start|attempts\/\d+\/(answers|submit|upload)|reatt\/[a-z0-9_-]+\/start|reports|lead\/(week|reports|staff|budget|violations)(\/.*)?|people(\/.*)?))\/?$/;
@@ -460,8 +460,14 @@ async function heartbeat(request, env, user, id) {
 }
 
 // ---------- exams ----------
-async function examAvailability(env, user, exam, req) {
-  const { results: atts } = await env.DB.prepare('SELECT id, status, started_at, submitted_at, score_pct FROM attempts WHERE user_id = ?1 AND exam_id = ?2 ORDER BY id DESC').bind(user.id, exam.id).all();
+// Попытки пользователя по экзаменам — одним запросом на список (вместо запроса на каждый экзамен).
+async function userExamAttempts(env, user) {
+  const { results } = await env.DB.prepare('SELECT id, exam_id, status, started_at, submitted_at, score_pct FROM attempts WHERE user_id = ?1 ORDER BY id DESC').bind(user.id).all();
+  const m = new Map(); for (const a of results) { if (!m.has(a.exam_id)) m.set(a.exam_id, []); m.get(a.exam_id).push(a); }
+  return m;
+}
+async function examAvailability(env, user, exam, req, byExam) {
+  const atts = byExam ? (byExam.get(exam.id) || []) : (await env.DB.prepare('SELECT id, status, started_at, submitted_at, score_pct FROM attempts WHERE user_id = ?1 AND exam_id = ?2 ORDER BY id DESC').bind(user.id, exam.id).all()).results;
   const now = Date.now();
   let can = true, reason = null, nextAt = null;
   const active = atts.find(a => a.status === 'in_progress');
@@ -496,9 +502,10 @@ async function listExams(env, user) {
   const results = await visibleExams(env);
   const qm = await examOwnCounts(env);
   const bank = results.some(e => e.bank_count > 0 && e.bank_category) ? await bankIndex(env) : null; // пул банка — один раз на весь список
+  const ua = await userExamAttempts(env, user);
   const out = [];
   for (const e of results) {
-    out.push({ ...examPublic(e), question_count: await examQCount(env, e, qm.get(e.id) || 0, bank), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
+    out.push({ ...examPublic(e), question_count: await examQCount(env, e, qm.get(e.id) || 0, bank), ...(await examAvailability(env, user, e, examRequirement(e, st, links), ua)) });
   }
   return json({ exams: out, all_required_done: st.allRequiredDone, sequential_lectures: st.sequential });
 }
@@ -523,13 +530,15 @@ async function listCourses(env, user) {
   const courses = await memo('courses', async () => (await env.DB.prepare('SELECT * FROM courses WHERE published = 1 ORDER BY position, id').all()).results);
   const exams = await visibleExams(env);
   const qm = await examOwnCounts(env);
+  const ua = exams.length ? await userExamAttempts(env, user) : null;
+  const bank = exams.some(e => e.bank_count > 0 && e.bank_category) ? await bankIndex(env) : null;
   const known = new Set(courses.map(c => c.id));
   const groups = courses.map(c => ({ id: c.id, title: c.title, description: c.description || '', subtitle: c.subtitle || '', track: c.track || 'rank', position: c.position, lectures: [], exams: [], topics: [] }));
   const other = { id: 0, title: 'Без курса', description: '', subtitle: '', track: 'rank', lectures: [], exams: [], topics: [] };
   const gm = new Map(groups.map(g => [g.id, g]));
   for (const it of st.items) (known.has(it.lecture.course_id) ? gm.get(it.lecture.course_id) : other).lectures.push(lectureOut(it, false));
   for (const e of exams) {
-    const x = { ...examPublic(e), question_count: await examQCount(env, e, qm.get(e.id) || 0), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) };
+    const x = { ...examPublic(e), question_count: await examQCount(env, e, qm.get(e.id) || 0, bank), ...(await examAvailability(env, user, e, examRequirement(e, st, links), ua)) };
     (known.has(e.course_id) ? gm.get(e.course_id) : other).exams.push(x);
   }
   const allEx = groups.flatMap(g => g.exams);
@@ -569,10 +578,11 @@ async function getTopic(env, user, id) {
   else if (rt.video_plan) video = { planned: true };
   const links = await examLinks(env);
   const exams = [];
-  for (const e of await visibleExams(env)) {
-    const ids = examTopicIds(e); if (!ids.includes(id) && !ids.includes(root)) continue;
-    const qm = await examOwnCounts(env);
-    exams.push({ ...examPublic(e), topic_titles: ids.map(x => st.topics.get(x)).filter(Boolean).map(x => x.title), question_count: await examQCount(env, e, qm.get(e.id) || 0), ...(await examAvailability(env, user, e, examRequirement(e, st, links))) });
+  const mine = (await visibleExams(env)).filter(e => { const ids = examTopicIds(e); return ids.includes(id) || ids.includes(root); });
+  const qm = mine.length ? await examOwnCounts(env) : null, ua = mine.length ? await userExamAttempts(env, user) : null;
+  for (const e of mine) {
+    const ids = examTopicIds(e);
+    exams.push({ ...examPublic(e), topic_titles: ids.map(x => st.topics.get(x)).filter(Boolean).map(x => x.title), question_count: await examQCount(env, e, qm.get(e.id) || 0), ...(await examAvailability(env, user, e, examRequirement(e, st, links), ua)) });
   }
   const siblings = [...st.topics.values()].filter(x => x.course_id === t.course_id && (x.published || admin)).map(x => ({ id: x.id, title: x.title, status: x.status }));
   return json({ topic: { id: t.id, title: t.title, description: t.description || '', status: t.status, published: !!t.published, linked: root !== id ? { id: root, title: rt.title, course_id: rt.course_id } : null,
@@ -582,23 +592,27 @@ async function getTopic(env, user, id) {
     material, video, exams });
 }
 // Статья-«выгрузка» темы открывается после всех лекций темы (админам — всегда).
-async function docGate(env, user, docId) {
-  if (caps(user).admin) return null;
-  const { results: ts } = await env.DB.prepare('SELECT id, title FROM topics WHERE doc_id = ?1 AND published = 1').bind(docId).all();
-  if (!ts.length) return null;
-  for (const t of ts) {
-    const r = await env.DB.prepare(`SELECT COUNT(*) AS n, SUM(CASE WHEN p.completed_at IS NOT NULL THEN 1 ELSE 0 END) AS d FROM lectures l LEFT JOIN lecture_progress p ON p.lecture_id = l.id AND p.user_id = ?2
-      WHERE l.topic_id = ?1 AND l.published = 1 AND l.required = 1`).bind(t.id, user.id).first();
-    if (r.n > 0 && r.d === r.n) return null;
-  }
-  return ts[0].title;
+// Проверка строится один раз на запрос: темы и обязательные лекции тем — из кэша, прогресс пользователя — одним запросом.
+async function docGates(env, user) {
+  if (caps(user).admin) return () => null;
+  const topics = await memo('topics', async () => (await env.DB.prepare('SELECT * FROM topics ORDER BY position, id').all()).results);
+  const req = await memo('lectures:req', async () => (await env.DB.prepare('SELECT id, topic_id FROM lectures WHERE published = 1 AND required = 1 AND topic_id IS NOT NULL').all()).results);
+  let done = null;
+  return async (docId) => {
+    const ts = topics.filter(t => t.doc_id === docId && t.published);
+    if (!ts.length) return null;
+    if (!done) { const { results } = await env.DB.prepare('SELECT lecture_id FROM lecture_progress WHERE user_id = ?1 AND completed_at IS NOT NULL').bind(user.id).all(); done = new Set(results.map(r => r.lecture_id)); }
+    for (const t of ts) { const ls = req.filter(l => l.topic_id === t.id); if (ls.length > 0 && ls.every(l => done.has(l.id))) return null; }
+    return ts[0].title;
+  };
 }
+async function docGate(env, user, docId) { return (await docGates(env, user))(docId); }
 async function getExam(env, user, id) {
   const e = (await visibleExams(env)).find(x => x.id === id);
   if (!e) throw new HttpError(404, 'Экзамен не найден');
   const req = await examReqFor(env, user, e);
-  const qc = await env.DB.prepare('SELECT COUNT(*) AS c FROM questions WHERE exam_id = ?1').bind(id).first();
-  return json({ exam: { ...examPublic(e), question_count: await examQCount(env, e, qc.c), ...(await examAvailability(env, user, e, req)) } });
+  const qm = await examOwnCounts(env);
+  return json({ exam: { ...examPublic(e), question_count: await examQCount(env, e, qm.get(id) || 0), ...(await examAvailability(env, user, e, req)) } });
 }
 // ---------- движок вопросов (все типы) ----------
 // Хранение: questions.options/correct — варианты для single/multi/eliminate (как раньше);
@@ -1805,14 +1819,14 @@ async function listReatt(env, user) {
   const { results } = await env.DB.prepare('SELECT * FROM reattestations WHERE deleted_at IS NULL AND enabled = 1 AND visible = 1 ORDER BY position, id').all();
   const admin = caps(user).admin;
   const grants = admin ? [] : await reattGrants(env, user, null);
+  const act = admin ? null : new Set((await env.DB.prepare("SELECT reatt FROM attempts WHERE user_id = ?1 AND reatt IS NOT NULL AND status = 'in_progress'").bind(user.id).all()).results.map(r => r.reatt));
   const out = [];
   for (const r of results) {
     const v = reattRow(r);
     let grant;
     if (!admin) {
       const gs = grants.filter(g => g.key === v.key);
-      const act = await env.DB.prepare("SELECT id FROM attempts WHERE user_id = ?1 AND reatt = ?2 AND status = 'in_progress' LIMIT 1").bind(user.id, v.key).first();
-      if (!gs.length && !act) continue; // без выданного доступа переаттестация не видна
+      if (!gs.length && !act.has(v.key)) continue; // без выданного доступа переаттестация не видна
       grant = bestGrant(gs);
     }
     const bank = v.mode === 'bank';
@@ -1820,7 +1834,7 @@ async function listReatt(env, user) {
       cooldown_min: v.cooldown_min, max_attempts: v.max_attempts, level: v.level, track: v.track, mode: v.mode,
       base: bank ? v.cfg.base : null, pass_points: bank ? v.cfg.pass_points : null,
       total_questions: bank ? v.cfg.count : v.groups.reduce((s, g) => s + g.questions, 0), total_cases: bank ? 0 : v.groups.reduce((s, g) => s + g.cases, 0),
-      manual: bank ? !!(await env.DB.prepare("SELECT 1 FROM questions WHERE exam_id = 0 AND active = 1 AND base = ?1 AND type IN ('case','long','file','voice') LIMIT 1").bind(v.cfg.base).first()) : v.groups.some(g => g.cases > 0),
+      manual: bank ? await memo('bank:manual:' + v.cfg.base, async () => !!(await env.DB.prepare("SELECT 1 FROM questions WHERE exam_id = 0 AND active = 1 AND base = ?1 AND type IN ('case','long','file','voice') LIMIT 1").bind(v.cfg.base).first())) : v.groups.some(g => g.cases > 0),
       ...(await reattState(env, user, v, grant)) });
   }
   return json({ versions: out });
@@ -1951,8 +1965,9 @@ async function previewReatt(request, env, id) {
 async function adminReattAccess(env, id, grantId) {
   const v = await adminReattOne(env, id);
   const { results } = await env.DB.prepare(`SELECT g.*, u.ic_name, u.global_name, u.username, b.ic_name AS b_ic, b.global_name AS b_gn, b.username AS b_un,
-      (SELECT COUNT(*) FROM attempts a WHERE a.reatt = g.reatt_key AND json_extract(a.meta, '$.grant') = g.id) AS used
-    FROM reatt_access g LEFT JOIN users u ON u.id = g.user_id LEFT JOIN users b ON b.id = g.granted_by WHERE g.reatt_key = ?1 ORDER BY g.revoked_at IS NOT NULL, g.id DESC LIMIT 300`).bind(v.key).all();
+      COALESCE(x.c, 0) AS used
+    FROM reatt_access g LEFT JOIN users u ON u.id = g.user_id LEFT JOIN users b ON b.id = g.granted_by
+    LEFT JOIN (SELECT json_extract(meta, '$.grant') AS gid, COUNT(*) AS c FROM attempts WHERE reatt = ?1 GROUP BY gid) x ON x.gid = g.id WHERE g.reatt_key = ?1 ORDER BY g.revoked_at IS NOT NULL, g.id DESC LIMIT 300`).bind(v.key).all();
   const now = Date.now();
   const { results: users } = await env.DB.prepare("SELECT id, ic_name, global_name, username, reatt FROM users WHERE blocked = 0 AND reatt = 1 ORDER BY COALESCE(ic_name, global_name, username)").all();
   const grants = results.map(g => ({ id: g.id, user_id: g.user_id, user_name: g.user_id ? (g.ic_name || g.global_name || g.username || g.user_id) : null, expires_at: g.expires_at, attempts: g.attempts, used: g.used, note: g.note,
@@ -2074,12 +2089,12 @@ async function adminBank(env, url) {
   const w = where.join(' AND ');
   const total = await env.DB.prepare(`SELECT COUNT(*) AS c FROM questions WHERE ${w}`).bind(...binds).first();
   const { results } = await env.DB.prepare(`SELECT * FROM questions WHERE ${w} ORDER BY category, kind, id LIMIT ${limit} OFFSET ${offset}`).bind(...binds).all();
-  const { results: cats } = await env.DB.prepare("SELECT category, kind, COUNT(*) AS c FROM questions WHERE exam_id = 0 GROUP BY category, kind ORDER BY category").all();
+  const cats = await memo('bank:cats', async () => (await env.DB.prepare("SELECT category, kind, COUNT(*) AS c FROM questions WHERE exam_id = 0 GROUP BY category, kind ORDER BY category").all()).results);
   return json({ total: total.c, questions: results.map(q => toNative(q)), categories: cats });
 }
 // Сводка по базам переаттестаций: количество, распределение по сложности, типам и документам.
 async function reattBaseStats(env) {
-  const { results } = await env.DB.prepare("SELECT base, active, kind, type, difficulty, source_doc, COUNT(*) AS c FROM questions WHERE exam_id = 0 AND base IS NOT NULL GROUP BY base, active, kind, type, difficulty, source_doc").all();
+  const results = await memo('bank:stats', async () => (await env.DB.prepare("SELECT base, active, kind, type, difficulty, source_doc, COUNT(*) AS c FROM questions WHERE exam_id = 0 AND base IS NOT NULL GROUP BY base, active, kind, type, difficulty, source_doc").all()).results);
   const out = {};
   for (const b of R6_BASE_ORDER) out[b] = { base: b, title: R6_BASES[b], active: 0, inactive: 0, by_difficulty: { 1: 0, 2: 0, 3: 0, '-': 0 }, by_type: {}, by_doc: {}, by_topic: {}, cases: 0 };
   for (const r of results) {
@@ -2462,10 +2477,13 @@ function courseInput(b, partial) {
 }
 async function topicMap(env) { const { results } = await env.DB.prepare('SELECT * FROM topics').all(); return new Map(results.map(t => [t.id, t])); }
 async function adminCourses(env) {
-  const { results } = await env.DB.prepare(`SELECT c.*, (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS lecture_count,
-    (SELECT COUNT(*) FROM exams e WHERE e.course_id = c.id) AS exam_count FROM courses c ORDER BY c.position, c.id`).all();
+  const { results: cs } = await env.DB.prepare('SELECT * FROM courses ORDER BY position, id').all();
   const { results: lec } = await env.DB.prepare('SELECT id, title, published, required, course_id, position FROM lectures ORDER BY position, id').all();
   const { results: ex } = await env.DB.prepare('SELECT id, title, published, course_id, requires_lectures, lecture_mode FROM exams ORDER BY position, id').all();
+  // число лекций и экзаменов курса — из уже загруженных списков, без подзапроса на каждый курс
+  const cnt = (rows) => rows.reduce((m, r) => m.set(r.course_id, (m.get(r.course_id) || 0) + 1), new Map());
+  const lc = cnt(lec), ec = cnt(ex);
+  const results = cs.map(c => ({ ...c, lecture_count: lc.get(c.id) || 0, exam_count: ec.get(c.id) || 0 }));
   const { results: tp } = await env.DB.prepare('SELECT t.id, t.course_id, t.title, t.status, t.published, t.position, t.link_topic_id, t.doc_id, (t.video_url != \'\') AS has_video, (t.video_plan != \'\') AS has_plan, (SELECT COUNT(*) FROM lectures l WHERE l.topic_id = t.id) AS lecture_count FROM topics t ORDER BY t.position, t.id').all();
   return json({ courses: results, lectures: lec, exams: ex, topics: tp });
 }
@@ -2775,16 +2793,17 @@ async function adminAudit(env, url) {
 }
 async function adminStats(env) {
   const one = async (sql) => (await env.DB.prepare(sql).first()).c;
+  // справочные счётчики (лекции, банк) — из кэша; попытки и пользователи — всегда свежие
+  const lc = await memo('lectures:count', async () => env.DB.prepare('SELECT COUNT(*) AS n, SUM(published = 1) AS p FROM lectures').first());
+  const bk = Object.fromEntries((await memo('bank:kinds', async () => (await env.DB.prepare('SELECT kind, COUNT(*) AS c FROM questions WHERE exam_id = 0 GROUP BY kind').all()).results)).map(r => [r.kind, r.c]));
   return json({
     users: await one('SELECT COUNT(*) AS c FROM users'),
-    lectures: await one('SELECT COUNT(*) AS c FROM lectures'),
-    lectures_published: await one('SELECT COUNT(*) AS c FROM lectures WHERE published = 1'),
+    lectures: lc.n, lectures_published: lc.p || 0,
     exams: await one('SELECT COUNT(*) AS c FROM exams'),
     pending_review: await one(`SELECT COUNT(*) AS c FROM attempts WHERE status = 'pending_review'`),
     passed: await one(`SELECT COUNT(DISTINCT user_id) AS c FROM attempts WHERE status = 'passed'`),
     in_progress: await one(`SELECT COUNT(*) AS c FROM attempts WHERE status = 'in_progress'`),
-    bank_questions: await one(`SELECT COUNT(*) AS c FROM questions WHERE exam_id = 0 AND kind = 'question'`),
-    bank_cases: await one(`SELECT COUNT(*) AS c FROM questions WHERE exam_id = 0 AND kind = 'case'`),
+    bank_questions: bk.question || 0, bank_cases: bk.case || 0,
     reatt_pending: await one(`SELECT COUNT(*) AS c FROM attempts WHERE status = 'pending_review' AND reatt IS NOT NULL`),
     reatt_total: await one(`SELECT COUNT(*) AS c FROM attempts WHERE reatt IS NOT NULL`),
   });
@@ -3900,11 +3919,14 @@ function docInput(b) {
 }
 async function listDocs(env, url, user) {
   const q = (url.searchParams.get('q') || '').trim().slice(0, 100).toLowerCase();
-  const { results } = await env.DB.prepare(`SELECT d.id, d.category, d.title, d.position, d.updated_at, substr(d.body, 1, 400) AS snippet, length(d.body) AS len, ${q ? 'd.body' : "'' AS body"},
-    u.ic_name, u.global_name, u.username FROM docs d LEFT JOIN users u ON u.id = COALESCE(d.updated_by, d.created_by) WHERE d.deleted_at IS NULL ORDER BY d.category, d.position, d.id`).all();
+  const load = async () => (await env.DB.prepare(`SELECT d.id, d.category, d.title, d.position, d.updated_at, substr(d.body, 1, 400) AS snippet, length(d.body) AS len, ${q ? 'd.body' : "'' AS body"},
+    u.ic_name, u.global_name, u.username FROM docs d LEFT JOIN users u ON u.id = COALESCE(d.updated_by, d.created_by) WHERE d.deleted_at IS NULL ORDER BY d.category, d.position, d.id`).all()).results;
+  const results = q ? await load() : await memo('docs', load);
   const locked = new Map();
-  if (!caps(user).admin) { const { results: gd } = await env.DB.prepare('SELECT DISTINCT doc_id FROM topics WHERE doc_id IS NOT NULL AND published = 1').all();
-    for (const g of gd) { const tt = await docGate(env, user, g.doc_id); if (tt) locked.set(g.doc_id, tt); } }
+  if (!caps(user).admin) {
+    const gate = await docGates(env, user);
+    const ids = [...new Set((await memo('topics', async () => (await env.DB.prepare('SELECT * FROM topics ORDER BY position, id').all()).results)).filter(t => t.doc_id != null && t.published).map(t => t.doc_id))];
+    for (const id of ids) { const tt = await gate(id); if (tt) locked.set(id, tt); } }
   const rows = results.filter(r => !q || (r.title + ' ' + r.category + ' ' + (locked.has(r.id) ? '' : r.body)).toLowerCase().includes(q));
   return json({ docs: rows.map(r => ({ id: r.id, category: r.category, title: r.title, position: r.position, updated_at: r.updated_at, snippet: locked.has(r.id) ? '' : r.snippet, len: r.len, author: r.ic_name || r.global_name || r.username || '',
       ...(locked.has(r.id) ? { locked: true, locked_topic: locked.get(r.id) } : {}) })),
@@ -3948,7 +3970,6 @@ async function withAttempt(env, user, res) {
 // Без входа (или с истёкшей сессией) — гостевой ответ: user = null.
 const BOOT_DATA = {
   '/api/courses': [u => caps(u).vp, (env, u) => listCourses(env, u)],
-  '/api/exams': [u => caps(u).vp, (env, u) => listExams(env, u)],
   '/api/lectures': [u => caps(u).vp, (env, u) => listLectures(env, u)],
   '/api/reatt': [u => caps(u).reatt, (env, u) => listReatt(env, u)],
   '/api/reports/my': [u => caps(u).vp, (env, u) => myReports(env, u, new URL('https://boot/api/reports/my'))],
