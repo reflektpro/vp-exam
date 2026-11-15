@@ -54,7 +54,7 @@ leadRoute('/lead', async () => {
         ${d.deleted_count ? `<details class="small" id="delBox"><summary>Удалённых отчётов за неделю: ${d.deleted_count}</summary><div id="delList" class="mut">загрузка…</div></details>` : ''}
         ${!d.fund_set ? '<div class="alert warn small">Фонд недели не указан — надбавки не рассчитываются.</div>' : ''}
         ${T.fund_short ? '<div class="alert err small">Фонда не хватает даже на базовую премию — база выплачивается, надбавки не начисляются.</div>' : ''}
-        ${!T.fund_short && (T.add_short || T.award_short || T.ss_short) ? `<div class="alert warn small">Фонда не хватает на все надбавки: урезаны ${[T.add_short && 'дополнительная', T.award_short && 'наградная', T.ss_short && 'премия СС'].filter(Boolean).join(', ')}.</div>` : ''}
+        ${!T.fund_short && (T.award_short || T.ss_short) ? `<div class="alert warn small">Фонда не хватает на все надбавки: урезаны ${[T.award_short && 'наградная', T.ss_short && 'премия СС'].filter(Boolean).join(', ')}.</div>` : ''}
         ${d.deadline_passed ? `<button class="btn sm" id="leftBtn" ${T.remaining > 0 ? '' : 'disabled'}>Перенести остаток в бюджет ГУ ВП</button>${d.leftover_posted != null ? ` <span class="small mut">перенесено: ${RUB(d.leftover_posted)}</span>` : ''}${d.leftover_stale ? '<div class="alert warn small">Расчёт изменился после переноса остатка (например, удалён или перепроверен отчёт). Перенесите остаток заново.</div>' : ''}` : ''}
       </div></div>
     <div class="row between" style="margin:6px 0 8px"><div class="row">
@@ -64,19 +64,19 @@ leadRoute('/lead', async () => {
       <div class="row"><button class="btn sm" id="csvBtn">Экспорт CSV</button><button class="btn sm" id="xlsxBtn">Экспорт XLSX</button></div></div>
     ${d.rows.length ? `<div class="tblwrap"><table class="prem"><thead>
       <tr><th rowspan="2">Сотрудник</th><th rowspan="2">Должность</th>${groups.map(g => `<th colspan="${g.items.length}" class="grp">${GROUP_RU[g.g]}</th>`).join('')}
-        <th rowspan="2">Баллы</th><th rowspan="2">План</th><th rowspan="2">Оклад</th><th rowspan="2">Действия</th><th rowspan="2">Вычет</th><th rowspan="2">База</th><th rowspan="2">Доп.</th>
+        <th rowspan="2">Баллы</th><th rowspan="2">План</th><th rowspan="2">Оклад</th><th rowspan="2">Действия</th><th rowspan="2">Вычет</th><th rowspan="2">База</th><th rowspan="2">Доля остатка<div class="small mut">фонда</div></th>
         <th rowspan="2">Наградная<div class="small mut">из фонда</div></th><th rowspan="2">Премия СС</th><th rowspan="2">Итого<div class="small mut">из фонда</div></th><th rowspan="2" class="bcol">Наградная<div class="small">бюджет ГУ ВП, отдельно</div></th><th rowspan="2">Отчёт</th></tr>
       <tr>${groups.map(g => g.items.map(i => `<th class="ic" title="${esc(i.name)} — ${RUB(i.pay)}"><span>${esc(i.name)}</span></th>`).join('')).join('')}</tr></thead>
       <tbody>${d.rows.map(r => `<tr class="${rowCls(r)}" data-uid="${esc(r.user_id)}">
         <td><b>${esc(r.name)}</b>${r.senior ? ' <span class="badge info">СС</span>' : ''}<div class="small mut">${esc(r.static_id || r.user_id)}</div>${r.strikes ? `<div class="small neg">нарушений: ${r.strikes}</div>` : ''}</td>
         <td>${esc(posName(r.position))}<div class="small mut rep-to" title="Адресат отчёта">→ ${esc(toName(r.addressee || r.addressee_default))}${r.addressee ? '' : ' (по умолч.)'}</div></td>
         ${groups.map(g => g.items.map(i => `<td class="num">${r.counts[i.key] || ''}</td>`).join('')).join('')}
-        <td class="num">${r.points || 0}</td>
+        <td class="num">${r.points || 0}${r.eligible && r.plan_points !== (r.points || 0) ? `<div class="small mut">засчитано ${r.plan_points}</div>` : ''}</td>
         <td>${r.plan ? `<span class="badge ${PLAN_RU[r.plan.level][1]}" title="${esc(missingTxt(r))}">${PLAN_RU[r.plan.level][0]}</span>${r.plan.level !== 'normal' ? `<div class="small mut miss">${esc(missingTxt(r)).replace(/\n/g, '<br>')}</div>` : ''}` : '—'}</td>
         <td class="num">${r.eligible ? `${RUB(r.oklad)}<div class="small mut">${TIER_RU[r.oklad_tier]}</div>` : `<span class="small neg">${esc(r.reason)}</span>`}</td>
         <td class="num">${RUB(r.actions)}</td><td class="num">${r.deduction ? '−' + RUB(r.deduction) + `<div class="small mut">${r.deduct_pct}%</div>` : '—'}</td>
-        <td class="num"><b>${RUB(r.base)}</b>${r.excess ? `<div class="small mut">сверх макс. ${RUB(r.excess)}</div>` : ''}</td>
-        <td class="num">${r.add ? RUB(r.add) : '—'}${r.add_want > r.add ? `<div class="small neg">урезано с ${RUB(r.add_want)}</div>` : ''}</td>
+        <td class="num"><b>${RUB(r.base)}</b></td>
+        <td class="num">${r.add ? RUB(r.add) : '—'}</td>
         <td><input class="m-award" type="number" min="0" step="1" value="${esc(rowManual(r, 'award'))}" ${r.eligible ? '' : 'disabled'} title="${RUB(d.config.rules.award_min)} – ${RUB(d.config.rules.award_max)}">${r.award_want > r.award ? `<div class="small neg">выплачено ${RUB(r.award)}</div>` : ''}</td>
         <td>${r.senior ? `<input class="m-ss" type="number" min="0" max="${d.config.rules.ss_max}" step="1" value="${esc(rowManual(r, 'ss'))}">${r.ss_want > r.ss ? `<div class="small neg">выплачено ${RUB(r.ss)}</div>` : ''}` : '<span class="small mut">не СС</span>'}</td>
         <td class="num"><b>${RUB(r.total_fund)}</b></td>
@@ -85,7 +85,7 @@ leadRoute('/lead', async () => {
       </tr>`).join('')}</tbody>
       <tfoot><tr><td colspan="${2 + cols.length + 5}"><b>Итого</b></td><td class="num"><b>${RUB(T.base)}</b></td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.add, 0))}</td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.award, 0))}</td><td class="num">${RUB(d.rows.reduce((s, r) => s + r.ss, 0))}</td><td class="num"><b>${RUB(d.rows.reduce((s, r) => s + r.total_fund, 0))}</b></td><td class="num bcol"><b>${RUB(T.award_budget)}</b></td><td></td></tr></tfoot>
     </table></div>
-    <p class="small mut">Наградная из фонда: ${RUB(d.config.rules.award_min)}–${RUB(d.config.rules.award_max)}; премия СС — до ${RUB(d.config.rules.ss_max)} (только старшему составу); лимит на человека ${RUB(d.config.rules.person_cap)} (оклад + премия + доп. + наградная из фонда). Наградная из бюджета ГУ ВП — сверх лимита и списывается с бюджета ГУ ВП. Значения сохраняются при выходе из поля.</p>`
+    <p class="small mut">Наградная из фонда: ${RUB(d.config.rules.award_min)}–${RUB(d.config.rules.award_max)}; премия СС — до ${RUB(d.config.rules.ss_max)} (только старшему составу). Остаток фонда после базы, наградных и премий СС делится между всеми пропорционально базовой премии. Наградная из бюджета ГУ ВП списывается с бюджета ГУ ВП. Значения сохраняются при выходе из поля.</p>`
     : '<div class="alert info">За эту неделю нет отчётов, а состав ГУ ВП ещё не отмечен (раздел «Состав»).</div>'}`);
   bindWeekPicker('/lead');
   $('#toFilter').onchange = (e) => { location.hash = '#/lead?' + qs({ to: e.target.value }); };
@@ -101,7 +101,7 @@ leadRoute('/lead', async () => {
     tr.querySelectorAll('input').forEach(i => i.onchange = save);
   });
   const exportRows = () => {
-    const head = ['Сотрудник', 'Discord ID', 'Статик', 'Должность', 'Адресат', ...d.config.items.map(i => i.name), 'Баллы', 'План', 'Не хватает', 'Оклад (уровень)', 'Оклад', 'Действия', 'Вычет %', 'Вычет', 'База', 'Доп. премия', 'Наградная (фонд)', 'Премия СС', 'Итого из фонда', 'Наградная из бюджета ГУ ВП (отдельно)', 'Статус отчёта', 'После срока', 'Причина', 'Нарушений'];
+    const head = ['Сотрудник', 'Discord ID', 'Статик', 'Должность', 'Адресат', ...d.config.items.map(i => i.name), 'Баллы', 'План', 'Не хватает', 'Оклад (уровень)', 'Оклад', 'Действия', 'Вычет %', 'Вычет', 'База', 'Доля остатка фонда', 'Наградная (фонд)', 'Премия СС', 'Итого из фонда', 'Наградная из бюджета ГУ ВП (отдельно)', 'Статус отчёта', 'После срока', 'Причина', 'Нарушений'];
     const body = d.rows.map(r => [r.name, r.user_id, r.static_id, posName(r.position), r.addressee ? toName(r.addressee) : '', ...d.config.items.map(i => r.counts[i.key] || 0), r.points || 0, r.plan ? PLAN_RU[r.plan.level][0] : '', missingTxt(r).replace(/\n/g, '; '),
       r.eligible ? TIER_RU[r.oklad_tier] : '', r.oklad, r.actions, r.deduct_pct, r.deduction, r.base, r.add, r.award, r.ss, r.total_fund, r.award_budget, (REP_ST[r.status] || [r.status])[0], r.late ? 'да' : '', r.reason || '', r.strikes || 0]);
     body.push(['Итого', '', '', '', '', ...d.config.items.map(() => ''), '', '', '', '', '', '', '', '', T.base, d.rows.reduce((s, r) => s + r.add, 0), d.rows.reduce((s, r) => s + r.award, 0), d.rows.reduce((s, r) => s + r.ss, 0), d.rows.reduce((s, r) => s + r.total_fund, 0), T.award_budget, '', '', '', '']);
@@ -177,8 +177,8 @@ route('/lead/report/:id', async (id) => {
         <div class="kv"><span>Оклад (${TIER_RU[c.oklad_tier]})</span><b>${RUB(c.oklad)}</b></div>
         <div class="kv"><span>Выплаты за действия</span><b>${RUB(c.actions)}</b></div>
         <div class="kv"><span>Вычет ${c.deduct_pct}%</span><b>${c.deduction ? '−' + RUB(c.deduction) : '—'}</b></div>
-        <div class="kv"><span>База (не больше ${RUB(c.max)})</span><b>${RUB(c.base)}</b></div>
-        <div class="kv"><span>Дополнительная</span><b>${RUB(c.add)}</b></div><div class="kv"><span>Наградная (фонд)</span><b>${RUB(c.award)}</b></div>
+        <div class="kv"><span>База</span><b>${RUB(c.base)}</b></div>
+        <div class="kv"><span>Доля остатка фонда</span><b>${RUB(c.add)}</b></div><div class="kv"><span>Наградная (фонд)</span><b>${RUB(c.award)}</b></div>
         <div class="kv"><span>Премия СС</span><b>${RUB(c.ss)}</b></div>
         <div class="kv total"><span>Итого из фонда</span><b>${RUB(c.total_fund)}</b></div>
         <div class="budget-box"><div class="small mut">Наградная из бюджета ГУ ВП — отдельно</div><b>${RUB(c.award_budget)}</b></div>` : `<div class="alert err">Без премии: ${esc(c.reason)}</div>`) : ''}</div></div>
@@ -291,10 +291,10 @@ leadRoute('/lead/config', async () => {
       ${C.positions.map(p => `<tr><td class="small mut">${esc(p.key)}</td><td><input data-f="name" value="${esc(p.name)}" ${dis}></td>${['zero', 'min', 'avg', 'max'].map(f => `<td><input type="number" data-f="${f}" value="${p[f]}" ${dis}></td>`).join('')}</tr>`).join('')}</table>
       ${ed ? '<div class="row"><button class="btn gold sm" data-save="positions">Сохранить оклады</button><button class="btn sm" data-reset="positions">Вернуть значения приказа</button></div>' : ''}</div>
     <div class="card"><h3>Минимальный и нормальный план</h3>
-      <p class="small mut">Каждая строка плана — сумма пунктов отчёта; один пункт может засчитываться в несколько строк. Уровень плана: все строки ≥ норм. — нормальный; все ≥ мин. — минимальный.</p>
+      <p class="small mut">План определяют баллы еженедельного отчёта и действия ГУ ВП. Нормальный — обе строки ≥ норм., минимальный — обе ≥ мин.</p>
       <table id="tPlan"><tr><th>Строка плана</th><th>Мин.</th><th>Норм.</th><th>Засчитываются пункты</th></tr>
       ${C.plan.map(l => `<tr data-key="${esc(l.key)}"><td><input data-f="name" value="${esc(l.name)}" ${dis}></td><td><input type="number" data-f="min" value="${l.min}" style="width:70px" ${dis}></td><td><input type="number" data-f="normal" value="${l.normal}" style="width:70px" ${dis}></td>
-        <td>${ed ? `<details><summary class="small">${l.items.map(k => esc(names.get(k) || k)).join(', ')}</summary><div class="plan-items">${C.items.map(i => `<label class="chk small"><input type="checkbox" value="${esc(i.key)}" ${l.items.includes(i.key) ? 'checked' : ''}> ${esc(i.name)}</label>`).join('')}</div></details>` : `<span class="small">${l.items.map(k => esc(names.get(k) || k)).join(', ')}</span>`}</td></tr>`).join('')}</table>
+        <td>${l.key === 'points' ? '<span class="small">баллы основной отчётности, принятые проверяющим</span>' : ed ? `<details><summary class="small">${l.items.map(k => esc(names.get(k) || k)).join(', ')}</summary><div class="plan-items">${C.items.map(i => `<label class="chk small"><input type="checkbox" value="${esc(i.key)}" ${l.items.includes(i.key) ? 'checked' : ''}> ${esc(i.name)}</label>`).join('')}</div></details>` : `<span class="small">${l.items.map(k => esc(names.get(k) || k)).join(', ')}</span>`}</td></tr>`).join('')}</table>
       ${ed ? '<div class="row"><button class="btn gold sm" data-save="plan">Сохранить план</button><button class="btn sm" data-reset="plan">Вернуть значения приказа</button></div>' : ''}</div>
     <div class="card"><h3>Выплата за одно действие (Таблицы 1–2) и пункты отчёта</h3>
       <table id="tItems"><tr><th>Пункт отчёта</th><th>Раздел</th><th>Строка таблицы выплат</th><th>Выплата, ₽</th><th>Баллы отчёта</th></tr>
@@ -303,7 +303,7 @@ leadRoute('/lead/config', async () => {
       ${unpaid.length ? `<p class="small mut">Без выплаты (нет строки в таблицах приказа): ${unpaid.map(i => esc(i.name)).join('; ')}. Свои пункты сотрудников тоже без выплаты.</p>` : ''}
       ${ed ? '<div class="row"><button class="btn gold sm" data-save="items">Сохранить выплаты</button><button class="btn sm" data-reset="items">Вернуть значения приказа</button></div>' : ''}</div>
     <div class="card"><h3>Правила и лимиты</h3><div class="grid rules" id="tRules">
-      ${[['ded_none', 'Вычет без минимального плана, %'], ['ded_min', 'Вычет при минимальном плане, %'], ['add_cap', 'Доп. премия — максимум на человека'], ['award_min', 'Наградная — минимум'], ['award_max', 'Наградная — максимум'], ['ss_max', 'Премия СС — максимум'], ['person_cap', 'Лимит на человека (оклад+премия+доп.+наградная)'], ['thanks_points', 'Баллов за 1 благодарность'], ['fund_min', 'Фонд — минимум'], ['fund_max', 'Фонд — максимум'], ['ss_contrib_min', 'Взнос СС в бюджет, минимум/нед.'], ['deadline_dow', 'День срока (0 — воскресенье)'], ['deadline_hour', 'Час срока (МСК)']]
+      ${[['ded_none', 'Вычет без минимального плана, %'], ['ded_min', 'Вычет при минимальном плане, %'], ['award_min', 'Наградная — минимум'], ['award_max', 'Наградная — максимум'], ['ss_max', 'Премия СС — максимум'], ['thanks_points', 'Баллов за 1 благодарность'], ['fund_min', 'Фонд — минимум'], ['fund_max', 'Фонд — максимум'], ['ss_contrib_min', 'Взнос СС в бюджет, минимум/нед.'], ['deadline_dow', 'День срока (0 — воскресенье)'], ['deadline_hour', 'Час срока (МСК)']]
         .map(([k, t]) => `<label class="f"><span>${t}</span><input type="number" data-f="${k}" value="${R[k]}" ${dis}></label>`).join('')}</div>
       ${ed ? '<div class="row"><button class="btn gold sm" data-save="rules">Сохранить правила</button><button class="btn sm" data-reset="rules">Вернуть значения приказа</button></div>' : ''}</div>`);
   if (!ed) return;

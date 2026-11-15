@@ -170,8 +170,8 @@ async function premiumsPage() {
   const myCard = !my ? `<div class="card flat"><h3>Моя премия</h3><p class="mut">За эту неделю у вас нет отчёта.</p></div>`
     : `<div class="card my-prem"><h3>Моя премия — ${weekLabel(d.week)}</h3>
       ${!my.reason && !my.late && my.status !== 'rejected' ? (money ? `<div class="grid two"><div><div class="kv"><span>Оклад (${TIER_RU[my.oklad_tier]})</span><b>${RUB(my.oklad)}</b></div><div class="kv"><span>Выплаты за действия</span><b>${RUB(my.actions)}</b></div>
-          <div class="kv"><span>Вычет ${my.deduct_pct}%</span><b>${my.deduction ? '−' + RUB(my.deduction) : '—'}</b></div><div class="kv"><span>Базовая премия (не больше ${RUB(my.max)})</span><b>${RUB(my.base)}</b></div>
-          <div class="kv"><span>Дополнительная</span><b>${RUB(my.add)}</b></div><div class="kv"><span>Наградная</span><b>${RUB(my.award)}</b></div><div class="kv"><span>Премия СС</span><b>${RUB(my.ss)}</b></div>
+          <div class="kv"><span>Вычет ${my.deduct_pct}%</span><b>${my.deduction ? '−' + RUB(my.deduction) : '—'}</b></div><div class="kv"><span>Базовая премия</span><b>${RUB(my.base)}</b></div>
+          <div class="kv"><span>Доля остатка фонда</span><b>${RUB(my.add)}</b></div><div class="kv"><span>Наградная</span><b>${RUB(my.award)}</b></div><div class="kv"><span>Премия СС</span><b>${RUB(my.ss)}</b></div>
           <div class="kv total"><span>Итого из премиального фонда</span><b>${RUB(my.total_fund)}</b></div></div>
           <div><div class="budget-box"><div class="small mut">Наградная из бюджета ГУ ВП — отдельно, другой источник</div><div class="big">${RUB(my.award_budget)}</div></div>${detail(my)}</div></div>`
         : `<p>Отчёт: ${repBadge(my.status)}. ${d.open ? `Итоговая сумма появится, когда руководство проверит все отчёты недели (проверено ${d.stats.reviewed} из ${d.stats.on_time}).` : `Сумма появится после срока (${fmtDate(d.deadline)} МСК) и проверки всех отчётов.`}</p>${my.items ? detail(my) : ''}`)
@@ -185,14 +185,14 @@ async function premiumsPage() {
       : `<div class="alert ok">Все отчёты недели проверены — суммы итоговые.</div>`}
     ${myCard}
     ${d.open ? `<div class="card flat"><h3>Премии недели ${d.list.length ? `<span class="small mut">(${d.list.length} ${plural(d.list.length, 'сотрудник', 'сотрудника', 'сотрудников')})</span>` : ''}</h3>
-      ${d.list.length ? `<div class="tblwrap"><table class="plist"><thead><tr><th>Сотрудник</th><th>Должность</th><th>План</th><th>Благ.</th>${money ? '<th>Оклад</th><th>Действия</th><th>Вычет</th><th>Доп.</th><th>Наградная</th><th>СС</th><th>Итого (фонд)</th><th class="bcol">Наградная<div class="small">бюджет ГУ ВП</div></th>' : ''}<th></th></tr></thead>
+      ${d.list.length ? `<div class="tblwrap"><table class="plist"><thead><tr><th>Сотрудник</th><th>Должность</th><th>План</th><th>Благ.</th>${money ? '<th>Оклад</th><th>Действия</th><th>Вычет</th><th>Доля остатка</th><th>Наградная</th><th>СС</th><th>Итого (фонд)</th><th class="bcol">Наградная<div class="small">бюджет ГУ ВП</div></th>' : ''}<th></th></tr></thead>
         <tbody>${d.list.map((x, i) => `<tr class="${x.user_id === App.me.id ? 'me' : ''}"><td><b>${esc(x.name)}</b><div class="small mut">${esc(x.rank)}${x.static_id ? ' · ' + esc(x.static_id) : ''}</div></td><td class="small">${esc(x.position_name)}</td>
           <td>${x.plan ? `<span class="badge ${PLAN_RU[x.plan.level][1]}">${PLAN_RU[x.plan.level][0]}</span>` : '—'}</td><td class="num">${x.thanks || ''}</td>
           ${money ? `<td class="num">${RUB(x.oklad)}<div class="small mut">${TIER_RU[x.oklad_tier]}</div></td><td class="num">${RUB(x.actions)}</td><td class="num">${x.deduction ? '−' + RUB(x.deduction) : '—'}</td><td class="num">${x.add ? RUB(x.add) : '—'}</td><td class="num">${x.award ? RUB(x.award) : '—'}</td><td class="num">${x.ss ? RUB(x.ss) : '—'}</td>
             <td class="num"><b>${RUB(x.total_fund)}</b></td><td class="num bcol">${x.award_budget ? RUB(x.award_budget) : '—'}</td>` : ''}
           <td><button class="btn sm" data-det="${i}">За что</button></td></tr><tr class="detrow" id="det${i}" hidden><td colspan="${money ? 13 : 5}">${detail(x)}</td></tr>`).join('')}</tbody>
           ${money && d.totals ? `<tfoot><tr><td colspan="10"><b>Итого из премиального фонда</b></td><td class="num"><b>${RUB(d.totals.fund)}</b></td><td class="num bcol"><b>${RUB(d.totals.award_budget)}</b></td><td></td></tr></tfoot>` : ''}</table></div>
-        <p class="small mut">Наградная из бюджета ГУ ВП идёт из другого источника и в «Итого (фонд)» не входит. Оклад зависит от плана: нормальный — средний оклад, минимальный — минимальный оклад и вычет 20%, не выполнен — нулевой оклад и вычет 50% из выплат за действия.</p>`
+        <p class="small mut">Наградная из бюджета ГУ ВП идёт из другого источника и в «Итого (фонд)» не входит. Оклад зависит от плана: нормальный — средний оклад, минимальный — минимальный оклад и вычет 20%, не выполнен — нулевой оклад и вычет 50% из выплат за действия. Остаток фонда делится между всеми пропорционально базовой премии.</p>`
         : '<p class="mut">Принятых отчётов за эту неделю пока нет.</p>'}</div>` : ''}`);
   $('#wkSel').onchange = (e) => { location.hash = '#/premiums?week=' + e.target.value; };
   $$('[data-det]').forEach(b => b.onclick = () => { const r = $('#det' + b.dataset.det); r.hidden = !r.hidden; b.textContent = r.hidden ? 'За что' : 'Скрыть'; });

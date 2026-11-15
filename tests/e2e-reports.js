@@ -57,12 +57,15 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   };
   await setAct('postavka', 10, ['https://disk.yandex.ru/d/post1', 'https://disk.yandex.ru/d/post2']);
   await setAct('otbitie', 3, ['https://disk.yandex.ru/d/otb']); await setAct('proc', 2, ['https://imgur.com/a/proc']);
-  await setAct('training', 1, ['https://imgur.com/a/tr']); await setAct('event6', 1, ['https://imgur.com/a/mp']); await page.fill('.act[data-key=event6] [data-vp]', '10');
-  await setAct('pmp', 5, ['https://imgur.com/a/pmp']); await setAct('city', 5);
+  await setAct('training', 1, ['https://imgur.com/a/tr']); await setAct('event6', 1, ['https://imgur.com/a/mp']); await page.fill('.act[data-key=event6] [data-vp]', '102');
+  await setAct('pmp', 5, ['https://imgur.com/a/pmp']); await setAct('city', 7);
   await page.fill('.act[data-key=thanks] [data-tp]', '750');
   check('благодарности: 750 баллов → 15', (await page.inputValue('.act[data-key=thanks] [data-n]')) === '15');
   await page.waitForSelector('#planBox:not([hidden])');
-  check('план недели считается на форме: нормальный', /нормальный план выполнен/.test(await page.textContent('#planBox')), await page.textContent('#planBox'));
+  check('план недели считается на форме: нормальный (400 баллов, 10 действий ГУ ВП)', /нормальный план выполнен/.test(await page.textContent('#planBox')) && /Баллы еженедельного отчёта\s*400/.test(await page.textContent('#planBox')) && /Действия ГУ ВП[^]*?10/.test(await page.textContent('#planBox')), await page.textContent('#planBox'));
+  await page.fill('.act[data-key=event6] [data-vp]', '101'); await page.waitForFunction(() => /минимальный план выполнен/.test(document.getElementById('planBox').textContent));
+  check('форма: 399 баллов → минимальный план', /минимальный план выполнен/.test(await page.textContent('#planBox')));
+  await page.fill('.act[data-key=event6] [data-vp]', '102'); await page.waitForFunction(() => /нормальный план выполнен/.test(document.getElementById('planBox').textContent));
   // PDF без входа работает
   const dl = page.waitForEvent('download'); await page.click('#pdf'); const pdf = await dl;
   check('PDF выгружается без входа', /otchet_7\.pdf$/.test(pdf.suggestedFilename()), pdf.suggestedFilename());
@@ -86,7 +89,8 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   const t1 = await login(E1, 'ivan_d');
   let r = await call('GET', '/api/reports/my?week=' + WEEK, t1);
   check('повторная отправка → тот же отчёт, версия 2', r.d.report && r.d.report.version === 2 && r.d.report.items.some(i => i.key === 'docs'), r.d.report && r.d.report.version);
-  check('сервер: баллы основной отчётности (200+60+10+3+10+15 = 298)', r.d.report.points === 298, r.d.report.points);
+  check('сервер: баллы основной отчётности (200+60+20+3+102+15 = 400, проц. действия — 10 баллов)', r.d.report.points === 400, r.d.report.points);
+  check('сервер: план по баллам отчёта и действиям ГУ ВП (400 / 12)', r.d.report.plan.level === 'normal' && r.d.report.plan.lines.map(l => l.key + ':' + l.got).join() === 'points:400,gu:12', r.d.report.plan);
   check('сервер: адресат сохранён (gu), период не затёрт', r.d.report.addressee === 'gu' && r.d.report.header.to === addD(WEEK, 6) && /начальник ГУ ВП/.test(r.d.report.addressee_name), [r.d.report.addressee, r.d.report.header]);
   const repId = r.d.report.id;
 
@@ -113,27 +117,28 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   { const mnu = await shellMenu(page); check('руководство: в ленте «Неделя» и разделы руководства, без админки', mnu.includes('#/lead') && mnu.includes('#/lead/budget') && !mnu.some(h => /^#\/admin/.test(h)), mnu); }
   await page.goto(SITE + '#/lead'); await page.waitForSelector('table.prem');
   const rowTxt = async (uid) => page.textContent(`tr[data-uid="${uid}"]`);
-  check('таблица: сотрудник с отчётом — нормальный план, база 499 000 (220 000 + 279 000)', /Нормальный/.test(await rowTxt(E1)) && /499\s000/.test(await rowTxt(E1)), await rowTxt(E1));
+  check('таблица: сотрудник с отчётом — нормальный план, база 509 000 (220 000 + 289 000)', /Нормальный/.test(await rowTxt(E1)) && /509\s000/.test(await rowTxt(E1)), await rowTxt(E1));
+  check('таблица: столбец «Доля остатка фонда»', /Доля остатка/.test(await page.textContent('table.prem thead')) && !/Доп\./.test(await page.textContent('table.prem thead')));
   check('таблица: сотрудник состава без отчёта — подсвечен «Нет отчёта»', (await page.getAttribute(`tr[data-uid="${E2}"]`, 'class')).includes('r-missing') && /Нет отчёта/.test(await rowTxt(E2)));
   check('таблица: колонки пунктов сгруппированы', (await page.$$eval('table.prem th.grp', t => t.map(x => x.textContent))).join('|') === 'Основная отчётность|Дополнительная отчётность|Работа ГУ ВП');
   // фонд
   await page.fill('#fundF [name=fund]', '5000'); await page.click('#fundF button'); await page.waitForSelector('.toast.err');
   check('фонд вне 8–20 млн → ошибка', /от 8/.test(await page.textContent('#toast')));
-  await page.fill('#fundF [name=fund]', '10000000'); await page.click('#fundF button'); await page.waitForFunction(() => /9\s501\s000/.test(document.getElementById('remaining')?.textContent || ''));
-  check('остаток фонда = 10 000 000 − 499 000', /9\s501\s000/.test(await page.textContent('#remaining')));
+  await page.fill('#fundF [name=fund]', '10000000'); await page.click('#fundF button'); await page.waitForFunction(() => /10\s000\s000/.test(document.getElementById('paidFund')?.textContent || ''));
+  check('весь фонд распределён: единственный с премией получает 10 000 000 (база 509 000 + доля остатка 9 491 000), остаток 0', /9\s491\s000/.test(await rowTxt(E1)) && /^0\s*₽/.test((await page.textContent('#remaining')).trim()), [await rowTxt(E1), await page.textContent('#remaining')]);
   // наградная
   await page.fill(`tr[data-uid="${E1}"] .m-award`, '50000'); await page.dispatchEvent(`tr[data-uid="${E1}"] .m-award`, 'change'); await page.waitForSelector('.toast.err');
   check('наградная < 100 000 → ошибка', /от 100/.test(await page.textContent('#toast')), await page.textContent('#toast'));
   await page.fill(`tr[data-uid="${E1}"] .m-award`, '300000'); await page.dispatchEvent(`tr[data-uid="${E1}"] .m-award`, 'change');
-  await page.waitForFunction(() => /9\s201\s000/.test(document.getElementById('remaining')?.textContent || ''));
-  check('наградная 300 000 → итого 799 000, остаток 9 201 000', /799\s000/.test(await rowTxt(E1)));
+  await page.waitForFunction(() => /9\s191\s000/.test(document.querySelector('tr[data-uid="500000000000000001"]')?.textContent || ''));
+  check('наградная 300 000 → доля остатка 9 191 000, итого всё так же 10 000 000', /9\s191\s000/.test(await rowTxt(E1)) && /10\s000\s000/.test(await rowTxt(E1)), await rowTxt(E1));
   r = await call('PUT', `/api/lead/week/${WEEK}/manual/${E1}`, L, { ss: 100000 }); check('премия СС не старшему составу → ошибка', r.status === 400);
   r = await call('PUT', `/api/lead/week/${WEEK}/manual/${E2}`, L, { ss: 600000 }); check('премия СС > 500 000 → ошибка', r.status === 400);
   await page.screenshot({ path: SHOTS + 'rep-week.png', fullPage: true });
   // экспорт
   let dlp = page.waitForEvent('download'); await page.click('#csvBtn'); let f = await dlp; const csvPath = SHOTS + 'premii.csv'; await f.saveAs(csvPath);
   const csv = fs.readFileSync(csvPath, 'utf8');
-  check('экспорт CSV: заголовки и сотрудники', csv.startsWith('\ufeffСотрудник;') && /Иван Петров/.test(csv) && /Участие в поставочном мероприятии/.test(csv) && /;499000;/.test(csv));
+  check('экспорт CSV: заголовки и сотрудники', csv.startsWith('\ufeffСотрудник;') && /Иван Петров/.test(csv) && /Участие в поставочном мероприятии/.test(csv) && /;509000;9191000;300000;/.test(csv) && /Доля остатка фонда/.test(csv.split('\n')[0]));
   dlp = page.waitForEvent('download'); await page.click('#xlsxBtn'); f = await dlp; const xPath = SHOTS + 'premii.xlsx'; await f.saveAs(xPath);
   const { execSync } = require('child_process');
   let xl = ''; try { xl = execSync(`python3 -c "import zipfile,sys;z=zipfile.ZipFile('${xPath}');print(z.testzip());x=z.read('xl/worksheets/sheet1.xml').decode();print('Иван Петров' in x, x.count('<row '))"`).toString(); } catch (e) { xl = String(e); }
@@ -145,15 +150,16 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
   await page.fill('.ritem[data-key=pmp] .icom', 'нет бодикамеры'); await page.click('.ritem[data-key=pmp] .i-rej');
   await page.waitForSelector('.ritem.rej[data-key=pmp]');
   const prem = async () => page.textContent('.grid.two .card:nth-child(2)');
-  check('отклонён пункт ПМП → план не выполнен, премия пересчитана (55 000 + 271 500 − 50% = 190 750)', /190\s750/.test(await prem()) && /Не выполнен/.test(await page.textContent('.grid.two .card:first-child')), await prem());
+  check('отклонён пункт ПМП → 385 баллов, минимальный план, база пересчитана (110 000 + 281 500 − 20% = 335 200)', /335\s200/.test(await prem()) && /Минимальный/.test(await page.textContent('.grid.two .card:first-child')) && /385/.test(await page.textContent('.grid.two .card:first-child')), await prem());
+  check('карточка премии: «Доля остатка фонда»', /Доля остатка фонда/.test(await prem()) && !/Дополнительная/.test(await prem()));
   await page.click('.ritem[data-key=pmp] .i-clr'); await page.waitForSelector('.ritem[data-key=pmp]:not(.rej)');
   await page.fill('.ritem[data-key=postavka] .nok', '8'); await page.click('.ritem[data-key=postavka] .i-ok'); await page.waitForSelector('.ritem.acc[data-key=postavka]');
-  check('принято частично 8 из 10 поставок → минимальный план', /Минимальный/.test(await page.textContent('.grid.two .card:first-child')));
+  check('принято частично 8 из 10 поставок → 360 баллов, минимальный план', /Минимальный/.test(await page.textContent('.grid.two .card:first-child')) && /360/.test(await page.textContent('.grid.two .card:first-child')));
   await page.fill('.ritem[data-key=postavka] .nok', '10'); await page.click('.ritem[data-key=postavka] .i-ok'); await page.waitForTimeout(300);
   await page.click('#allOk'); await page.waitForFunction(() => document.querySelectorAll('.ritem.acc').length === document.querySelectorAll('.ritem').length);
   await page.fill('#rf [name=comment]', 'Принято, молодец'); await page.click('#rf [data-st=approved]'); await page.waitForTimeout(500);
   await page.waitForSelector('.card .badge.ok');
-  check('отчёт принят, премия 499 000 + наградная', /Принят/.test(await page.textContent('.card')) && /799\s000/.test(await prem()), await prem());
+  check('отчёт принят, база 509 000, итого из фонда 10 000 000', /Принят/.test(await page.textContent('.card')) && /509\s000/.test(await prem()) && /10\s000\s000/.test(await prem()), await prem());
   await page.selectOption('#pos', 'insp_kom'); await page.waitForTimeout(600); await page.waitForSelector('#pos');
   check('руководство исправляет должность → оклад Инспектора Комендатуры (275 000)', /275\s000/.test(await prem()), await prem());
   await page.selectOption('#pos', 'insp'); await page.waitForTimeout(600);
@@ -188,13 +194,28 @@ const WEEK = mondayMsk(Date.now()), PREV = addD(WEEK, -7);
 
   // ---------- 8. таблицы выплат (главный администратор) ----------
   await as(A, '/lead/config'); await page.waitForSelector('#tPos');
-  check('таблицы: 7 должностей, план 6 строк, 43 пункта', (await page.$$('#tPos tr')).length === 8 && (await page.$$('#tPlan tr[data-key]')).length === 6 && (await page.$$('#tItems tr[data-key]')).length === 43);
-  check('план: «мероприятия внутри ВС РФ» — МП, тренировка, профилактика (без ГМП)', /Организовать МП, Проведение тренировки для военнослужащих, Организация профилактического мероприятия/.test(await page.textContent('#tPlan tr[data-key=event]')) && !/ГМП/.test(await page.textContent('#tPlan tr[data-key=event] summary')));
-  await page.fill('#tItems tr[data-key=postavka] [data-f=pay]', '13500'); await page.click('[data-save=items]'); await page.waitForTimeout(600);
-  r = await call('GET', '/api/lead/week', L); check('выплата за поставку 13 500 → база 509 000', r.d.rows.find(x => x.user_id === E1).base === 509000, r.d.rows.find(x => x.user_id === E1));
+  check('таблицы: 7 должностей, план 2 строки (баллы, действия ГУ ВП), 43 пункта', (await page.$$('#tPos tr')).length === 8 && (await page.$$eval('#tPlan tr[data-key]', t => t.map(x => x.dataset.key))).join() === 'points,gu' && (await page.$$('#tItems tr[data-key]')).length === 43);
+  check('план: пороги 200/400 баллов и 5/10 действий', (await page.inputValue('#tPlan tr[data-key=points] [data-f=min]')) === '200' && (await page.inputValue('#tPlan tr[data-key=points] [data-f=normal]')) === '400' && (await page.inputValue('#tPlan tr[data-key=gu] [data-f=min]')) === '5' && (await page.inputValue('#tPlan tr[data-key=gu] [data-f=normal]')) === '10');
+  check('правила: без лимитов доп. премии и на человека', !(await page.$('#tRules [data-f=add_cap]')) && !(await page.$('#tRules [data-f=person_cap]')));
+  await page.fill('#tPlan tr[data-key=points] [data-f=normal]', '500'); await page.click('[data-save=plan]'); await page.waitForTimeout(600);
+  r = await call('GET', '/api/lead/week', L); check('порог нормального плана 500 баллов → минимальный, вычет 20%', r.d.rows.find(x => x.user_id === E1).plan.level === 'min' && r.d.rows.find(x => x.user_id === E1).deduct_pct === 20, r.d.rows.find(x => x.user_id === E1).plan);
+  await page.click('[data-reset=plan]'); await page.waitForTimeout(600);
+  r = await call('GET', '/api/lead/week', L); check('«Вернуть значения приказа» (план) → снова нормальный', r.d.rows.find(x => x.user_id === E1).plan.level === 'normal');
+  check('баллы за проц. действия по умолчанию — 10', (await page.inputValue('#tItems tr[data-key=proc] [data-f=wk]')) === '10');
+  await page.fill('#tItems tr[data-key=postavka] [data-f=pay]', '13500'); await page.fill('#tItems tr[data-key=proc] [data-f=wk]', '15'); await page.click('[data-save=items]'); await page.waitForTimeout(600);
+  r = await call('GET', '/api/lead/week', L); check('выплата за поставку 13 500 → база 519 000', r.d.rows.find(x => x.user_id === E1).base === 519000, r.d.rows.find(x => x.user_id === E1));
+  check('баллы проц. действий 15 → баллы плана пересчитаны на лету (410), сохранённые баллы отчёта не переписаны (400)', r.d.rows.find(x => x.user_id === E1).plan_points === 410 && r.d.rows.find(x => x.user_id === E1).points === 400, r.d.rows.find(x => x.user_id === E1));
+  r = await call('GET', '/api/report-config'); check('report-config отдаёт новые баллы', r.d.items.find(i => i.key === 'proc').wk === 15);
+  for (const nm of ['сайт бланков', 'форма на сайте ГУ ВП']) {
+    if (nm === 'форма на сайте ГУ ВП') await as(t1, '/reports'); else await page.goto(OFF + 'otchet.html');
+    await page.waitForFunction(() => window.PROMO && window.PROMO.acts.find(a => a.key === 'proc').wk === 15, null, { timeout: 15000 }).catch(() => {});
+    check(nm + ': баллы проц. действий берутся из настроек (15) и кэшируются', await page.evaluate(() => !!window.PROMO && window.PROMO.acts.find(a => a.key === 'proc').wk === 15 && JSON.parse(localStorage.getItem('vp_report_cfg') || '{"items":[]}').items.some(i => i.key === 'proc' && i.wk === 15)));
+  }
+  await as(A, '/lead/config'); await page.waitForSelector('#tPos');
   await page.click('[data-reset=items]'); await page.waitForTimeout(600);
-  r = await call('GET', '/api/lead/week', L); check('«Вернуть значения приказа» → снова 499 000', r.d.rows.find(x => x.user_id === E1).base === 499000);
-  r = await call('PUT', '/api/lead/config', A, { plan: [{ key: 'x', name: 'X', min: 1, normal: 2, items: ['nope'] }] }); check('план с несуществующим пунктом → ошибка', r.status === 400);
+  r = await call('GET', '/api/lead/week', L); check('«Вернуть значения приказа» → снова 509 000', r.d.rows.find(x => x.user_id === E1).base === 509000);
+  r = await call('PUT', '/api/lead/config', A, { plan: [{ key: 'points', name: 'Баллы', min: 200, normal: 400 }, { key: 'gu', name: 'X', min: 1, normal: 2, items: ['nope'] }] }); check('план с несуществующим пунктом → ошибка', r.status === 400);
+  r = await call('PUT', '/api/lead/config', A, { plan: [{ key: 'postavka', name: 'X', min: 1, normal: 2, items: ['postavka'] }] }); check('старый формат плана без строки ГУ ВП → ошибка', r.status === 400);
   // админ назначает роль на странице пользователя
   await as(A, '/admin/user/' + E3); await page.waitForSelector('#leader');
   await page.check('#leader'); await page.waitForTimeout(600);

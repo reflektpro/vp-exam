@@ -2768,15 +2768,15 @@ async function adminStats(env) {
 // ---------- Отчёты и премии (единая экосистема с сайтом отчётов vp-raport-offline) ----------
 // Неделя — понедельник 'YYYY-MM-DD'. Срок подачи — воскресенье 19:00 МСК (UTC+3, без перехода на летнее время).
 // Конфигурация (prem_config): items — пункты отчёта и выплата за 1 действие (Таблицы 1–2 приказа № 01_10),
-// positions — оклады по должностям (Таблица «Все выплаты»), plan — строки минимального/нормального плана
-// и какие пункты в них засчитываются, rules — проценты вычета, лимиты, сроки.
+// positions — оклады по должностям (Таблица «Все выплаты»), plan — пороги минимального/нормального плана
+// (две строки: баллы еженедельного отчёта и действия ГУ ВП с набором пунктов), rules — проценты вычета, лимиты, сроки.
 const PREM_DEFAULT = {
   items: [
     // Основная отчётность (wk — баллы еженедельного отчёта, 'n' — баллы вписываются вручную)
     { key: 'postavka', name: 'Участие в поставочном мероприятии', group: 'main', pay: 12500, pay_name: 'Участие в поставочном мероприятии', wk: 20 },
     { key: 'otbitie', name: 'Участие в отбитии гос. складов', group: 'main', pay: 11500, pay_name: 'Участие в отбитии гос. складов', wk: 20 },
     { key: 'training', name: 'Проведение тренировки для военнослужащих', group: 'main', pay: 9500, pay_name: 'Проведение тренировки для военнослужащих', wk: 3 },
-    { key: 'proc', name: 'Передать проц. действия правоохранительным органам', group: 'main', pay: 9500, pay_name: 'Передать проц. действия', wk: 5 },
+    { key: 'proc', name: 'Передать проц. действия правоохранительным органам', group: 'main', pay: 9500, pay_name: 'Передать проц. действия', wk: 10 },
     { key: 'event6', name: 'Организовать МП', group: 'main', pay: 12000, pay_name: 'Организовать МП', wk: 'n' },
     { key: 'gmp_org', name: 'Организовать ГМП', group: 'main', pay: 50000, pay_name: 'Организовать ГМП', wk: 'n' },
     { key: 'pmp', name: 'Проведение ПМП', group: 'main', pay: 1500, pay_name: 'Проведение ПМП', wk: 3 },
@@ -2828,21 +2828,16 @@ const PREM_DEFAULT = {
     { key: 'insp', name: 'Инспектор ВП', zero: 55000, min: 110000, avg: 220000, max: 550000 },
     { key: 'stazh', name: 'Стажёр ВП', zero: 35000, min: 70000, avg: 140000, max: 350000 },
   ],
+  // Уровень плана — только два условия: баллы еженедельного отчёта (засчитанные проверяющим) и количество действий ГУ ВП.
   plan: [
-    { key: 'postavka', name: 'Участие в поставочных мероприятиях', min: 6, normal: 10, items: ['postavka'] },
-    { key: 'otbitie', name: 'Участие в отбитиях гос. складов', min: 2, normal: 3, items: ['otbitie'] },
-    { key: 'proc', name: 'Передача проц. действий правоохранительным органам', min: 1, normal: 2, items: ['proc'] },
-    { key: 'event', name: 'Мероприятия внутри ВС РФ (МП, тренировка, профилактическое)', min: 1, normal: 2, items: ['event6', 'training', 'prof'] },
-    { key: 'pmp', name: 'Реанимации военнослужащих (ПМП)', min: 3, normal: 5, items: ['pmp'] },
-    { key: 'gu', name: 'Действия ГУ ВП (вся «Работа ГУ ВП» + проц. действия + тренировки)', min: 5, normal: 8,
+    { key: 'points', name: 'Баллы еженедельного отчёта', min: 200, normal: 400, items: [] },
+    { key: 'gu', name: 'Действия ГУ ВП (вся «Работа ГУ ВП» + проц. действия + тренировки)', min: 5, normal: 10,
       items: ['city', 'reattest', 'vzysk', 'vygovor', 'prof', 'prizyv', 'guardhouse', 'convoy', 'complaint', 'otrab', 'obzhal', 'docs', 'inspect', 'lecture_vp', 'exam_vp', 'soch', 'proc', 'training'] },
   ],
   rules: {
     ded_none: 50, ded_min: 20,           // вычет из выплат за действия, %: отчёт без минимального плана / минимальный план
-    add_cap: 400000,                     // дополнительная премия — не больше на человека
     award_min: 100000, award_max: 700000, // наградная премия из фонда
     ss_max: 500000,                      // премия старшего состава
-    person_cap: 2000000,                 // оклад + премия + дополнительная + наградная (из фонда)
     thanks_points: 50,                   // 1 благодарность = 50 баллов
     fund_min: 8000000, fund_max: 20000000,
     ss_contrib_min: 150000,              // еженедельный взнос СС в бюджет ГУ ВП
@@ -2880,6 +2875,7 @@ async function premConfig(env) {
   for (const r of results) {
     const v = parseJ(r.v, null); if (!v || !PREM_CFG_KEYS.includes(r.k)) continue;
     if (r.k === 'rules') cfg.rules = { ...PREM_DEFAULT.rules, ...v };
+    else if (r.k === 'plan') { if (planValid(v)) cfg.plan = v; } // старый формат (строки поставок, отбитий и т. д.) больше не действует
     else if (r.k === 'items' && Array.isArray(v)) {
       const have = new Set(v.map(i => i.key));
       cfg.items = v.concat(PREM_DEFAULT.items.filter(i => !have.has(i.key)));
@@ -2887,6 +2883,7 @@ async function premConfig(env) {
   }
   return cfg;
 }
+function planValid(v) { return Array.isArray(v) && v.length === 2 && v[0] && v[0].key === 'points' && v[1] && v[1].key === 'gu' && Array.isArray(v[1].items) && v[1].items.length > 0; }
 function money(v, name, max = 100000000) { return int(v === '' || v == null ? 0 : Math.round(Number(v)), 0, max, name); }
 function premConfigInput(k, v) {
   if (k === 'items') {
@@ -2914,15 +2911,18 @@ function premConfigInput(k, v) {
       return o;
     });
   }
-  if (k === 'plan') {
-    if (!Array.isArray(v) || v.length > 30) throw new HttpError(400, 'План: нужен список строк');
-    const seen = new Set();
-    return v.map((x, i) => {
-      const key = str(x.key, 40, { required: true, name: `строка плана ${i + 1}: ключ` });
-      if (!/^[a-z0-9_]{1,40}$/.test(key) || seen.has(key)) throw new HttpError(400, `Строка плана ${i + 1}: ключ — латиница/цифры/_, без повторов`); seen.add(key);
-      const items = (Array.isArray(x.items) ? x.items : String(x.items || '').split(',')).map(s => String(s).trim()).filter(Boolean);
-      if (!items.length) throw new HttpError(400, `Строка плана «${x.name || key}»: укажите пункты`);
-      const o = { key, name: str(x.name, 200, { required: true, name: `строка плана ${key}: название` }), min: int(x.min, 0, 1000, 'минимальный план'), normal: int(x.normal, 0, 1000, 'нормальный план'), items: [...new Set(items)] };
+  if (k === 'plan') { // ровно две строки: баллы отчёта (points) и действия ГУ ВП (gu, с набором пунктов)
+    if (!Array.isArray(v)) throw new HttpError(400, 'План: нужен список строк');
+    const by = new Map(v.map(x => [x && x.key, x]));
+    if (!by.has('gu')) throw new HttpError(400, 'План: нужна строка «Действия ГУ ВП» (gu) с пунктами');
+    return PREM_DEFAULT.plan.map(d => {
+      const x = by.get(d.key) || d;
+      const o = { key: d.key, name: str(x.name ?? d.name, 200, { required: true, name: `строка плана ${d.key}: название` }),
+        min: int(x.min ?? d.min, 0, d.key === 'points' ? 100000 : 1000, 'минимальный план'), normal: int(x.normal ?? d.normal, 0, d.key === 'points' ? 100000 : 1000, 'нормальный план'), items: [] };
+      if (d.key === 'gu') {
+        o.items = [...new Set((Array.isArray(x.items) ? x.items : String(x.items || '').split(',')).map(s => String(s).trim()).filter(Boolean))];
+        if (!o.items.length) throw new HttpError(400, `Строка плана «${o.name}»: укажите пункты`);
+      }
       if (o.normal < o.min) throw new HttpError(400, `Строка плана «${o.name}»: нормальный план не может быть меньше минимального`);
       return o;
     });
@@ -2930,7 +2930,7 @@ function premConfigInput(k, v) {
   if (k === 'rules') {
     const d = PREM_DEFAULT.rules, o = {};
     o.ded_none = int(v.ded_none ?? d.ded_none, 0, 100, 'вычет без плана, %'); o.ded_min = int(v.ded_min ?? d.ded_min, 0, 100, 'вычет при минимальном плане, %');
-    for (const f of ['add_cap', 'award_min', 'award_max', 'ss_max', 'person_cap', 'fund_min', 'fund_max', 'ss_contrib_min']) o[f] = money(v[f] ?? d[f], f, 1000000000);
+    for (const f of ['award_min', 'award_max', 'ss_max', 'fund_min', 'fund_max', 'ss_contrib_min']) o[f] = money(v[f] ?? d[f], f, 1000000000);
     o.thanks_points = int(v.thanks_points ?? d.thanks_points, 1, 10000, 'баллов за благодарность');
     o.deadline_dow = int(v.deadline_dow ?? d.deadline_dow, 0, 6, 'день срока'); o.deadline_hour = int(v.deadline_hour ?? d.deadline_hour, 0, 23, 'час срока');
     if (o.award_min > o.award_max) throw new HttpError(400, 'Наградная премия: минимум больше максимума');
@@ -2960,20 +2960,41 @@ function premCounts(items, review) {
   }
   return c;
 }
-function premPlan(cfg, counts) {
-  const lines = cfg.plan.map(l => { const got = l.items.reduce((s, k) => s + (counts[k] || 0), 0); return { key: l.key, name: l.name, got, min: l.min, normal: l.normal, ok_min: got >= l.min, ok_normal: got >= l.normal }; });
+// Баллы отчёта, засчитанные проверяющим: те же баллы еженедельного отчёта (основная отчётность, wk; 'n' — вписанные вручную),
+// но по принятым количествам — отклонённые пункты не идут, n_ok уменьшает. Без отметок проверки = баллы отчёта (reports.points).
+function premPoints(cfg, items, review) {
+  const wk = new Map(cfg.items.filter(i => i.group === 'main').map(i => [i.key, i.wk]));
+  let s = 0;
+  for (const it of items || []) {
+    if (it.custom) continue;
+    const w = wk.get(it.key); if (w === undefined) continue;
+    const rv = (review || {})[it.key] || {};
+    if (rv.status === 'rejected') continue;
+    const n = rv.n_ok != null ? Math.min(rv.n_ok, it.n) : it.n;
+    if (w === 'n') { if (n > 0) s += it.vp || 0; } else if (typeof w === 'number') s += w * n;
+  }
+  return s;
+}
+function pointsFromCounts(cfg, counts) { // запасной вариант без пунктов отчёта: только пункты с фиксированными баллами
+  return cfg.items.filter(i => i.group === 'main' && typeof i.wk === 'number').reduce((s, i) => s + i.wk * ((counts || {})[i.key] || 0), 0);
+}
+// Уровень плана: нормальный — обе строки (баллы отчёта и действия ГУ ВП) ≥ нормального порога, минимальный — обе ≥ минимального.
+function premPlan(cfg, counts, points) {
+  const pts = points != null ? points : pointsFromCounts(cfg, counts);
+  const lines = cfg.plan.map(l => { const got = l.key === 'points' ? pts : (l.items || []).reduce((s, k) => s + ((counts || {})[k] || 0), 0); return { key: l.key, name: l.name, got, min: l.min, normal: l.normal, ok_min: got >= l.min, ok_normal: got >= l.normal }; });
   const level = lines.every(l => l.ok_normal) ? 'normal' : lines.every(l => l.ok_min) ? 'min' : 'none';
   return { level, lines, missing_min: lines.filter(l => !l.ok_min).map(l => ({ key: l.key, name: l.name, need: l.min - l.got })), missing_normal: lines.filter(l => !l.ok_normal).map(l => ({ key: l.key, name: l.name, need: l.normal - l.got })) };
 }
-// Базовая премия одного сотрудника: оклад по уровню плана + выплаты за действия − вычет, не больше максимальной выплаты должности.
+// Базовая премия одного сотрудника: оклад по уровню плана + выплаты за действия − вычет. Потолок должности её больше не режет.
 function premBase(cfg, p) {
-  const r = { eligible: false, reason: '', plan: null, actions: 0, deduct_pct: 0, deduction: 0, oklad: 0, oklad_tier: '', gross: 0, base: 0, excess: 0, max: 0 };
+  const r = { eligible: false, reason: '', plan: null, plan_points: 0, actions: 0, deduct_pct: 0, deduction: 0, oklad: 0, oklad_tier: '', gross: 0, base: 0, excess: 0, max: 0 };
   if (!p.report) { r.reason = 'нет отчёта'; return r; }
   if (p.late) { r.reason = 'отчёт после срока'; return r; }
   if (p.status === 'rejected') { r.reason = 'отчёт отклонён'; return r; }
   const pos = cfg.positions.find(x => x.key === p.position);
   const counts = p.counts || {};
-  r.plan = premPlan(cfg, counts);
+  r.plan_points = p.points != null ? p.points : p.items ? premPoints(cfg, p.items, p.review) : pointsFromCounts(cfg, counts);
+  r.plan = premPlan(cfg, counts, r.plan_points);
   const pay = new Map(cfg.items.map(i => [i.key, i.pay || 0]));
   r.actions = Object.entries(counts).reduce((s, [k, n]) => s + (pay.get(k) || 0) * n, 0);
   if (!pos) { r.reason = 'должность не указана'; return r; }
@@ -2984,8 +3005,7 @@ function premBase(cfg, p) {
   else { r.oklad_tier = 'zero'; r.oklad = pos.zero; r.deduct_pct = R.ded_none; }
   r.deduction = Math.round(r.actions * r.deduct_pct / 100);
   r.gross = r.oklad + r.actions - r.deduction;
-  r.base = Math.min(r.gross, pos.max);
-  r.excess = Math.max(0, r.gross - pos.max);
+  r.base = r.gross;
   r.eligible = true;
   return r;
 }
@@ -2997,34 +3017,31 @@ function premShare(want, available) {
   if (available <= 0) return { paid: want.map(() => 0), short: true };
   return { paid: want.map(x => Math.floor(available * x / total)), short: true };
 }
-// people: [{user_id, name, position, report:boolean, late, status, counts, award, ss, award_budget, senior}]
-// Порядок: базовая премия (оклад + действия) платится всегда → дополнительная (превышение над максимальной выплатой,
-// ≤ add_cap, при нехватке — пропорционально) → наградная из фонда → премия СС. Надбавки, на которые не хватает фонда,
-// урезаются (пропорционально внутри своей очереди). Лимит на человека person_cap: оклад + премия + доп. + наградная.
-// Премия СС и наградная из бюджета ГУ ВП в лимит не входят. total (= total_fund) — итог из фонда; award_budget — отдельно (бюджет ГУ ВП).
+// people: [{user_id, name, position, report:boolean, late, status, counts, points, award, ss, award_budget, senior}]
+// Порядок: базовая премия (оклад + действия − вычет) → наградная из фонда → премия СС (вручную, при нехватке — пропорционально
+// внутри своей очереди) → весь остаток фонда делится между всеми с премией пропорционально их базовой премии (поле add — «доля остатка»),
+// без потолков. Рубли — вниз, копеечный остаток остаётся в remaining. Если фонда не хватает даже на базовые премии — база
+// выплачивается полностью, надбавок и доли остатка нет, remaining < 0. award_budget — отдельно (бюджет ГУ ВП, не из фонда).
 function computePremiums(cfg, fund, people) {
   const R = cfg.rules;
   const rows = people.map(p => ({ user_id: p.user_id, name: p.name, position: p.position, ...premBase(cfg, p), add: 0, award: 0, ss: 0, award_budget: 0, add_want: 0, award_want: 0, ss_want: 0 }));
   const base = rows.reduce((s, r) => s + r.base, 0);
   let left = (fund || 0) - base;
   const fundShort = left < 0;
-  const room = (r) => Math.max(0, R.person_cap - r.base - r.add - r.award);
-  // дополнительная
-  rows.forEach(r => { r.add_want = r.eligible ? Math.min(r.excess, R.add_cap, room(r)) : 0; });
-  let sh = premShare(rows.map(r => r.add_want), left); rows.forEach((r, i) => { r.add = sh.paid[i]; }); left -= rows.reduce((s, r) => s + r.add, 0);
-  const addShort = sh.short;
   // наградная (из фонда)
-  rows.forEach((r, i) => { r.award_want = r.eligible ? Math.min(people[i].award || 0, room(r)) : 0; });
-  sh = premShare(rows.map(r => r.award_want), left); rows.forEach((r, i) => { r.award = sh.paid[i]; }); left -= rows.reduce((s, r) => s + r.award, 0);
+  rows.forEach((r, i) => { r.award_want = r.eligible ? Math.max(0, people[i].award || 0) : 0; });
+  let sh = premShare(rows.map(r => r.award_want), left); rows.forEach((r, i) => { r.award = sh.paid[i]; }); left -= rows.reduce((s, r) => s + r.award, 0);
   const awardShort = sh.short;
-  // премия СС (вне лимита на человека)
+  // премия СС
   rows.forEach((r, i) => { r.ss_want = people[i].senior && r.eligible ? Math.min(people[i].ss || 0, R.ss_max) : 0; });
   sh = premShare(rows.map(r => r.ss_want), left); rows.forEach((r, i) => { r.ss = sh.paid[i]; }); left -= rows.reduce((s, r) => s + r.ss, 0);
   const ssShort = sh.short;
-  // «Итого» — только из премиального фонда; наградная из бюджета ГУ ВП идёт из другого источника и считается отдельно
-  rows.forEach((r, i) => { r.award_budget = people[i].award_budget || 0; r.total_fund = r.base + r.add + r.award + r.ss; r.total = r.total_fund; });
+  // доля остатка фонда — пропорционально базовой премии, весь остаток
+  const w = rows.map(r => (r.eligible && r.base > 0 ? r.base : 0)); const wt = w.reduce((s, x) => s + x, 0);
+  if (left > 0 && wt > 0) { const pool = left; rows.forEach((r, i) => { r.add = Math.floor(pool * w[i] / wt); }); left -= rows.reduce((s, r) => s + r.add, 0); }
+  rows.forEach((r, i) => { r.add_want = r.add; r.award_budget = people[i].award_budget || 0; r.total_fund = r.base + r.add + r.award + r.ss; r.total = r.total_fund; });
   const paid = rows.reduce((s, r) => s + r.total_fund, 0);
-  return { rows, fund: fund || 0, base_total: base, paid_from_fund: paid, remaining: (fund || 0) - paid, fund_short: fundShort, add_short: addShort, award_short: awardShort, ss_short: ssShort,
+  return { rows, fund: fund || 0, base_total: base, share_total: rows.reduce((s, r) => s + r.add, 0), paid_from_fund: paid, remaining: (fund || 0) - paid, fund_short: fundShort, add_short: false, award_short: awardShort, ss_short: ssShort,
     award_budget_total: rows.reduce((s, r) => s + r.award_budget, 0) };
 }
 function weeklyPoints(cfg, items) {
@@ -3143,7 +3160,7 @@ async function reportPublic(env, cfg, row, mine) {
   const o = { id: row.id, user_id: row.user_id, week: row.week, deadline: weekDeadline(row.week, cfg.rules), position: row.position, position_name: pos ? pos.name : row.position,
     header: d.header || {}, items: (d.items || []).map(i => ({ ...i, review: review[i.key] || null })), points: row.points, status: row.status, late: !!row.late, edited_after_deadline: !!row.edited_after_deadline,
     first_submitted_at: row.first_submitted_at, submitted_at: row.submitted_at, version: row.version, comment: row.comment || '', reviewed_at: row.reviewed_at, reviewed_by: row.reviewed_by,
-    plan: premPlan(cfg, counts) };
+    plan: premPlan(cfg, counts, premPoints(cfg, d.items, review)) };
   const to = reportToInfo(row.addressee || (d.header && d.header.addressee) || 'gu');
   Object.assign(o, { addressee: to.key, addressee_name: to.name, addressee_to: to.to });
   return o;
@@ -3180,7 +3197,7 @@ async function weekData(env, week) {
   for (const u of staff.results) people.set(u.id, { user_id: u.id, name: nm(u), rank: u.rank || '', static_id: u.static_id || '', staff: 1, senior: !!u.senior, position: u.staff_position || '', report: false, row: null });
   for (const r of rep.results) {
     const d = parseJ(r.data, {}); const p = people.get(r.user_id) || { user_id: r.user_id, name: nm(r), rank: r.rank || '', static_id: r.static_id || '', staff: r.staff ? 1 : 0, senior: !!r.senior };
-    Object.assign(p, { report: true, row: r, position: r.position, late: !!r.late, status: r.status, counts: premCounts(d.items, parseJ(r.item_review, {})), items: d.items || [], header: d.header || {} });
+    Object.assign(p, { report: true, row: r, position: r.position, late: !!r.late, status: r.status, counts: premCounts(d.items, parseJ(r.item_review, {})), points: premPoints(cfg, d.items, parseJ(r.item_review, {})), items: d.items || [], header: d.header || {} });
     p.name = r.ic_name || (d.header && d.header.name) || p.name; if (!p.static_id && d.header) p.static_id = d.header.static_id || ''; if (!p.rank && d.header) p.rank = d.header.rank || '';
     people.set(r.user_id, p);
   }
@@ -3587,10 +3604,10 @@ async function personFile(env, viewer, id) {
   const reports = [];
   const now = Date.now();
   for (const [i, r] of reps.entries()) {
-    const d = parseJ(r.data, {}); const c = premCounts(d.items, parseJ(r.item_review, {}));
+    const d = parseJ(r.data, {}); const rvw = parseJ(r.item_review, {}); const c = premCounts(d.items, rvw);
     if (r.status === 'approved') thanks += c.thanks || 0;
     const o = { week: r.week, status: r.status, late: !!r.late, points: r.points, submitted_at: r.first_submitted_at, position_name: (cfg.positions.find(p => p.key === r.position) || {}).name || '',
-      thanks: r.status === 'approved' ? (c.thanks || 0) : 0, plan: r.status === 'rejected' ? null : premPlan(cfg, c).level, plan_final: r.status === 'approved' };
+      thanks: r.status === 'approved' ? (c.thanks || 0) : 0, plan: r.status === 'rejected' ? null : premPlan(cfg, c, premPoints(cfg, d.items, rvw)).level, plan_final: r.status === 'approved' };
     // премия — только если её видно и в «Премировании»: в срок, принят, срок недели прошёл, все отчёты недели проверены
     if (money && i < 26 && r.status === 'approved' && !r.late && now > weekDeadline(r.week, cfg.rules)) {
       const w = await weekData(env, r.week);

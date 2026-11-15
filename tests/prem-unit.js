@@ -1,7 +1,7 @@
 // Юнит-тест движка премий (приказ № 01_10 + уточнения руководства): node tests/prem-unit.js
 const fs = require('fs'), path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/export default \{[\s\S]*?\n\};\n/, '').replace(/^import .*$/gm, '');
-const W = new Function(src + '\nreturn { PREM_DEFAULT, computePremiums, premBase, premPlan, premCounts, premShare, weeklyPoints, reportInput, weekOf, weekDeadline, positionKey, strikeLabel, premConfigInput, reportToDefault, REPORT_TO };')();
+const W = new Function(src + '\nreturn { PREM_DEFAULT, computePremiums, premBase, premPlan, premPoints, premCounts, premShare, weeklyPoints, reportInput, weekOf, weekDeadline, positionKey, strikeLabel, premConfigInput, reportToDefault, REPORT_TO };')();
 let fail = 0, pass = 0; const ok = (n, c, x) => { if (c) { pass++; console.log('PASS', n); } else { fail++; console.log('FAIL', n, x !== undefined ? JSON.stringify(x).slice(0, 500) : ''); } };
 const cfg = JSON.parse(JSON.stringify(W.PREM_DEFAULT));
 const rub = n => n.toLocaleString('ru-RU') + ' ₽';
@@ -10,69 +10,100 @@ const rub = n => n.toLocaleString('ru-RU') + ' ₽';
 ok('39 оплачиваемых пунктов (Таблицы 1–2)', cfg.items.filter(i => i.pay > 0).length === 39);
 ok('7 должностей, максимальная выплата = 2,5 × средний оклад', cfg.positions.length === 7 && cfg.positions.every(p => p.max === p.avg * 2.5 && p.avg === p.min * 2 && p.min === p.zero * 2));
 ok('Инспектор ВП: 55 000 / 110 000 / 220 000 / 550 000', JSON.stringify(cfg.positions.find(p => p.key === 'insp')) === JSON.stringify({ key: 'insp', name: 'Инспектор ВП', zero: 55000, min: 110000, avg: 220000, max: 550000 }));
-ok('ГМП не засчитывается в «мероприятия внутри ВС РФ»', !cfg.plan.find(l => l.key === 'event').items.includes('gmp_org'));
-ok('действия ГУ ВП включают проц. действия и тренировки', ['proc', 'training', 'soch', 'prof'].every(k => cfg.plan.find(l => l.key === 'gu').items.includes(k)));
+ok('план: ровно две строки — баллы отчёта и действия ГУ ВП; пороги 200/400 и 5/10', cfg.plan.map(l => `${l.key}:${l.min}/${l.normal}`).join() === 'points:200/400,gu:5/10', cfg.plan);
+ok('действия ГУ ВП включают проц. действия и тренировки (тот же набор)', ['proc', 'training', 'soch', 'prof', 'city', 'docs'].every(k => cfg.plan.find(l => l.key === 'gu').items.includes(k)));
+ok('лимитов доп. премии и на человека больше нет', cfg.rules.add_cap === undefined && cfg.rules.person_cap === undefined);
 
-// --- примеры ---
-const NORMAL = { postavka: 10, otbitie: 3, proc: 2, training: 1, event6: 1, pmp: 5, city: 5 };
-const MIN = { postavka: 6, otbitie: 2, proc: 1, training: 1, pmp: 3, city: 3 };
+// --- уровень плана: только баллы отчёта + действия ГУ ВП ---
 const P = (o) => ({ user_id: o.id || 'u', name: o.name || o.id, report: true, late: false, status: 'submitted', position: 'insp', counts: {}, award: 0, ss: 0, award_budget: 0, senior: false, ...o });
+const lvl = (counts, points) => W.premPlan(cfg, counts, points).level;
+ok('400 баллов и 10 действий → нормальный', lvl({ city: 10 }, 400) === 'normal');
+ok('399 баллов и 10 действий → минимальный', lvl({ city: 10 }, 399) === 'min');
+ok('400 баллов и 9 действий → минимальный', lvl({ city: 9 }, 400) === 'min');
+ok('200 баллов и 5 действий → минимальный', lvl({ city: 3, docs: 2 }, 200) === 'min');
+ok('199 баллов при 100 действиях → нет плана', lvl({ city: 100 }, 199) === 'none');
+ok('1000 баллов при 4 действиях → нет плана', lvl({ city: 4 }, 1000) === 'none');
+ok('поставки/отбития/ПМП/мероприятия больше не нужны', lvl({ proc: 2, training: 3, docs: 5 }, 450) === 'normal');
+ok('проц. действия и тренировки идут в действия ГУ ВП', W.premPlan(cfg, { proc: 2, training: 3, prof: 1, city: 1 }, 0).lines.find(l => l.key === 'gu').got === 7);
+let pl = W.premPlan(cfg, { city: 6 }, 260);
+ok('видно, чего не хватает до нормального', pl.level === 'min' && pl.missing_normal.map(x => `${x.key}:${x.need}`).join() === 'points:140,gu:4', pl.missing_normal);
+// пороги из настроек
+const cfg2 = JSON.parse(JSON.stringify(cfg)); cfg2.plan = W.premConfigInput('plan', [{ key: 'points', name: 'Баллы', min: 100, normal: 300 }, { key: 'gu', name: 'ГУ', min: 2, normal: 4, items: ['city'] }]);
+ok('пороги настраиваются: 100/300 и 2/4, набор пунктов ГУ — тоже', W.premPlan(cfg2, { city: 4, docs: 50 }, 300).level === 'normal' && W.premPlan(cfg2, { docs: 50 }, 300).level === 'none' && W.premPlan(cfg2, { city: 2 }, 100).level === 'min');
+let threw = ''; try { W.premConfigInput('plan', [{ key: 'points', name: 'Баллы', min: 500, normal: 300 }, { key: 'gu', name: 'ГУ', min: 5, normal: 10, items: ['city'] }]); } catch (e) { threw = e.message; }
+ok('настройки плана: нормальный не меньше минимального', /не может быть меньше/.test(threw));
+ok('настройки плана: лишние старые строки отбрасываются', W.premConfigInput('plan', [{ key: 'postavka', name: 'x', min: 6, normal: 10, items: ['postavka'] }, { key: 'gu', name: 'ГУ', min: 5, normal: 10, items: ['city'] }]).map(l => l.key).join() === 'points,gu');
 
+// --- баллы плана = баллы еженедельного отчёта по принятым количествам ---
+const ITEMS = [{ key: 'postavka', n: 10 }, { key: 'otbitie', n: 5 }, { key: 'event6', n: 1, vp: 30 }, { key: 'thanks', n: 4 }, { key: 'city', n: 6 }];
+ok('без проверки: баллы плана = баллы отчёта (благодарности и ГУ ВП в баллы не входят)', W.premPoints(cfg, ITEMS, {}) === W.weeklyPoints(cfg, ITEMS) && W.weeklyPoints(cfg, ITEMS) === 330);
+ok('отклонённый пункт и уменьшенное количество снижают баллы', W.premPoints(cfg, ITEMS, { otbitie: { status: 'rejected' }, postavka: { status: 'ok', n_ok: 8 } }) === 190);
+ok('МП с баллами вручную: отклонён — 0', W.premPoints(cfg, ITEMS, { event6: { status: 'rejected' } }) === 300);
+
+// --- примеры базовой премии ---
+const NORMAL = { postavka: 10, otbitie: 10, city: 6, docs: 4 };      // 400 баллов, 10 действий ГУ
+const MIN = { postavka: 10, city: 5 };                                // 200 баллов, 5 действий ГУ
 let r = W.premBase(cfg, P({ counts: NORMAL }));
-ok('нормальный план → уровень normal', r.plan.level === 'normal', r.plan);
-ok('нормальный план: действия 232 500, оклад средний 220 000, без вычета → 452 500', r.actions === 232500 && r.oklad === 220000 && r.deduction === 0 && r.base === 452500, r);
+ok('нормальный план: 400 баллов, 10 действий → средний оклад 220 000 + действия 288 000, без вычета = 508 000', r.plan.level === 'normal' && r.plan_points === 400 && r.oklad === 220000 && r.actions === 288000 && r.deduction === 0 && r.base === 508000, r);
 console.log(`  Пример 1 (Инспектор ВП, нормальный план): оклад ${rub(r.oklad)} + действия ${rub(r.actions)} = ${rub(r.base)}`);
-
 r = W.premBase(cfg, P({ counts: MIN }));
-ok('минимальный план → min', r.plan.level === 'min' && r.plan.missing_normal.length > 0, r.plan);
-ok('минимальный план: 110 000 + 136 500 − 20% (27 300) = 219 200', r.oklad === 110000 && r.actions === 136500 && r.deduction === 27300 && r.base === 219200, r);
+ok('минимальный план: 110 000 + 150 000 − 20% (30 000) = 230 000', r.plan.level === 'min' && r.oklad === 110000 && r.actions === 150000 && r.deduction === 30000 && r.base === 230000, r);
 console.log(`  Пример 2 (Инспектор ВП, минимальный план): ${rub(r.oklad)} + ${rub(r.actions)} − 20% ${rub(r.deduction)} = ${rub(r.base)}`);
-
 r = W.premBase(cfg, P({ counts: { postavka: 2, thanks: 15 } }));
-ok('без минимального плана: нулевой оклад 55 000 + (25 000 + 15×2 500) − 50% = 86 250', r.plan.level === 'none' && r.oklad === 55000 && r.actions === 62500 && r.deduction === 31250 && r.base === 86250, r);
+ok('без плана: нулевой оклад 55 000 + (25 000 + 15×2 500) − 50% = 86 250', r.plan.level === 'none' && r.oklad === 55000 && r.actions === 62500 && r.deduction === 31250 && r.base === 86250, r);
 console.log(`  Пример 3 (без плана, 15 благодарностей): ${rub(r.oklad)} + ${rub(r.actions)} − 50% ${rub(r.deduction)} = ${rub(r.base)}`);
-ok('без минимального плана: видно, каких строк не хватает', r.plan.missing_min.map(x => x.key).join() === 'postavka,otbitie,proc,event,pmp,gu', r.plan.missing_min);
+r = W.premBase(cfg, P({ counts: NORMAL, points: 380 }));
+ok('принятые баллы ниже порога (380) → минимальный, хотя пунктов на 400', r.plan.level === 'min' && r.deduct_pct === 20, r.plan);
+r = W.premBase(cfg, P({ counts: NORMAL, items: [{ key: 'postavka', n: 10 }, { key: 'otbitie', n: 10 }], review: { otbitie: { status: 'ok', n_ok: 9 } } }));
+ok('баллы из пунктов с учётом проверки (n_ok 9 → 380)', r.plan_points === 380 && r.plan.level === 'min', r.plan_points);
 
 ok('опоздание → без премии', W.premBase(cfg, P({ late: true, counts: NORMAL })).base === 0 && W.premBase(cfg, P({ late: true, counts: NORMAL })).reason === 'отчёт после срока');
 ok('нет отчёта → без премии', W.premBase(cfg, P({ report: false })).base === 0);
 ok('отчёт отклонён → без премии', W.premBase(cfg, P({ status: 'rejected', counts: NORMAL })).base === 0);
 ok('нет должности → без премии', W.premBase(cfg, P({ position: '', counts: NORMAL })).reason === 'должность не указана');
 
-// лимит должности и дополнительная премия
+// потолок должности больше не режет базу
 const BIG = { ...NORMAL, gmp_org: 4, soch: 3 }; // +200 000 +120 000
 r = W.premBase(cfg, P({ position: 'stazh', counts: BIG }));
-ok('Стажёр: 140 000 + 552 500 = 692 500 > 350 000 → база 350 000, превышение 342 500', r.gross === 692500 && r.base === 350000 && r.excess === 342500, r);
+ok('Стажёр: 140 000 + 608 000 = 748 000 > 350 000 — база не урезается', r.gross === 748000 && r.base === 748000 && r.excess === 0, r);
 
-let c = W.computePremiums(cfg, 10000000, [P({ id: 'a', position: 'stazh', counts: BIG })]);
-ok('фонд хватает: доп. премия = превышению (342 500 ≤ 400 000)', c.rows[0].add === 342500 && c.rows[0].total_fund === 692500 && c.remaining === 10000000 - 692500, c.rows[0]);
-c = W.computePremiums(cfg, 10000000, [P({ id: 'a', position: 'stazh', counts: { ...BIG, patrol_city: 10 } })]);
-ok('доп. премия не больше 400 000', c.rows[0].add === 400000, c.rows[0]);
+// --- распределение фонда: весь остаток пропорционально базе ---
+const sum = (c) => c.rows.reduce((s, x) => s + x.total_fund, 0);
+const team5 = [
+  P({ id: 'a', name: 'Стажёр (норм.)', position: 'stazh', counts: NORMAL }),
+  P({ id: 'b', name: 'Инспектор (мин.)', position: 'insp', counts: MIN }),
+  P({ id: 'c', name: 'Инструктор (без плана)', position: 'instr', counts: { postavka: 4, city: 2 } }),
+  P({ id: 'd', name: 'Ком. бат (норм., СС)', position: 'kom_bat', counts: BIG, senior: true, ss: 300000 }),
+  P({ id: 'e', name: 'Инсп. комендатуры (норм., наградная)', position: 'insp_kom', counts: NORMAL, award: 200000 }),
+];
+let c = W.computePremiums(cfg, 8000000, team5);
+ok('5 человек, фонд 8 000 000: весь фонд распределён (остаток < 5 ₽)', c.remaining >= 0 && c.remaining < 5 && sum(c) === 8000000 - c.remaining && c.paid_from_fund === sum(c), { rem: c.remaining, paid: c.paid_from_fund });
+ok('наградная и премия СС выплачены полностью', c.rows[4].award === 200000 && c.rows[3].ss === 300000);
+const left8 = 8000000 - c.base_total - 200000 - 300000;
+ok('доля остатка пропорциональна базе (рубли вниз)', c.rows.every(x => x.add === Math.floor(left8 * x.base / c.base_total)), c.rows.map(x => [x.base, x.add]));
+ok('без лимитов: Ком. бат получает больше 2 000 000 и доля > 400 000', c.rows[3].total_fund > 2000000 && c.rows[3].add > 400000, c.rows[3]);
+console.log('  Пример 4 (5 человек, фонд 8 000 000):');
+c.rows.forEach(x => console.log(`    ${x.name}: план ${x.plan.level}, база ${rub(x.base)} + доля остатка ${rub(x.add)}${x.award ? ' + наградная ' + rub(x.award) : ''}${x.ss ? ' + СС ' + rub(x.ss) : ''} = ${rub(x.total_fund)}`));
+console.log(`    база всего ${rub(c.base_total)}, доля остатка всего ${rub(c.share_total)}, выплачено ${rub(c.paid_from_fund)}, остаток ${rub(c.remaining)}`);
+const ex4 = c;
 
-// фонд мал: база платится всегда, надбавки — пропорционально остатку
-const team = [P({ id: 'a', position: 'stazh', counts: BIG }), P({ id: 'b', position: 'insp', counts: { ...BIG, patrol_city: 4 } }), P({ id: 'c', counts: MIN })];
-const full = W.computePremiums(cfg, 20000000, team);
-const baseSum = full.base_total;
-c = W.computePremiums(cfg, baseSum + 100000, team);
-ok('фонд мал: базовая премия всем полностью', c.rows.every((x, i) => x.base === full.rows[i].base));
-ok('фонд мал: 100 000 остатка поделены на доп. премии пропорционально', c.add_short && c.rows[0].add + c.rows[1].add <= 100000 && c.rows[0].add > 0 && Math.abs(c.rows[0].add / c.rows[1].add - c.rows[0].add_want / c.rows[1].add_want) < 0.01, c.rows.map(x => [x.add_want, x.add]));
-c = W.computePremiums(cfg, baseSum - 50000, team);
-ok('фонд меньше базы: база платится, надбавки 0, остаток отрицательный', c.fund_short && c.rows.every(x => x.add === 0) && c.remaining === -50000);
+c = W.computePremiums(cfg, 8000000, [...team5, P({ id: 'f', late: true, counts: NORMAL }), P({ id: 'g', report: false })]);
+ok('опоздавшие и без отчёта доли не получают; суммы те же', c.rows[5].total_fund === 0 && c.rows[6].total_fund === 0 && c.rows.slice(0, 5).every((x, i) => x.total_fund === ex4.rows[i].total_fund));
 
-// наградная и СС
-c = W.computePremiums(cfg, 20000000, [P({ id: 'a', counts: NORMAL, award: 300000 }), P({ id: 's', counts: NORMAL, senior: true, ss: 500000 }), P({ id: 'x', counts: NORMAL, ss: 200000 })]);
-ok('наградная из фонда выплачена', c.rows[0].award === 300000);
-ok('премия СС только старшему составу', c.rows[1].ss === 500000 && c.rows[2].ss === 0);
-ok('премия СС — тоже только при отчёте в срок', W.computePremiums(cfg, 20000000, [P({ id: 's', senior: true, ss: 500000, late: true, counts: NORMAL })]).rows[0].ss === 0);
-c = W.computePremiums(cfg, 20000000, [P({ id: 'a', position: 'kom_gar', counts: { ...BIG, patrol_city: 30 }, award: 700000, senior: true, ss: 500000, award_budget: 300000 })]);
-ok('лимит 2 000 000 на оклад+премию+доп.+наградную', c.rows[0].base + c.rows[0].add + c.rows[0].award <= 2000000 && c.rows[0].base === 850000 && c.rows[0].add === 400000 && c.rows[0].award === 700000, c.rows[0]);
-ok('премия СС и наградная из бюджета ГУ ВП — сверх лимита', c.rows[0].ss === 500000 && c.rows[0].award_budget === 300000, c.rows[0]);
-ok('итог из фонда отдельно от наградной из бюджета ГУ ВП: 2 450 000 + 300 000 (бюджет)', c.rows[0].total === 2450000 && c.rows[0].total_fund === 2450000 && c.award_budget_total === 300000 && c.paid_from_fund === 2450000, c.rows[0]);
-c = W.computePremiums(cfg, 20000000, [P({ id: 'a', position: 'kom_gar', counts: { ...BIG, patrol_city: 30 }, award: 700000 }), P({ id: 'b', position: 'kom_gar', counts: { ...BIG, patrol_city: 30, soch: 40 }, award: 700000 })]);
-ok('лимит: наградная урезается до 2 000 000 при большой базе', c.rows.every(x => x.base + x.add + x.award <= 2000000));
-const t3 = [P({ id: 'a', counts: NORMAL, award: 400000 }), P({ id: 'b', counts: NORMAL, award: 200000 }), P({ id: 's', counts: NORMAL, senior: true, ss: 300000 })];
-const b3 = W.computePremiums(cfg, 0, t3).base_total;
-c = W.computePremiums(cfg, b3 + 300000, t3);
-ok('надбавки по очереди: наградная (2:1 из 300 000), на СС не хватило', c.rows[0].award === 200000 && c.rows[1].award === 100000 && c.rows[2].ss === 0 && c.award_short && c.ss_short, c.rows.map(x => [x.award, x.ss]));
+// фонд мал
+const baseSum = ex4.base_total;
+c = W.computePremiums(cfg, baseSum - 50000, team5);
+ok('фонд меньше базы: база всем полностью, надбавок и доли нет, остаток отрицательный', c.fund_short && c.rows.every((x, i) => x.base === ex4.rows[i].base && x.add === 0 && x.award === 0 && x.ss === 0) && c.remaining === -50000);
+c = W.computePremiums(cfg, baseSum + 300000, team5);
+ok('фонда хватает на базу, но не на все надбавки: наградная по очереди полностью, СС урезана до 100 000, доли остатка нет', !c.award_short && c.ss_short && c.rows[4].award === 200000 && c.rows[3].ss === 100000 && c.rows.every(x => x.add === 0) && c.remaining === 0, c.rows.map(x => [x.award, x.ss, x.add]));
+c = W.computePremiums(cfg, 0, team5);
+ok('фонд не задан: база считается, доли нет', c.rows.every(x => x.add === 0) && c.base_total === baseSum);
+c = W.computePremiums(cfg, 8000000, [P({ id: 's', senior: true, ss: 500000, late: true, counts: NORMAL })]);
+ok('премия СС — только при отчёте в срок; если премий нет, весь фонд остаётся', c.rows[0].ss === 0 && c.remaining === 8000000);
+c = W.computePremiums(cfg, 8000000, [P({ id: 'x', counts: NORMAL, ss: 200000 })]);
+ok('премия СС только старшему составу; один человек забирает весь фонд', c.rows[0].ss === 0 && c.rows[0].total_fund === 8000000 && c.remaining === 0);
+c = W.computePremiums(cfg, 8000000, [P({ id: 'a', counts: NORMAL, award_budget: 300000 })]);
+ok('наградная из бюджета ГУ ВП — отдельно, в фонд не входит', c.rows[0].award_budget === 300000 && c.award_budget_total === 300000 && c.paid_from_fund === 8000000, c.rows[0]);
 
 // отклонённые пункты, принятое количество
 const counts = W.premCounts([{ key: 'postavka', n: 10 }, { key: 'otbitie', n: 3 }, { key: 'pmp', n: 5 }, { key: 'c1', n: 2, custom: true }], { otbitie: { status: 'rejected' }, pmp: { status: 'ok', n_ok: 2 } });
@@ -84,7 +115,7 @@ ok('баллы: только основная, МП — вручную', W.weekl
 // благодарности: 750 баллов → 15 штук
 const rin = W.reportInput(cfg, { week: '2026-10-19', position: 'Инспектор ВП', header: { rank: 'Лейтенант', name: 'Иван Петров', static_id: '1', from: '2026-10-19', to: '2026-10-25' }, items: [{ key: 'thanks', n: 0, points: 750, links: [] }, { key: 'postavka', n: 1, links: ['https://disk.yandex.ru/x'] }] });
 ok('750 баллов благодарностей → 15 благодарностей × 2 500', rin.items.find(i => i.key === 'thanks').n === 15 && rin.position === 'insp');
-let threw = ''; try { W.reportInput(cfg, { week: '2026-10-19', position: 'Дознаватель', header: { rank: 'x', name: 'y', static_id: '1' }, items: [{ key: 'postavka', n: 1 }] }); } catch (e) { threw = e.message; }
+threw = ''; try { W.reportInput(cfg, { week: '2026-10-19', position: 'Дознаватель', header: { rank: 'x', name: 'y', static_id: '1' }, items: [{ key: 'postavka', n: 1 }] }); } catch (e) { threw = e.message; }
 ok('должность не из списка → ошибка', /Выберите должность/.test(threw));
 threw = ''; try { W.reportInput(cfg, { week: '2026-10-19', position: 'insp', header: { rank: 'x', name: 'y', static_id: '1' }, items: [{ key: 'postavka', n: 1, links: ['javascript:alert(1)'] }] }); } catch (e) { threw = e.message; }
 ok('ссылка не http(s) → ошибка', /http/.test(threw));

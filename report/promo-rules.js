@@ -28,7 +28,7 @@ window.PROMO = {
     { key: "postavka",   name: "Участие в поставочном мероприятии", pts: 35, wk: 20, group: "main" },
     { key: "otbitie",    name: "Участие в отбитии гос. складов", pts: 30, wk: 20, group: "main", hint: "ВС, ОБ-7, РЛС, ЦМС, МС, ГСМО, ЗМХ" },
     { key: "training",   name: "Проведение тренировки для военнослужащих", pts: 30, wk: 3, group: "main", hint: "от 5 человек" },
-    { key: "proc",       name: "Передать проц. действия правоохранительным органам", pts: 0, wk: 5, group: "main" },
+    { key: "proc",       name: "Передать проц. действия правоохранительным органам", pts: 0, wk: 10, group: "main" },
     { key: "event6",     name: "Организовать МП", pts: 30, wk: "n", group: "main", hint: "мероприятие от 6 человек" },
     { key: "gmp_org",    name: "Организовать ГМП", pts: 0, wk: "n", group: "main" },
     { key: "pmp",        name: "Проведение ПМП", pts: 0, wk: 3, group: "main" },

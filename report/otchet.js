@@ -58,6 +58,16 @@ window.VPReportMount = function (ECO) {
     return a.getDay() === 1 && Math.round((b - a) / 86400000) === 6 ? f : null;
   }
 
+  // Баллы еженедельного отчёта (wk) — из настроек премий сайта ГУ ВП (/api/report-config), единый источник с сервером;
+  // без сети — последняя полученная копия (localStorage), до первой загрузки — значения promo-rules.js.
+  const CFG_KEY = "vp_report_cfg";
+  function applyWk(c) {
+    if (!c || !Array.isArray(c.items)) return false; let ch = false;
+    c.items.forEach(i => { if (i.group !== "main") return; const a = P.acts.find(x => x.key === i.key); if (a && (typeof i.wk === "number" || i.wk === "n") && a.wk !== i.wk) { a.wk = i.wk; ch = true; } });
+    return ch;
+  }
+  let cachedCfg = null; try { cachedCfg = JSON.parse(localStorage.getItem(CFG_KEY) || "null"); } catch (e) {}
+  applyWk(cachedCfg);
   const crit = window.VP_CRIT({ box: $("acts"), acts: P.acts, storeKey: "vp_week_crit", weekly: true, onChange: () => { paint(); page.refresh(); paintPlan(); } });
   function paint() {
     const pts = crit.total();
@@ -126,18 +136,19 @@ window.VPReportMount = function (ECO) {
   const fmt = ms => new Date(ms).toLocaleString("ru-RU", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
   const ST = { submitted: ["отправлен", "info"], review: ["на проверке", "warn"], approved: ["принят", "ok"], rejected: ["отклонён", "err"] };
   const LVL = { normal: ["нормальный план выполнен", "ok"], min: ["минимальный план выполнен", "warn"], none: ["минимальный план не выполнен", "err"] };
-  let premCfg = null, mine = null;
+  let premCfg = cachedCfg && Array.isArray(cachedCfg.plan) ? cachedCfg : null, mine = null;
   function counts() { const c = {}; crit.items().forEach(i => { if (!i.custom) c[i.key] = (c[i.key] || 0) + i.n; }); return c; }
   function paintPlan() {
     const box = $("planBox"); if (!premCfg || !box) return;
     const c = counts();
-    const lines = premCfg.plan.map(l => { const got = l.items.reduce((s, k) => s + (c[k] || 0), 0); return { ...l, got }; });
+    const lines = premCfg.plan.map(l => { const got = l.key === "points" ? crit.total() : (l.items || []).reduce((s, k) => s + (c[k] || 0), 0); return { ...l, got }; });
     const lvl = lines.every(l => l.got >= l.normal) ? "normal" : lines.every(l => l.got >= l.min) ? "min" : "none";
     box.hidden = false;
     box.innerHTML = `<div class="plan-head">План недели: <span class="tag ${LVL[lvl][1]}">${LVL[lvl][0]}</span></div>
       <table>${lines.map(l => `<tr><td>${D.esc(l.name)}</td><td class="n ${l.got >= l.normal ? "ok" : l.got >= l.min ? "warn" : "err"}">${l.got}</td><td class="n">мин ${l.min}</td><td class="n">норм ${l.normal}</td></tr>`).join("")}</table>
-      <div class="norm-hint">Один пункт может идти в несколько строк плана. Точный расчёт премии — у руководства после проверки отчёта.</div>`;
+      <div class="norm-hint">Точный расчёт премии — у руководства после проверки отчёта.</div>`;
   }
+  paintPlan();
   function weekChanged() { const w = weekOfForm(); $("wkHint").textContent = w ? "" : "период для отправки — с понедельника по воскресенье одной недели"; loadMine(); }
   $("fromDate").addEventListener("change", weekChanged); $("toDate").addEventListener("change", weekChanged);
   function sendState(html) { $("sendInfo").innerHTML = html; }
@@ -187,8 +198,15 @@ window.VPReportMount = function (ECO) {
     catch (e) { sendStatus("Не отправлено: " + e.message, "err"); }
     finally { $("sendBtn").disabled = false; }
   });
+  function gotCfg(c) {
+    if (!c || !Array.isArray(c.items)) return;
+    try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); } catch (e) {}
+    premCfg = c;
+    if (applyWk(c)) { crit.redraw(); paint(); page.refresh(); }
+    paintPlan();
+  }
   if (ECO && ECO.online) {
-    ECO.api("GET", "/api/report-config").then(c => { premCfg = c; paintPlan(); }).catch(() => {});
+    ECO.api("GET", "/api/report-config").then(gotCfg).catch(() => {});
     ECO.ready.then(() => { syncTo(); page.refresh(); loadMine(); if (ECO.justLoggedIn) sendStatus("Вы вошли через Discord — теперь можно отправить отчёт.", "ok"); });
     ECO.onChange.push(() => { syncTo(); page.refresh(); });
     ECO.onChange.push(loadMine);
