@@ -152,7 +152,7 @@ async function backup(tok, kind, label) {
   check('рапорт: итог называет курс', /Не хватает:.*курс «Курс сержанта»/.test(await s.p.locator('#critNote').textContent()), await s.p.locator('#critNote').textContent());
   check('рапорт: без технических надписей', !/eligib|allowed|api|undefined|null/i.test(gateTxt));
   // расчёт без замены пунктов баллами
-  const calc = await s.p.evaluate(() => { const c = window.__vp.crit; const t = c.total, n = c.n; c.total = () => 1000; c.n = () => 0; const r = window.__vp.compute(); c.total = t; c.n = n; return { covered: r.covered, met: r.met, rank: r.rank }; });
+  const calc = await s.p.evaluate(() => { const c = window.__vp.crit, n = c.n; c.n = (k) => k === 'guardhouse' ? 20 : 0; const r = window.__vp.compute(); c.n = n; return { covered: r.covered, met: r.met, rank: r.rank, total: r.total }; });
   check('выключено: недостающие пункты баллами не закрываются', calc.rank === 'Сержант' && calc.covered === 0 && calc.met === false, calc);
   let dl = false; s.p.once('download', () => { dl = true; });
   await s.p.locator('#pdf').click({ force: true }); await s.p.waitForTimeout(800);
@@ -170,7 +170,7 @@ async function backup(tok, kind, label) {
   await s.p.waitForFunction(() => window.__vp && document.querySelector('#fromRank'), null, { timeout: 15000 }); await s.p.waitForTimeout(500);
   check('рапорт: курс в критериях отмечен пройденным', /✓\s*Пройти курс «Курс сержанта»/.test(await s.p.locator('#crit').textContent()), await s.p.locator('#crit').textContent());
   check('рапорт: после курса кнопка активна, сообщения нет', await s.p.locator('#pdf.gated').count() === 0 && await s.p.locator('.promo-gate').count() === 0);
-  const calc2 = await s.p.evaluate(() => { const c = window.__vp.crit; c.total = () => 1000; c.n = () => 0; return window.__vp.compute(); });
+  const calc2 = await s.p.evaluate(() => { const c = window.__vp.crit, n = c.n; c.n = (k) => k === 'guardhouse' ? 20 : 0; const r = window.__vp.compute(); c.n = n; return r; }); // 20 × 75 баллов, обязательных пунктов нет
   check('включено: недостающие пункты закрываются баллами', calc2.covered === 3 && calc2.met === true, { covered: calc2.covered, met: calc2.met });
   await s.p.evaluate(() => { const v = { num: '1', date: '01.01.2026', fromStatic: '100-002', fromName: 'Иван Петров', fromUnit: 'ВП', fromPos: 'Сотрудник', target: 'Старший сержант', toDate: '01.01.2026' }; for (const [k, x] of Object.entries(v)) { const el = document.getElementById(k); if (el && !el.value) { el.value = x; el.dispatchEvent(new Event('input', { bubbles: true })); } } });
   const dlp = s.p.waitForEvent('download', { timeout: 30000 }).catch(() => null);
