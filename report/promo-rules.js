@@ -1,7 +1,10 @@
-// ===== Система повышений и балловка ВП. Меняется здесь, сайт пересчитает всё сам. =====
+// ===== Система повышений и балловка ВП. Значения по умолчанию = настройки сайта ГУ ВП на 16.11.2026;
+// при сети действуют актуальные с сайта ГУ ВП (GET /api/promo-config, копия в браузере для работы без сети). =====
 window.PROMO = {
   // сколько баллов заменяют один недостающий пункт критерия
   pointsPerItem: 100,
+  // можно ли закрыть недостающий пункт ступени баллами сверх нормы (настройка «баллы за недостающий пункт» на сайте ГУ ВП)
+  missingPoints: false,
 
   // Виды работы: баллы за 1 раз и как это пишется в документе (doc; если нет — name).
   // group — в какой раздел отчёта/рапорта попадает (официальная градация):
@@ -25,62 +28,61 @@ window.PROMO = {
   ],
   acts: [
     // ── Основная отчётность ──
-    { key: "postavka",   name: "Участие в поставочном мероприятии", pts: 35, wk: 20, group: "main" },
-    { key: "otbitie",    name: "Участие в отбитии гос. складов", pts: 30, wk: 20, group: "main", hint: "ВС, ОБ-7, РЛС, ЦМС, МС, ГСМО, ЗМХ" },
+    { key: "postavka",   name: "Участие в поставочном мероприятии", pts: 25, wk: 20, group: "main" },
+    { key: "otbitie",    name: "Участие в отбитии гос. складов", pts: 25, wk: 20, group: "main", hint: "ВС, ОБ-7, РЛС, ЦМС, МС, ГСМО, ЗМХ" },
     { key: "training",   name: "Проведение тренировки для военнослужащих", pts: 30, wk: 3, group: "main", hint: "от 5 человек" },
-    { key: "proc",       name: "Передать проц. действия правоохранительным органам", pts: 0, wk: 10, group: "main" },
+    { key: "proc",       name: "Передать проц. действия правоохранительным органам", pts: 50, wk: 10, group: "main" },
     { key: "event6",     name: "Организовать МП", pts: 30, wk: "n", group: "main", hint: "мероприятие от 6 человек" },
-    { key: "gmp_org",    name: "Организовать ГМП", pts: 0, wk: "n", group: "main" },
-    { key: "pmp",        name: "Проведение ПМП", pts: 0, wk: 3, group: "main" },
-    { key: "excursion",  name: "Проведение экскурсий для граждан по территории ВЧ", pts: 0, wk: 25, group: "main" },
-    { key: "oath",       name: "Принятие присяги у ВА", pts: 0, wk: 1, group: "main" },
+    { key: "gmp_org",    name: "Организовать ГМП", pts: 100, wk: "n", group: "main" },
+    { key: "pmp",        name: "Проведение ПМП", pts: 15, wk: 3, group: "main" },
+    { key: "excursion",  name: "Проведение экскурсий для граждан по территории ВЧ", pts: 50, wk: 25, group: "main" },
+    { key: "oath",       name: "Принятие присяги у ВА", pts: 15, wk: 1, group: "main" },
     // ── Дополнительная отчётность ──
-    { key: "kraz",       name: "Участие в КРАЗе", pts: 0, group: "extra" },
+    { key: "kraz",       name: "Участие в КРАЗе", pts: 15, group: "extra" },
     { key: "kraz_otbitie", name: "Успешное отбитие КРАЗа", pts: 35, group: "extra" },
-    { key: "mp_visit",   name: "Посетить МП", pts: 0, group: "extra" },
-    { key: "gmp",        name: "Посетить ГМП", pts: 40, group: "extra" },
-    { key: "poverka",    name: "Участие в вечерней поверке", pts: 35, group: "extra" },
-    { key: "post_kom",   name: "Пост дежурный по комендатуре 60 минут", pts: 0, group: "extra" },
-    { key: "post_shtab", name: "Пост дежурный по штабу 60 минут", pts: 0, group: "extra" },
-    { key: "post_kpp1",  name: "Пост дежурный по КПП - 1 60 минут", pts: 0, group: "extra" },
-    { key: "post_kpp2",  name: "Пост дежурный по КПП - 2 60 минут", pts: 0, group: "extra" },
-    { key: "naryad",     name: "Наряд ВП (КПП, патруль гарнизона, комендантский пост, 60 мин)", pts: 0, doc: "Заступлений в наряд военной полиции", group: "extra", legacy: true, hint: "нужен для ступеней повышения" },
-    { key: "sso",        name: "Участие в налёте в форме ССО", pts: 0, group: "extra" },
-    { key: "patrol_city",name: "Патруль по городу 60 минут", pts: 0, group: "extra" },
-    { key: "patrol_gar", name: "Патруль по гарнизону 60 минут", pts: 0, group: "extra" },
-    { key: "patrol_vch", name: "Патруль по ВЧ 60 минут", pts: 0, group: "extra" },
-    { key: "patrol",     name: "Организация патрулирования", pts: 0, doc: "Организовано патрулирований", group: "extra", legacy: true, hint: "нужен для ступеней повышения" },
-    { key: "lecture_va", name: "Проведение лекции ВА", pts: 0, group: "extra" },
-    { key: "exam_va",    name: "Проведение экзамена ВА", pts: 0, group: "extra" },
+    { key: "mp_visit",   name: "Посетить МП", pts: 20, group: "extra" },
+    { key: "gmp",        name: "Посетить ГМП", pts: 50, group: "extra" },
+    { key: "poverka",    name: "Участие в вечерней поверке", pts: 20, group: "extra" },
+    { key: "post_kom",   name: "Пост дежурный по комендатуре 60 минут", pts: 25, group: "extra" },
+    { key: "post_shtab", name: "Пост дежурный по штабу 60 минут", pts: 25, group: "extra" },
+    { key: "post_kpp1",  name: "Пост дежурный по КПП - 1 60 минут", pts: 23, group: "extra" },
+    { key: "post_kpp2",  name: "Пост дежурный по КПП - 2 60 минут", pts: 25, group: "extra" },
+    { key: "naryad",     name: "Наряд ВП (КПП, патруль гарнизона, комендантский пост, 60 мин)", pts: 25, doc: "Заступлений в наряд военной полиции", group: "extra", legacy: true, hint: "нужен для ступеней повышения" },
+    { key: "sso",        name: "Участие в налёте в форме ССО", pts: 20, group: "extra" },
+    { key: "patrol_city",name: "Патруль по городу 60 минут", pts: 25, group: "extra" },
+    { key: "patrol_gar", name: "Патруль по гарнизону 60 минут", pts: 25, group: "extra" },
+    { key: "patrol_vch", name: "Патруль по ВЧ 60 минут", pts: 25, group: "extra" },
+    { key: "patrol",     name: "Организация патрулирования", pts: 25, doc: "Организовано патрулирований", group: "extra", legacy: true, hint: "нужен для ступеней повышения" },
+    { key: "lecture_va", name: "Проведение лекции ВА", pts: 30, group: "extra" },
+    { key: "exam_va",    name: "Проведение экзамена ВА", pts: 50, group: "extra" },
     { key: "thanks",     name: "Благодарность от руководства", pts: 0, group: "extra", perPoints: 50, hint: "старший состав выдаёт баллы: каждые 50 баллов = 1 благодарность" },
     // ── Работа ГУ ВП ──
-    { key: "city",       name: "Вывести военнослужащего в город", pts: 20, group: "gu", hint: "за 1 человека" },
-    { key: "reattest",   name: "Провести переаттестацию", pts: 30, group: "gu" },
-    { key: "vzysk",      name: "Написание рапорта на взыскание / выдача взыскания", pts: 30, group: "gu" },
-    { key: "vygovor",    name: "Выговор, не из рапорта на взыскание", pts: 0, doc: "Выдано выговоров, не вошедших в рапорты на взыскание", group: "gu", week: true, legacy: true },
+    { key: "city",       name: "Вывести военнослужащего в город", pts: 25, group: "gu", hint: "за 1 человека" },
+    { key: "reattest",   name: "Провести переаттестацию", pts: 50, group: "gu" },
+    { key: "vzysk",      name: "Написание рапорта на взыскание / выдача взыскания", pts: 35, group: "gu" },
+    { key: "vygovor",    name: "Выговор, не из рапорта на взыскание", pts: 50, doc: "Выдано выговоров, не вошедших в рапорты на взыскание", group: "gu", week: true, legacy: true },
     { key: "prof",       name: "Организация профилактического мероприятия", pts: 30, group: "gu", hint: "профилактическая беседа с военнослужащими" },
     { key: "prizyv",     name: "Принять участие в призывных мероприятиях", pts: 30, group: "gu" },
     { key: "guardhouse", name: "Посадить военнослужащего на гауптвахту", pts: 75, group: "gu" },
-    { key: "convoy",     name: "Сопровождение колонны ВС РФ", pts: 0, group: "gu" },
-    { key: "complaint",  name: "Рассмотрение жалобы на сотрудника ВС РФ", pts: 0, group: "gu" },
-    { key: "otrab",      name: "Рассмотрение рапорта на отработку дисц. взыскания", pts: 0, group: "gu" },
-    { key: "obzhal",     name: "Рассмотрение рапорта на обжалование дисц. взыскания", pts: 0, group: "gu" },
-    { key: "docs",       name: "Проверка документов у личного состава", pts: 0, group: "gu", hint: "за 1 человека" },
-    { key: "inspect",    name: "Личный осмотр личного состава", pts: 0, group: "gu", hint: "за 1 человека, вместе с проверкой документов" },
+    { key: "convoy",     name: "Сопровождение колонны ВС РФ", pts: 20, group: "gu" },
+    { key: "complaint",  name: "Рассмотрение жалобы на сотрудника ВС РФ", pts: 20, group: "gu" },
+    { key: "otrab",      name: "Рассмотрение рапорта на отработку дисц. взыскания", pts: 50, group: "gu" },
+    { key: "obzhal",     name: "Рассмотрение рапорта на обжалование дисц. взыскания", pts: 50, group: "gu" },
+    { key: "docs",       name: "Проверка документов у личного состава", pts: 10, group: "gu", hint: "за 1 человека" },
+    { key: "inspect",    name: "Личный осмотр личного состава", pts: 10, group: "gu", hint: "за 1 человека, вместе с проверкой документов" },
     { key: "lecture_vp", name: "Проведение лекции ВП", pts: 0, group: "gu" },
     { key: "exam_vp",    name: "Проведение экзамена ВП", pts: 0, group: "gu" },
-    { key: "soch",       name: "Поиски и поимка СОЧ", pts: 0, group: "gu" }
+    { key: "soch",       name: "Поиски и поимка СОЧ", pts: 75, group: "gu" }
   ],
 
   // ступени: points — сколько баллов набрать, need — сколько раз сделать каждый вид работы
   ladder: {
-    "Сержант":            { to: "Старший сержант",    points: 150,  need: { naryad: 1, prof: 1, training: 1 } },
-    "Старший сержант":    { to: "Старшина",           points: 250,  need: { naryad: 1, training: 1, prof: 2 } },
-    "Старшина":           { to: "Прапорщик",          points: 350,  need: { naryad: 1, prof: 3, inspect: 5, training: 2 } },
-    "Прапорщик":          { to: "Старший прапорщик",  points: 450,  need: { naryad: 2, prof: 4, training: 3 } },
-    "Старший прапорщик":  { to: "Младший лейтенант",  points: 550,  need: { training: 3, patrol: 2, prof: 4 } },
-    "Младший лейтенант":  { to: "Лейтенант",          points: 650,  need: { patrol: 1, prof: 4, training: 3, prizyv: 3 } },
-    "Лейтенант":          { to: "Старший лейтенант",  points: 750,  need: { patrol: 1, prof: 6, docs: 5, vzysk: 3, training: 3 } },
-    "Старший лейтенант":  { to: "Капитан",            points: 1500, need: { prof: 7, vzysk: 5, prizyv: 3, training: 5 } }
+    "Старший сержант":    { to: "Старшина",            points: 400,  need: { naryad: 1, vzysk: 2, prof: 1 } },
+    "Старшина":           { to: "Прапорщик",           points: 600,  need: { naryad: 1, prof: 3, vzysk: 2 } },
+    "Прапорщик":          { to: "Старший прапорщик",   points: 700,  need: { naryad: 2, prof: 3, vzysk: 2 } },
+    "Старший прапорщик":  { to: "Младший лейтенант",   points: 850,  need: { patrol: 2, prizyv: 1 } },
+    "Младший лейтенант":  { to: "Лейтенант",           points: 1000, need: { patrol: 1, prof: 3, prizyv: 2 } },
+    "Лейтенант":          { to: "Старший лейтенант",   points: 1200, need: { patrol_gar: 1, prof: 6, vygovor: 3 } },
+    "Старший лейтенант":  { to: "Капитан",             points: 1500, need: { prof: 6, vygovor: 5, prizyv: 3, proc: 3 } }
   }
 };

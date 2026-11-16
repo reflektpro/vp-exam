@@ -1,10 +1,11 @@
-// Рапорт на повышение внутри сайта ГУ ВП — копия povyshenie.js с сайта бланков (vp-raport-offline, 18e2fad).
+// Рапорт на повышение внутри сайта ГУ ВП — копия povyshenie.js с сайта бланков (vp-raport-offline); расчёт — общий promo-calc.js.
 // Те же поля, калькулятор, черновики (localStorage, общие с сайтом бланков) и выгрузка PDF/PNG.
 // Отличия: монтируется функцией в открытую страницу; ECO.missingPoints — можно ли закрывать недостающие пункты баллами;
 // ECO.gate() — допуск к выгрузке (обязательные курсы учёбы, проверяет сервер: GET /api/promo/eligibility).
 window.VPPromoMount = function (ECO) {
   const D = window.VPDOC, C = window.VP_DOC_CONFIG || {}, P = window.PROMO;
-  const swapOn = !ECO || ECO.missingPoints !== false;
+  const PC = window.VP_PROMO_CALC;
+  const swapOn = ECO && ECO.missingPoints !== undefined ? ECO.missingPoints !== false : P.missingPoints !== false;
   const $ = id => document.getElementById(id);
   const v = id => $(id).value.trim();
   const ph = (x, p) => x ? x : { ph: p };
@@ -19,31 +20,14 @@ window.VPPromoMount = function (ECO) {
   if (!$("date").value) $("date").value = D.iso(now);
   if (!$("toDate").value) $("toDate").value = D.iso(now);
 
-  const acts = P.acts.filter(a => !a.week);
+  // все пункты системы повышения (и помеченные week, например выговоры — они нужны ступеням); тот же массив, что в правилах
+  const acts = P.acts;
   const crit = window.VP_CRIT({ box: $("acts"), acts, storeKey: "vp_promo_crit", onChange: () => { recalc(); page.refresh(); } });
-  const findRank = r => Object.keys(P.ladder).find(k => k.toLowerCase() === String(r || "").trim().toLowerCase());
-
+  const counts = () => { const o = {}; acts.forEach(a => { const k = crit.n(a.key); if (k) o[a.key] = k; }); return o; };
+  // расчёт — общий с сайтом бланков и сервером (report/promo-calc.js)
   function compute() {
-    const rank = findRank(v("fromRank")), step = rank ? P.ladder[rank] : null;
-    const total = crit.total();
-    const res = { rank, step, total, items: [], met: false, covered: 0 };
-    if (step) {
-      Object.entries(step.need).forEach(([k, need]) => {
-        const a = P.acts.find(x => x.key === k), have = crit.n(k);
-        res.items.push({ a, need, have, lack: Math.max(0, need - have) });
-      });
-      const lack = res.items.reduce((s, i) => s + i.lack, 0);
-      const canCover = swapOn ? Math.floor(Math.max(0, total - step.points) / P.pointsPerItem) : 0;
-      res.covered = Math.min(lack, canCover);
-      // обязательные курсы учёбы — тоже критерии ступени (общие и для звания; что пройдено, решает сервер)
-      const g = ECO && ECO.gate ? ECO.gate() : null;
-      res.courses = (g && g.required) || [];
-      const cLeft = res.courses.filter(c => !c.done);
-      res.met = total >= step.points && lack <= canCover && !cLeft.length;
-      res.coursesLeft = cLeft;
-      res.left = { pts: Math.max(0, step.points - total), swap: Math.max(0, lack - canCover) };
-    }
-    return res;
+    const g = ECO && ECO.gate ? ECO.gate() : null;
+    return PC.calc(P, v("fromRank"), counts(), { missingPoints: swapOn, courses: (g && g.required) || [] });
   }
   function autoResult() {
     return `выполнено мероприятий и служебных действий: ${crit.count()}.`;

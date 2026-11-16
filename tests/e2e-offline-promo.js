@@ -40,10 +40,11 @@ const sql = async (q, a) => (await (await fetch(API + '/__test/sql', { method: '
     await p.waitForTimeout(200);
   };
   const calc = (p) => p.evaluate(() => {
-    const c = window.__vp.crit, t = c.total, n = c.n;
-    c.total = () => 1000; c.n = () => 0;
+    // 20 гауптвахт (75 баллов) и ни одного обязательного пункта: баллов с запасом, пункты закрываются только баллами
+    const c = window.__vp.crit, n = c.n;
+    c.n = (k) => k === 'guardhouse' ? 20 : 0;
     const r = window.__vp.compute();
-    c.total = t; c.n = n;
+    c.n = n;
     return { covered: r.covered, met: r.met, rank: r.rank, swap: window.VP_ECO.missingPoints };
   });
   const fillForm = async (p) => {
@@ -110,6 +111,7 @@ const sql = async (q, a) => (await (await fetch(API + '/__test/sql', { method: '
   });
   check('Успешное отбитие КРАЗа: 35 баллов за раз', kraz.name === 'Успешное отбитие КРАЗа' && kraz.pts === 35 && kraz.add === 35, kraz);
 
+
   const dlp = s.p.waitForEvent('download', { timeout: 30000 }).catch(() => null);
   await s.p.click('#pdf');
   const file = await dlp;
@@ -123,6 +125,31 @@ const sql = async (q, a) => (await (await fetch(API + '/__test/sql', { method: '
   check('PDF скачивается как раньше', !!file && /\.pdf$/i.test(pdfName || '') && pdfOk, pdfName);
   check('рапорт: ошибок нет', s.st.errs.length === 0, s.st.errs);
   await s.ctx.close();
+
+  // ---------- система повышения, изменённая на сайте ГУ ВП, переносится в бланк целиком (с разбаловкой) ----------
+  const PROD = JSON.parse(fs.readFileSync(__dirname + '/fixtures/promo-prod.json', 'utf8'));
+  const putP = await call('PUT', '/api/promo', A, PROD.config);
+  check('сервер: своя система повышения сохранена (прод-снимок)', putP.status === 200 && putP.d.custom === true && putP.d.config.pts.postavka === 25, putP.status);
+  s = await open(A);
+  await s.p.goto(OFF + 'povyshenie.html', { waitUntil: 'domcontentloaded' });
+  await readyPromo(s.p);
+  const lab = await s.p.evaluate(() => ({ postavka: (document.querySelector('.act[data-key=postavka] .pts') || {}).textContent, vygovor: !!document.querySelector('.act[data-key=vygovor]'), vygPts: (document.querySelector('.act[data-key=vygovor] .pts') || {}).textContent, n: document.querySelectorAll('.act .pts').length }));
+  check('бланк: подписи баллов перерисованы по настройкам сайта ГУ ВП (+25 за поставку), выговоры на форме (+50)', lab.postavka === '+25' && lab.vygovor && lab.vygPts === '+50' && lab.n >= 38, lab);
+  await s.p.fill('#fromRank', 'Старший лейтенант'); await s.p.dispatchEvent('#fromRank', 'input');
+  const setN = async (key, n) => { await s.p.fill(`.act[data-key=${key}] [data-n]`, String(n)); await s.p.dispatchEvent(`.act[data-key=${key}] [data-n]`, 'input'); };
+  for (const [k, n] of Object.entries({ prof: 6, vygovor: 5, prizyv: 3, proc: 3, kraz_otbitie: 4, postavka: 10 })) await setN(k, n);
+  const pr = await s.p.evaluate(() => { const r = window.__vp.compute(); return { total: r.total, left: r.left, met: r.met, bar: document.getElementById('barText').textContent, note: document.getElementById('critNote').textContent }; });
+  check('бланк: ст. лейтенант → капитан: 1060 / 1500, не хватает 440 баллов (как на сервере)', pr.total === 1060 && !pr.met && pr.left.pts === 440 && /1060 \/ 1500/.test(pr.bar) && /440 баллов/.test(pr.note), pr);
+  await s.ctx.close();
+  // без сети: копия правил из браузера применяется до первой отрисовки
+  s = await open(A, { offlinePromo: true });
+  await s.p.goto(OFF + 'povyshenie.html', { waitUntil: 'domcontentloaded' });
+  await readyPromo(s.p);
+  const labOff = await s.p.evaluate(() => ({ postavka: (document.querySelector('.act[data-key=postavka] .pts') || {}).textContent, ladder: Object.keys(window.PROMO.ladder)[0] }));
+  check('без сети: подписи и ступени из сохранённой копии', labOff.postavka === '+25' && labOff.ladder === 'Старший сержант', labOff);
+  check('новые проверки: ошибок нет', s.st.errs.length === 0, s.st.errs);
+  await s.ctx.close();
+  await call('POST', '/api/promo/reset', A);
 
   // ---------- обязательные курсы ----------
   const STAFF = '650000000000000013';

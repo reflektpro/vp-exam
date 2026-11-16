@@ -154,7 +154,7 @@ function repScript(src) {
 function reportLibs() {
   if (!RepLib.core) {
     const v = '?v=' + encodeURIComponent(window.VP_VERSION || '');
-    const core = ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'criteria.js', 'otchet.js', 'povyshenie.js'].map(f => repScript('report/' + f + v));
+    const core = ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'promo-calc.js', 'criteria.js', 'otchet.js', 'povyshenie.js'].map(f => repScript('report/' + f + v));
     RepLib.core = Promise.all(core);
     window.VP_PDF_READY = Promise.all(['vendor/pdfmake.min.js', 'vendor/pdf.min.js'].map(f => repScript('report/' + f + v)));
     RepLib.core.catch(() => { RepLib.core = null; });
@@ -167,18 +167,13 @@ function warmReport() {
   if (warmReport.done || !can('vp')) return; warmReport.done = true;
   const v = '?v=' + encodeURIComponent(window.VP_VERSION || '');
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1500));
-  idle(() => ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'criteria.js', 'otchet.js', 'povyshenie.js', 'vendor/pdfmake.min.js', 'vendor/pdf.min.js'].forEach(f => {
+  idle(() => ['vendor/fonts-data.js', 'assets-data.js', 'docs.js', 'promo-rules.js', 'promo-calc.js', 'criteria.js', 'otchet.js', 'povyshenie.js', 'vendor/pdfmake.min.js', 'vendor/pdf.min.js'].forEach(f => {
     const l = document.createElement('link'); l.rel = 'prefetch'; l.as = 'script'; l.href = 'report/' + f + v; document.head.appendChild(l);
   }));
 }
 // Правила системы повышения с сервера (как на сайте бланков).
-function repPromo(r) {
-  const P = window.PROMO; if (!P || !r || !r.custom || !r.config) return;
-  const c = r.config;
-  if (c.points_per_item) P.pointsPerItem = c.points_per_item;
-  if (c.pts) P.acts.forEach(a => { if (Object.prototype.hasOwnProperty.call(c.pts, a.key)) a.pts = c.pts[a.key]; });
-  if (Array.isArray(c.ladder)) { Object.keys(P.ladder).forEach(k => delete P.ladder[k]); c.ladder.forEach(s => { P.ladder[s.rank] = { to: s.to, points: s.points, need: s.need || {} }; }); }
-}
+// Система повышения с сервера → правила бланка (баллы, ступени, пункты, «баллы за недостающий пункт») — тем же кодом, что на сайте бланков.
+function repPromo(r) { if (window.VP_PROMO_CALC) window.VP_PROMO_CALC.applyConfig(window.PROMO, r); }
 // Профиль → поля бланка (имя, звание, статик, должность). Поля остаются редактируемыми.
 function repAutofill(me) {
   const set = (id, val) => {

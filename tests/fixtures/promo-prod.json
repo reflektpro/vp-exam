@@ -1,0 +1,341 @@
+{
+ "_note": "Снимок prem_config promo/items и promo_missing_points с прода (16.11.2026) — только правила, без персональных данных",
+ "config": {
+  "points_per_item": 100,
+  "pts": {
+   "postavka": 25,
+   "otbitie": 25,
+   "training": 30,
+   "proc": 50,
+   "event6": 30,
+   "gmp_org": 100,
+   "pmp": 15,
+   "excursion": 50,
+   "oath": 15,
+   "kraz": 15,
+   "kraz_otbitie": 35,
+   "mp_visit": 20,
+   "gmp": 50,
+   "poverka": 20,
+   "post_kom": 25,
+   "post_shtab": 25,
+   "post_kpp1": 23,
+   "post_kpp2": 25,
+   "naryad": 25,
+   "sso": 20,
+   "patrol_city": 25,
+   "patrol_gar": 25,
+   "patrol_vch": 25,
+   "patrol": 25,
+   "lecture_va": 30,
+   "exam_va": 50,
+   "thanks": 0,
+   "city": 25,
+   "reattest": 50,
+   "vzysk": 35,
+   "vygovor": 50,
+   "prof": 30,
+   "prizyv": 30,
+   "guardhouse": 75,
+   "convoy": 20,
+   "complaint": 20,
+   "otrab": 50,
+   "obzhal": 50,
+   "docs": 10,
+   "inspect": 10,
+   "lecture_vp": 0,
+   "exam_vp": 0,
+   "soch": 75
+  },
+  "ladder": [
+   {
+    "rank": "Старший сержант",
+    "to": "Старшина",
+    "points": 400,
+    "need": {
+     "naryad": 1,
+     "vzysk": 2,
+     "prof": 1
+    }
+   },
+   {
+    "rank": "Старшина",
+    "to": "Прапорщик",
+    "points": 600,
+    "need": {
+     "naryad": 1,
+     "prof": 3,
+     "vzysk": 2
+    }
+   },
+   {
+    "rank": "Прапорщик",
+    "to": "Старший прапорщик",
+    "points": 700,
+    "need": {
+     "naryad": 2,
+     "prof": 3,
+     "vzysk": 2
+    }
+   },
+   {
+    "rank": "Старший прапорщик",
+    "to": "Младший лейтенант",
+    "points": 850,
+    "need": {
+     "patrol": 2,
+     "prizyv": 1
+    }
+   },
+   {
+    "rank": "Младший лейтенант",
+    "to": "Лейтенант",
+    "points": 1000,
+    "need": {
+     "patrol": 1,
+     "prof": 3,
+     "prizyv": 2
+    }
+   },
+   {
+    "rank": "Лейтенант",
+    "to": "Старший лейтенант",
+    "points": 1200,
+    "need": {
+     "patrol_gar": 1,
+     "prof": 6,
+     "vygovor": 3
+    }
+   },
+   {
+    "rank": "Старший лейтенант",
+    "to": "Капитан",
+    "points": 1500,
+    "need": {
+     "prof": 6,
+     "vygovor": 5,
+     "prizyv": 3,
+     "proc": 3
+    }
+   }
+  ]
+ },
+ "items": [
+  {
+   "key": "postavka",
+   "name": "Участие в поставочном мероприятии",
+   "group": "main"
+  },
+  {
+   "key": "otbitie",
+   "name": "Участие в отбитии гос. складов",
+   "group": "main"
+  },
+  {
+   "key": "training",
+   "name": "Проведение тренировки для военнослужащих",
+   "group": "main"
+  },
+  {
+   "key": "proc",
+   "name": "Передать проц. действия правоохранительным органам",
+   "group": "main"
+  },
+  {
+   "key": "event6",
+   "name": "Организовать МП",
+   "group": "main"
+  },
+  {
+   "key": "gmp_org",
+   "name": "Организовать ГМП",
+   "group": "main"
+  },
+  {
+   "key": "pmp",
+   "name": "Проведение ПМП",
+   "group": "main"
+  },
+  {
+   "key": "excursion",
+   "name": "Проведение экскурсий для граждан по территории ВЧ",
+   "group": "main"
+  },
+  {
+   "key": "oath",
+   "name": "Принятие присяги у ВА",
+   "group": "main"
+  },
+  {
+   "key": "kraz",
+   "name": "Участие в КРАЗе",
+   "group": "extra"
+  },
+  {
+   "key": "kraz_otbitie",
+   "name": "Успешное отбитие КРАЗа",
+   "group": "extra"
+  },
+  {
+   "key": "mp_visit",
+   "name": "Посетить МП",
+   "group": "extra"
+  },
+  {
+   "key": "gmp",
+   "name": "Посетить ГМП",
+   "group": "extra"
+  },
+  {
+   "key": "poverka",
+   "name": "Участие в вечерней поверке",
+   "group": "extra"
+  },
+  {
+   "key": "post_kom",
+   "name": "Пост дежурный по комендатуре 60 минут",
+   "group": "extra"
+  },
+  {
+   "key": "post_shtab",
+   "name": "Пост дежурный по штабу 60 минут",
+   "group": "extra"
+  },
+  {
+   "key": "post_kpp1",
+   "name": "Пост дежурный по КПП - 1 60 минут",
+   "group": "extra"
+  },
+  {
+   "key": "post_kpp2",
+   "name": "Пост дежурный по КПП - 2 60 минут",
+   "group": "extra"
+  },
+  {
+   "key": "naryad",
+   "name": "Наряд ВП (КПП, патруль гарнизона, комендантский пост, 60 мин)",
+   "group": "extra"
+  },
+  {
+   "key": "sso",
+   "name": "Участие в налёте в форме ССО",
+   "group": "extra"
+  },
+  {
+   "key": "patrol_city",
+   "name": "Патруль по городу 60 минут",
+   "group": "extra"
+  },
+  {
+   "key": "patrol_gar",
+   "name": "Патруль по гарнизону 60 минут",
+   "group": "extra"
+  },
+  {
+   "key": "patrol_vch",
+   "name": "Патруль по ВЧ 60 минут",
+   "group": "extra"
+  },
+  {
+   "key": "patrol",
+   "name": "Организация патрулирования",
+   "group": "extra"
+  },
+  {
+   "key": "lecture_va",
+   "name": "Проведение лекции ВА",
+   "group": "extra"
+  },
+  {
+   "key": "exam_va",
+   "name": "Проведение экзамена ВА",
+   "group": "extra"
+  },
+  {
+   "key": "thanks",
+   "name": "Благодарность от руководства",
+   "group": "extra"
+  },
+  {
+   "key": "city",
+   "name": "Вывести военнослужащего в город",
+   "group": "gu"
+  },
+  {
+   "key": "reattest",
+   "name": "Провести переаттестацию",
+   "group": "gu"
+  },
+  {
+   "key": "vzysk",
+   "name": "Написание рапорта на взыскание / выдача взыскания",
+   "group": "gu"
+  },
+  {
+   "key": "vygovor",
+   "name": "Выговор, не из рапорта на взыскание",
+   "group": "gu"
+  },
+  {
+   "key": "prof",
+   "name": "Организация профилактического мероприятия",
+   "group": "gu"
+  },
+  {
+   "key": "prizyv",
+   "name": "Принять участие в призывных мероприятиях",
+   "group": "gu"
+  },
+  {
+   "key": "guardhouse",
+   "name": "Посадить военнослужащего на гауптвахту",
+   "group": "gu"
+  },
+  {
+   "key": "convoy",
+   "name": "Сопровождение колонны ВС РФ",
+   "group": "gu"
+  },
+  {
+   "key": "complaint",
+   "name": "Рассмотрение жалобы на сотрудника ВС РФ",
+   "group": "gu"
+  },
+  {
+   "key": "otrab",
+   "name": "Рассмотрение рапорта на отработку дисц. взыскания",
+   "group": "gu"
+  },
+  {
+   "key": "obzhal",
+   "name": "Рассмотрение рапорта на обжалование дисц. взыскания",
+   "group": "gu"
+  },
+  {
+   "key": "docs",
+   "name": "Проверка документов у личного состава",
+   "group": "gu"
+  },
+  {
+   "key": "inspect",
+   "name": "Личный осмотр личного состава",
+   "group": "gu"
+  },
+  {
+   "key": "lecture_vp",
+   "name": "Проведение лекции ВП",
+   "group": "gu"
+  },
+  {
+   "key": "exam_vp",
+   "name": "Проведение экзамена ВП",
+   "group": "gu"
+  },
+  {
+   "key": "soch",
+   "name": "Поиски и поимка СОЧ",
+   "group": "gu"
+  }
+ ],
+ "missing_points": false
+}
