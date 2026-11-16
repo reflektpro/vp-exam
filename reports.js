@@ -357,12 +357,12 @@ leadRoute('/lead/promo', async () => {
   const q = hashQ(), st = q.get('status') || 'open';
   const d = await api('GET', '/api/lead/promo?status=' + encodeURIComponent(st));
   const tabs = [['open', 'Ждут решения'], ['approved', 'Одобрены'], ['rejected', 'Отклонены'], ['', 'Все']];
-  setView(`<h1>Рапорты на повышение</h1>${leadNav('/lead/promo')}
+  setView(`<div class="promo-doc"><h1>Рапорты на повышение</h1>${leadNav('/lead/promo')}
     <div class="row" style="margin-bottom:12px">${tabs.map(([k, t]) => `<a class="btn sm ${k === st ? 'gold' : ''}" href="#/lead/promo?status=${k}">${t}</a>`).join('')}</div>
     ${d.raports.length ? `<div class="tscroll"><table><tr><th>Сотрудник</th><th>Ступень</th><th>Статус</th><th>Баллы (засчитано / заявлено)</th><th>Не проверено</th><th>Отправлен</th></tr>
     ${d.raports.map(r => `<tr class="click" data-href="#/lead/promo/${r.id}"><td><b>${esc(r.name)}</b><div class="small mut">${esc(r.static_id || r.user_id)}</div></td><td>${esc(r.rank)} → ${esc(r.target)}</td>
       <td><a href="#/lead/promo/${r.id}">${promoBadge(r.status)}</a></td><td class="num">${r.points} / ${r.claimed}${r.need_points != null ? ` <span class="small mut">из ${r.need_points}</span>` : ''}</td><td class="num">${r.pending} из ${r.items}</td><td>${fmtDate(r.submitted_at)}${r.version > 1 ? ` <span class="small mut">версия ${r.version}</span>` : ''}</td></tr>`).join('')}</table></div>`
-      : '<div class="alert info">Рапортов нет.</div>'}`);
+      : '<div class="alert info">Рапортов нет.</div>'}</div>`);
   $$('tr[data-href]').forEach(tr => tr.onclick = (e) => { if (!e.target.closest('a')) location.hash = tr.dataset.href; });
 });
 route('/lead/promo/:id', async (id) => {
@@ -394,7 +394,7 @@ route('/lead/promo/:id', async (id) => {
   };
   const reviewerHtml = (r) => d.reviewer ? `Проверял: ${esc(d.reviewer)} · ${fmtDate(r.reviewed_at)}` : '';
   const r0 = d.raport, h = r0.header || {};
-  setView(`<p><a href="#/lead/promo">← Рапорты на повышение</a></p>
+  setView(`<div class="promo-doc"><p><a href="#/lead/promo">← Рапорты на повышение</a></p>
     <div class="card"><div class="row between"><h2 style="margin:0">Рапорт: ${esc(h.rank || r0.rank)} ${esc(h.name || '')}</h2><div class="row" id="prBadges">${promoBadge(r0.status)}</div></div>
       <p class="small mut">Discord: ${esc(d.user ? (d.user.global_name || d.user.username) : r0.user_id)} (${esc(r0.user_id)}) · удостоверение ${esc(h.static_id || '—')} · ${esc(h.unit || '')}${h.position ? ' · ' + esc(h.position) : ''}
         · в звании ${esc(h.from || '—')} — ${esc(h.to || '—')} · рапорт № ${esc(h.number || '—')} от ${esc(h.date || '—')} · версия ${r0.version} от ${fmtDate(r0.submitted_at)}</p>
@@ -406,7 +406,7 @@ route('/lead/promo/:id', async (id) => {
     <form class="card" id="rf"><h3>Решение по рапорту</h3>
       <label class="f"><span>Комментарий для сотрудника</span><textarea name="comment" maxlength="2000">${esc(r0.comment)}</textarea></label>
       <div class="row"><button type="button" class="btn gold" data-st="approved">Одобрить повышение</button><button type="button" class="btn danger" data-st="rejected">Отклонить рапорт</button><button type="button" class="btn" data-st="review">На проверке</button><button type="button" class="btn" data-st="">Сохранить комментарий</button></div>
-      <p class="small mut" id="prReviewer" ${d.reviewer ? '' : 'hidden'}>${reviewerHtml(r0)}</p></form>`);
+      <p class="small mut" id="prReviewer" ${d.reviewer ? '' : 'hidden'}>${reviewerHtml(r0)}</p></form></div>`);
   const apply = (nd) => {
     const prev = new Map(d.raport.items.map(i => [i.key, JSON.stringify(i)]));
     // якорь — первый видимый пункт: итог над пунктами меняет высоту, а пункт перед глазами не должен уезжать

@@ -235,9 +235,9 @@ const PROMO_MY_ST = { submitted: ['Отправлен', 'info'], review: ['На 
 const promoMyBadge = (st) => { const x = PROMO_MY_ST[st] || [st, '']; return `<span class="badge ${x[1]}">${esc(x[0])}</span>`; };
 function promoMineHtml(d) {
   const r = d && d.raport;
-  if (!r) return '<div class="card flat" id="promoMine"><h3>Мой рапорт</h3><p class="mut">Рапорт ещё не отправлялся. Заполните бланк и нажмите «Отправить на проверку».</p></div>';
+  if (!r) return '<div class="card" id="promoMine"><h3>Мой рапорт</h3><p class="mut">Рапорт ещё не отправлялся. Заполните бланк и нажмите «Отправить на проверку».</p></div>';
   const s = r.summary || {};
-  return `<div class="card flat" id="promoMine"><div class="row between"><h3 style="margin:0">Мой рапорт: ${esc(r.rank)} → ${esc(r.target)}</h3>${promoMyBadge(r.status)}</div>
+  return `<div class="card" id="promoMine"><div class="row between"><h3 style="margin:0">Мой рапорт: ${esc(r.rank)} → ${esc(r.target)}</h3>${promoMyBadge(r.status)}</div>
     <p class="small mut">Версия ${r.version} от ${fmtDate(r.submitted_at)}${r.reviewed_at ? ' · проверен ' + fmtDate(r.reviewed_at) : ''} · засчитано баллов: <b>${s.points}</b> из заявленных ${s.claimed}${s.step ? ` (нужно ${s.step.points})` : ''}</p>
     ${r.comment ? `<div class="alert ${r.status === 'rejected' ? 'err' : 'info'} small">${esc(r.comment)}</div>` : ''}
     <div class="tscroll"><table><tr><th>Пункт</th><th>Штук</th><th>Проверка</th><th>Комментарий</th></tr>${r.items.map(i => { const rv = i.review || {};
@@ -251,7 +251,7 @@ route('/promo/raport', async () => {
   const [pc, g0] = await Promise.all([api('GET', '/api/promo-config').catch(() => null), elig('')]);
   let gate = g0;
   const mine = await api('GET', '/api/promo/raports/my').catch(() => null);
-  setView(`<h1>Рапорт на повышение</h1><div class="rep" id="repBox">${PROMO_FORM_HTML}</div>${promoMineHtml(mine)}`);
+  setView(`<h1>Рапорт на повышение</h1><div class="rep rep-blue" id="repBox">${PROMO_FORM_HTML}</div><div class="promo-doc">${promoMineHtml(mine)}</div>`);
   const box = $('#repBox');
   const paint = () => {
     const el = $('#promoGate'); if (!el) return;
