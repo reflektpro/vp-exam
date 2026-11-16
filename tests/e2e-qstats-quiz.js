@@ -64,7 +64,15 @@ const sql = async (q, a) => (await (await fetch(API + '/__test/sql', { method: '
   await sql('UPDATE questions SET active = 0 WHERE id = ?1', [QZ[1].id]);
   check('выключенный вопрос из проверки пропадает', (await call('GET', '/api/lectures/' + lec, U)).d.lecture.quiz.length === 2);
   await sql('UPDATE questions SET active = 1 WHERE id = ?1', [QZ[1].id]);
-  // видео-лекция: проверка рисуется тем же способом (пульс плеера идёт через тот же api)
+  // миграция 0031: связки с вопросами переаттестации (r6-*, базы, категория «Переаттестация…») удаляются — локальный банк состоит из них
+  const del31 = fs.readFileSync(__dirname + '/../worker/migrations/0031_lecture_quiz_course_only.sql', 'utf8').split('\n').find(l => /^DELETE FROM lecture_quiz WHERE question_id IN/.test(l));
+  const REATT = "q.ext_id LIKE 'r6-%' OR q.ext_id LIKE 'reatt%' OR q.base IS NOT NULL OR q.category LIKE 'Переаттестация%'";
+  const cnt = async (w) => (await sql(`SELECT COUNT(*) AS c FROM lecture_quiz lq JOIN questions q ON q.id = lq.question_id WHERE ${w}`))[0].c;
+  const r6n = await cnt(REATT), keep = await cnt(`NOT (${REATT})`);
+  await sql(del31);
+  check('0031: вопросы переаттестации из мини-проверки убраны, вопросы курсов остались', r6n >= 2 && await cnt(REATT) === 0 && (await call('GET', '/api/lectures/' + lec, U)).d.lecture.quiz.length === keep, { r6n, keep });
+  const gen = JSON.parse(fs.readFileSync(__dirname + '/../content/build/lecture_quiz.json', 'utf8'));
+  check('подборщик берёт только вопросы курсов', gen.every(l => l.q.every(q => !/^(r6-|reatt)/.test(q.ext_id))) && gen.some(l => l.q.length));
   await p.screenshot({ path: __dirname + '/shots/lecture-quiz.png', fullPage: true });
 
   // ================= 2. аналитика вопросов =================

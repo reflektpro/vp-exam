@@ -1,9 +1,9 @@
 // Мини-проверка после лекции: подбор 1–3 вопросов к каждой лекции → content/build/lecture_quiz.json и миграция (INSERT в lecture_quiz).
-// Связь: цитата вопроса (data.meta.quote) целиком встречается в тексте лекции; приоритет — вопросы курсов (не r6-*), затем базы переаттестации.
+// Связь: цитата вопроса (data.meta.quote) целиком встречается в тексте лекции; только вопросы курсов (вопросы переаттестации не подбираются).
 // Для тем без цитат (OOC, основы, психология) — вопросы темы (content/<slug>/questions.json) по совпадению слов верного ответа с лекцией;
 // цитатой служит самый близкий абзац лекции. Берутся только «один/несколько ответов», активные; 3 вопроса — из разных мест лекции.
 // Запуск: node tools/content/lecture-quiz.js <снимок вопросов.json> <снимок лекций.json> [migration.sql]
-//   снимок вопросов: {qs:[{id,e:ext_id,t:type,a:active,qt:quote}]}, снимок лекций: [{id,title,slug,body?}] — SELECT из боевой D1.
+//   снимок вопросов: {qs:[{id,e:ext_id,t:type,a:active,c:category,b:base,qt:quote}]}, снимок лекций: [{id,title,slug,body?}] — SELECT из боевой D1.
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '../../content');
 const [qsFile, lecFile, migFile] = process.argv.slice(2);
@@ -16,7 +16,9 @@ const words = (s) => norm(s).split(' ').filter(w => w.length > 3 && !STOP.has(w)
 const body = new Map(); // slug|title → текст лекции
 for (const t of content) for (const l of t.lectures) body.set(t.slug + '|' + l.title, l.body);
 for (const l of LEC) if (l.body) body.set(l.slug + '|' + l.title, l.body);
-const usable = QS.filter(q => q.a && (q.t === 'single' || q.t === 'multi') && q.e);
+// только вопросы курсов: вопросы переаттестации (r6-*, reatt-*, категория «Переаттестация…», вопросы баз) не берутся — их ответы не раскрываем
+const isCourse = (q) => q.e && !/^(r6-|reatt)/.test(q.e) && !/^Переаттестация/.test(q.c || '') && !q.b;
+const usable = QS.filter(q => q.a && (q.t === 'single' || q.t === 'multi') && isCourse(q));
 const withQuote = usable.filter(q => parts(q.qt).length);
 const byExt = new Map(usable.map(q => [q.e, q]));
 const out = [];
@@ -26,7 +28,7 @@ for (const l of LEC) {
   let cand = [];
   for (const q of withQuote) {
     const ps = parts(q.qt); if (!ps.every(p => nb.includes(p))) continue;
-    cand.push({ q, pos: nb.indexOf(ps[0]) / nb.length, pri: q.e.startsWith('r6-') ? 1 : 0, len: ps.join(' ').length });
+    cand.push({ q, pos: nb.indexOf(ps[0]) / nb.length, pri: 0, len: ps.join(' ').length });
   }
   let src = 'quote';
   if (cand.length < 3) { // вопросы темы без цитат: совпадение слов верного ответа и вопроса с абзацем лекции
@@ -48,14 +50,14 @@ for (const l of LEC) {
   if (cand.length < 3) { // пересказ закона (ПК, СУ…): слова цитаты вопроса той же темы почти целиком в одном абзаце лекции
     const fam = l.slug.replace(/-/g, '_'), paras = b.split(/\n\s*\n/).map(t => new Set(words(t)));
     for (const q of withQuote) {
-      const e = q.e.replace(/^r6-/, ''); if (!(e.startsWith(fam + '-') || (fam === 'pk' && e.startsWith('pkc-'))) || cand.some(c => c.q.e === q.e)) continue;
+      const e = q.e; if (!(e.startsWith(fam + '-') || (fam === 'pk' && e.startsWith('pkc-'))) || cand.some(c => c.q.e === q.e)) continue;
       const w = [...new Set(words(q.qt))]; if (w.length < 4) continue;
       let best = 0, bi = 0; paras.forEach((st, k) => { const sc = w.filter(t => st.has(t)).length / w.length; if (sc > best) { best = sc; bi = k; } });
-      if (best >= 0.7) cand.push({ q, pos: bi / paras.length, pri: 3 - best + (q.e.startsWith('r6-') ? 1 : 0), len: 0 });
+      if (best >= 0.7) cand.push({ q, pos: bi / paras.length, pri: 3 - best, len: 0 });
     }
   }
   cand.sort((a, b) => a.pri - b.pri);
-  { const seen = new Set(); cand = cand.filter(c => { const k = c.q.e.replace(/^r6-/, ''); if (seen.has(k)) return false; seen.add(k); return true; }); } // r6-копии вопросов курса
+  { const seen = new Set(); cand = cand.filter(c => { const k = c.q.e.replace(/~v\d+$/, ''); if (seen.has(k)) return false; seen.add(k); return true; }); } // копии вопроса (~v2)
   if (!cand.length) { out.push({ id: l.id, slug: l.slug, title: l.title, q: [] }); continue; }
   cand.sort((a, b) => a.pri - b.pri || b.len - a.len || a.q.id - b.q.id);
   const top = cand.filter(c => c.pri === cand[0].pri).length >= 3 ? cand.filter(c => c.pri === cand[0].pri) : cand;
