@@ -790,3 +790,31 @@ button.chip{cursor:pointer;color:var(--txt);font:inherit;font-size:13px}.uf-bar{
 .promo-doc .ritem .links a,.promo-doc a{color:#9ec5ff}
 .promo-doc .btn{border-radius:999px}
 .promo-doc .kv b,.promo-doc .num{font-variant-numeric:tabular-nums}
+/* мини-проверка после лекции */
+.lec-quiz{margin-top:18px}
+.lq{padding:14px 0;border-top:1px solid var(--line)}
+.lec-quiz h2+p+.lq{border-top:0;padding-top:4px}
+.lq-text{margin-bottom:4px}
+.lq-opts{display:grid;gap:6px;margin:8px 0 10px}
+.lq-opt{display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);cursor:pointer}
+.lq-opt input{width:auto;margin:4px 0 0;flex:none}
+.lq-opt.ok{border-color:#3c7a45;background:#1b2b1e}
+.lq-opt.bad{border-color:#7a2a2a;background:#2c1a1a}
+.lq-res .alert{margin:0 0 8px}
+.lq-quote{margin:0;padding:8px 14px;border-left:3px solid var(--gold);background:var(--panel2);border-radius:0 5px 5px 0;font-size:14px;white-space:normal}
+.lq-quote footer{margin-top:4px;font-size:12px;color:var(--mut)}
+.lq-sum{margin-top:6px;padding-top:12px;border-top:1px solid var(--line)}
+/* аналитика вопросов */
+.qs-head{margin-bottom:12px}
+.qs-stats{margin:0 0 16px}
+.qs-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+.qs-f select{max-width:220px}.qs-f input{max-width:260px}
+.qs-table td{vertical-align:top}
+.qs-table .qs-q{min-width:280px;max-width:520px}
+.qs-table .bar,.qs-topics .bar{min-width:60px}
+.qs-row.open td{background:var(--panel2)}
+.qs-det td{background:var(--panel2);border-top:0}
+.qs-opts{display:grid;gap:6px;margin-bottom:8px;max-width:720px}
+.qs-opt{display:grid;grid-template-columns:minmax(0,1fr) 160px 40px;gap:10px;align-items:center;font-size:14px}
+.qs-opt .bar{margin:0}.qs-opt.ok span{color:#9fe0a8}.qs-opt b{text-align:right;font-weight:500}
+.qs-bad{color:var(--err)}.qs-mid{color:var(--warn)}.qs-good{color:var(--ok)}

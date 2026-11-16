@@ -45,7 +45,7 @@ async function apiRaw(method, path, body) {
 // ---------- кэш ответов ----------
 // Списки и сводки держатся в памяти: повторный заход в раздел открывается сразу, свежие данные догружаются в фоне.
 // Любое изменение (POST/PUT/DELETE) сбрасывает кэш целиком; записи старше CACHE_MAX не используются.
-const CACHE_RE = /^\/api\/(courses|exams(\/\d+)?|reatt|lectures|topics\/\d+|reports\/my|report-config|promo-config|premiums|promo|promo\/eligibility|docs(\/\d+)?|people(\/\d+)?|my\/attempts|admin\/(stats|users(\/\d+)?|attempts(\/\d+)?|reatt(\/\d+(\/access)?)?|laws(\/history|\/docs\/[a-z0-9_]+)?|bank|bank\/stats|lectures|courses|exams(\/\d+)?|topics(\/\d+)?|settings|bases|media|audit)|lead\/(week|violations|budget|staff|config|deleted|reports\/\d+|promo(\/\d+)?))(\?.*)?$/;
+const CACHE_RE = /^\/api\/(courses|exams(\/\d+)?|reatt|lectures|topics\/\d+|reports\/my|report-config|promo-config|premiums|promo|promo\/eligibility|docs(\/\d+)?|people(\/\d+)?|my\/attempts|admin\/(stats|users(\/\d+)?|attempts(\/\d+)?|reatt(\/\d+(\/access)?)?|laws(\/history|\/docs\/[a-z0-9_]+)?|bank|bank\/stats|lectures|courses|exams(\/\d+)?|topics(\/\d+)?|settings|bases|media|audit)|lead\/(week|violations|budget|staff|config|deleted|reports\/\d+|promo(\/\d+)?|qstats))(\?.*)?$/;
 const CACHE_FRESH = 60000, CACHE_MAX = 5 * 60000;
 // Пульс лекции и автосохранение ответов кэш не сбрасывают (пульс — только когда лекция засчитана); после остальных записей
 // 10 с запросы идут с X-VP-Fresh — сервер отвечает по свежим данным, а не из кэша изолята.
@@ -86,6 +86,7 @@ async function api(method, path, body, opt) {
     if (HOT_WRITE_RE.test(path)) {
       const r = await apiRaw(method, path, body);
       if (r && r.completed) { cacheClear(); App.lastWrite = Date.now(); }
+      if (r && r.quiz && App.onQuiz) App.onQuiz(r.quiz); // лекция засчитана этим пульсом — мини-проверка в конце страницы
       else if (/heartbeat$/.test(path)) for (const k of [...Cache.keys()]) if (/^\/api\/(lectures|courses|topics)/.test(k)) Cache.delete(k); // прогресс в списках лекций догрузится при заходе
       return r;
     }
@@ -274,6 +275,7 @@ route('/lecture/:id', async (id) => {
       <article class="lecture-text md" id="lecText"${localStorage.getItem('vp_lec_fs') ? ` style="--lec-fs:${fs}px"` : ''}>${md(l.body)}</article></div>` : `<h1>${esc(l.title)}</h1><div id="playerBox"></div>`}
     <div class="pmsg" id="pmsg"></div>
     ${l.description ? `<div class="card flat" style="margin-top:14px"><div class="welcome">${esc(l.description)}</div></div>` : ''}
+    <div id="lecQuiz"${l.kind === 'text' ? ' class="lec-page"' : ''}></div>
     ${l.kind === 'text' ? `<p><a class="btn" href="${back}">← ${l.topic_id ? 'К теме' : 'К курсу'}</a></p>` : ''}`);
   if (l.kind === 'text') {
     lectureFont();
@@ -282,7 +284,54 @@ route('/lecture/:id', async (id) => {
     $('#fsUp').onclick = () => setFs((Number(localStorage.getItem('vp_lec_fs')) || 18) + 1);
     textReader(l);
   } else window.VPPlayer.mount($('#playerBox'), l, $('#pmsg'));
+  const box = $('#lecQuiz');
+  if (l.quiz && l.quiz.length) lectureQuiz(box, l.id, l.quiz);
+  App.onQuiz = (q) => { if (document.body.contains(box) && q.length && !box.firstChild) { lectureQuiz(box, l.id, q); } };
+  App.cleanup.push(() => { App.onQuiz = null; });
 }, { cap: 'vp' });
+// Мини-проверка после лекции: 1–3 вопроса, на оценку не влияет. Ответ проверяется сразу на странице (верный ответ и цитата пришли с вопросом);
+// выбранные ответы хранятся в браузере (vp_quiz), на сервер ничего не отправляется.
+function quizStore(lid, v) {
+  let all = {}; try { all = JSON.parse(localStorage.getItem('vp_quiz') || '{}') || {}; } catch (_) {}
+  if (v === undefined) return all[lid] || {};
+  if (v === null) delete all[lid]; else all[lid] = v;
+  try { localStorage.setItem('vp_quiz', JSON.stringify(all)); } catch (_) {}
+}
+function lectureQuiz(box, lid, quiz) {
+  const seeded = (arr, seed) => { const a = arr.slice(); let x = seed * 9301 + 49297; for (let i = a.length - 1; i > 0; i--) { x = (x * 9301 + 49297) % 233280; const j = Math.floor(x / 233280 * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const draw = () => {
+    const saved = quizStore(lid);
+    box.innerHTML = `<section class="card flat lec-quiz"><h2>Проверьте себя</h2><p class="small mut">${quiz.length === 1 ? 'Один вопрос' : quiz.length + ' вопроса'} по лекции. На оценку не влияет.</p>
+      ${quiz.map((q, i) => `<div class="lq" data-q="${q.id}"><div class="lq-text"><b>${i + 1}.</b> ${esc(q.text)}</div>${q.type === 'multi' ? '<div class="small mut">Выберите все верные варианты</div>' : ''}
+        <div class="lq-opts">${seeded(q.options, q.id).map(o => `<label class="lq-opt"><input type="${q.type === 'multi' ? 'checkbox' : 'radio'}" name="lq${q.id}" value="${esc(o.id)}"><span>${esc(o.text)}</span></label>`).join('')}</div>
+        <div class="row"><button type="button" class="btn sm gold lq-check" disabled>Проверить</button></div><div class="lq-res"></div></div>`).join('')}
+      <div class="row between lq-sum" hidden><b class="lq-total"></b><button type="button" class="btn sm lq-again">Пройти ещё раз</button></div></section>`;
+    const show = (q, el, chosen) => {
+      const corr = new Set(q.correct), pick = new Set(chosen);
+      const right = corr.size === pick.size && [...corr].every(x => pick.has(x));
+      el.querySelectorAll('.lq-opt').forEach(lb => { const inp = lb.querySelector('input'); inp.checked = pick.has(inp.value); inp.disabled = true;
+        lb.classList.toggle('ok', corr.has(inp.value)); lb.classList.toggle('bad', pick.has(inp.value) && !corr.has(inp.value)); });
+      el.querySelector('.lq-check').hidden = true;
+      el.classList.add(right ? 'done-ok' : 'done-bad');
+      el.querySelector('.lq-res').innerHTML = `<div class="alert ${right ? 'ok' : 'err'}"><b>${right ? 'Верно' : 'Неверно'}.</b> ${right ? '' : 'Правильный ответ: ' + q.options.filter(o => corr.has(o.id)).map(o => '«' + esc(o.text) + '»').join(', ')}</div>
+        ${q.quote || q.ref ? `<blockquote class="lq-quote">${q.quote ? esc(q.quote).replace(/\n/g, '<br>') : ''}${q.ref ? `<footer>${esc(q.ref)}</footer>` : ''}</blockquote>` : ''}`;
+    };
+    const total = () => {
+      const st = quizStore(lid), n = quiz.filter(q => st[q.id]).length; if (n < quiz.length) return;
+      const good = quiz.filter(q => { const c = new Set(q.correct), p = new Set(st[q.id]); return c.size === p.size && [...c].every(x => p.has(x)); }).length;
+      const sum = box.querySelector('.lq-sum'); sum.hidden = false; box.querySelector('.lq-total').textContent = `Верно ${good} из ${quiz.length}`;
+    };
+    quiz.forEach(q => {
+      const el = box.querySelector(`.lq[data-q="${q.id}"]`), btn = el.querySelector('.lq-check');
+      if (saved[q.id]) { show(q, el, saved[q.id]); return; }
+      el.addEventListener('change', () => { btn.disabled = !el.querySelector('input:checked'); });
+      btn.onclick = () => { const ch = [...el.querySelectorAll('input:checked')].map(x => x.value); if (!ch.length) return; const st = quizStore(lid); st[q.id] = ch; quizStore(lid, st); show(q, el, ch); total(); };
+    });
+    total();
+    box.querySelector('.lq-again').onclick = () => { quizStore(lid, null); draw(); };
+  };
+  draw();
+}
 // Шрифт для чтения лекций (Golos Text) подгружается только на странице текстовой лекции.
 function lectureFont() {
   if (document.getElementById('lecFont')) return;

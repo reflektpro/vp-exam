@@ -441,3 +441,84 @@ route('/lead/promo/:id', async (id) => {
   $('#allOk').onclick = () => { const items = {}; d.raport.items.filter(i => !i.review).forEach(i => { items[i.key] = { status: 'ok' }; }); if (!Object.keys(items).length) return toast('Все пункты уже проверены'); send({ items }, 'Пункты засчитаны', [$('#allOk')]); };
   $$('#rf [data-st]').forEach(b => b.onclick = () => send(b.dataset.st ? { status: b.dataset.st, comment: $('#rf').comment.value } : { comment: $('#rf').comment.value }, 'Сохранено', $$('#rf [data-st]')));
 });
+
+// ---------- аналитика вопросов ----------
+// Страница читает сохранённый результат пересчёта (одна строка в БД + кэш); фильтры, сортировка и раскрытие строки — на клиенте, без запросов.
+leadRoute('/lead/qstats', async () => {
+  const r = await api('GET', '/api/lead/qstats');
+  qstatsPage(r);
+});
+function qstatsPage(r) {
+  const S = r.stats || { items: [], docs: [], topics: [], exams: [], flags: {}, base_names: {} };
+  const q0 = hashQ(), F = { doc: q0.get('doc') || '', ex: q0.get('ex') || '', base: q0.get('base') || '', flag: q0.get('flag') || '', q: q0.get('q') || '', sort: q0.get('sort') || 'n' };
+  const FL = S.flags || {}, FC = { low: 'info', easy: 'warn', hard: 'err', distractor: 'err', neg: 'err' };
+  const pct = (p) => p == null ? '—' : Math.round(p * 100) + '%';
+  const bad = S.items.filter(it => it.flags.some(f => f !== 'low')).length, low = S.items.filter(it => it.flags.includes('low')).length;
+  const avg = S.answers ? S.items.reduce((s, it) => s + it.p * it.n, 0) / S.answers : null;
+  const cnt = (f) => S.items.filter(it => it.flags.includes(f)).length;
+  const bases = [...new Set(S.items.map(it => it.base).filter(Boolean))];
+  const docs = S.docs.map(d => d.key);
+  const opt = (v, t, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(t)}</option>`;
+  setView(`<h1>Аналитика вопросов</h1>${leadNav('/lead/qstats')}
+    <div class="row between qs-head"><span class="small mut">${S.at ? `Обновлено ${fmtDate(S.at)}${S.by ? ' · ' + esc(S.by) : ''} · попыток ${S.attempts} · ответов ${S.answers}` : 'Ещё не считалось'}</span>
+      <button type="button" class="btn sm gold" id="qsRe">Пересчитать</button></div>
+    <div class="grid stats4 qs-stats"><div class="stat"><b>${S.items.length}</b>вопросов с ответами</div><div class="stat"><b>${pct(avg)}</b>верных в среднем</div>
+      <div class="stat"><b>${bad}</b>требуют внимания</div><div class="stat"><b>${low}</b>мало данных (меньше ${S.min_n || 10} ответов)</div></div>
+    <div class="qs-two">
+      <div class="card flat"><h3>По документам</h3>${S.docs.length ? `<div class="tscroll"><table class="qs-docs"><tr><th>Документ</th><th>Вопросов</th><th>Ответов</th><th>Верных</th><th>Проблемных</th></tr>
+        ${S.docs.map(d => `<tr class="click" data-doc="${esc(d.key)}"><td>${esc(d.key)}</td><td class="num">${d.q}</td><td class="num">${d.n}</td><td class="num">${pct(d.p)}</td><td class="num">${d.bad || ''}</td></tr>`).join('')}</table></div>` : '<p class="mut small">Пока нет ответов.</p>'}</div>
+      <div class="card flat"><h3>Слабые темы состава</h3>${S.topics.length ? `<div class="tscroll"><table class="qs-topics"><tr><th>Тема</th><th>Ответов</th><th>Верных</th></tr>
+        ${S.topics.slice(0, 10).map(t => `<tr class="click" data-doc="${esc(t.doc)}" data-topic="${esc(t.topic)}"><td>${esc(t.doc)} · ${esc(t.topic)}<div class="bar"><i style="width:${Math.round(t.p * 100)}%"></i></div></td><td class="num">${t.n}</td><td class="num">${pct(t.p)}</td></tr>`).join('')}</table></div>` : '<p class="mut small">Тем с достаточным числом ответов пока нет.</p>'}</div>
+    </div>
+    <form class="row bankf qs-f" id="qsF" onsubmit="return false">
+      <select name="doc"><option value="">Все документы</option>${docs.map(d => opt(d, d, F.doc)).join('')}</select>
+      <select name="ex"><option value="">Все экзамены</option>${S.exams.map(e => opt(e.key, e.title, F.ex)).join('')}</select>
+      <select name="base"><option value="">Все базы</option>${bases.map(b => opt(b, 'База: ' + (S.base_names[b] || b), F.base)).join('')}</select>
+      <select name="flag"><option value="">Все вопросы</option>${opt('any', `Требуют внимания (${bad})`, F.flag)}${Object.keys(FL).map(f => opt(f, `${FL[f]} (${cnt(f)})`, F.flag)).join('')}</select>
+      <input name="q" value="${esc(F.q)}" placeholder="Поиск по тексту, теме, пункту">
+      <select name="sort">${[['n', 'Больше ответов'], ['p', 'Меньше верных'], ['pd', 'Больше верных'], ['r', 'Хуже разделяет'], ['w', 'Частый неверный']].map(([k, t]) => opt(k, t, F.sort)).join('')}</select>
+    </form>
+    <div id="qsList"></div>`);
+  const list = () => {
+    const s = F.q.trim().toLowerCase();
+    let rows = S.items.filter(it => (!F.doc || it.doc === F.doc) && (!F.ex || it.ex.includes(F.ex)) && (!F.base || it.base === F.base)
+      && (!F.flag || (F.flag === 'any' ? it.flags.some(f => f !== 'low') : it.flags.includes(F.flag)))
+      && (!s || (it.text + ' ' + it.topic + ' ' + it.ref + ' ' + it.ext).toLowerCase().includes(s)));
+    const key = { n: (a, b) => b.n - a.n, p: (a, b) => a.p - b.p || b.n - a.n, pd: (a, b) => b.p - a.p || b.n - a.n, r: (a, b) => (a.r ?? 9) - (b.r ?? 9), w: (a, b) => (b.wrong ? b.wrong.n / b.n : 0) - (a.wrong ? a.wrong.n / a.n : 0) }[F.sort] || ((a, b) => b.n - a.n);
+    rows = rows.slice().sort(key);
+    let shown = 100;
+    const rowHtml = (it) => `<tr class="click qs-row" data-id="${it.id}"><td class="qs-q">${esc(it.text)}<div class="small mut">${esc(it.doc)}${it.ref ? ' · ' + esc(it.ref) : ''}${it.base ? ' · ' + esc(S.base_names[it.base] || it.base) : ''}${it.active ? '' : ' · выключен'}</div></td>
+      <td class="num">${it.n}</td><td class="num">${pct(it.p)}<div class="bar"><i style="width:${Math.round(it.p * 100)}%"></i></div></td>
+      <td class="num ${it.r == null ? '' : it.r < 0 ? 'qs-bad' : it.r < 0.2 ? 'qs-mid' : 'qs-good'}" title="${it.d == null ? '' : 'Верхняя треть минус нижняя: ' + Math.round(it.d * 100) + ' п.'}">${it.r == null ? '—' : it.r.toFixed(2)}</td>
+      <td class="num">${it.sec == null ? '—' : '≈ ' + it.sec + ' с'}</td>
+      <td class="small">${it.wrong ? esc(it.wrong.text) + ` <span class="mut">(${Math.round(it.wrong.n / it.n * 100)}%)</span>` : '<span class="mut">—</span>'}</td>
+      <td>${it.flags.map(f => `<span class="badge ${FC[f] || ''}">${esc(FL[f] || f)}</span>`).join(' ')}</td></tr>`;
+    const detail = (it) => {
+      const edit = r.can_edit ? (it.exam_id ? `#/admin/exam/${it.exam_id}` : '#/admin/bank?' + new URLSearchParams({ q: it.ext || it.text.slice(0, 60) }).toString()) : '';
+      const tot = it.n - it.skip;
+      return `<tr class="qs-det"><td colspan="7">${it.opts ? `<div class="qs-opts">${it.opts.map(o => `<div class="qs-opt ${o.ok ? 'ok' : ''}"><span>${o.ok ? '✔ ' : ''}${esc(o.text)}</span><div class="bar"><i style="width:${tot ? Math.round(o.n / tot * 100) : 0}%"></i></div><b class="num">${o.n}</b></div>`).join('')}</div>` : ''}
+        <div class="small mut">Ответов ${it.n}${it.skip ? `, без ответа ${it.skip}` : ''} · верных ${pct(it.p)} · разделяющая способность ${it.r == null ? '—' : it.r.toFixed(2)}${it.d == null ? '' : ` (верхняя треть минус нижняя: ${Math.round(it.d * 100)} п.)`}${it.topic ? ' · тема: ' + esc(it.topic) : ''}${it.ext ? ' · ' + esc(it.ext) : ''}</div>
+        ${edit ? `<div class="row" style="margin-top:8px"><a class="btn sm" href="${edit}">Править вопрос</a></div>` : ''}</td></tr>`;
+    };
+    const draw = () => {
+      $('#qsList').innerHTML = rows.length ? `<p class="small mut">Найдено: ${rows.length}</p><div class="tscroll"><table class="qs-table"><tr><th>Вопрос</th><th>Ответов</th><th>Верных</th><th title="Корреляция балла за вопрос с остальным баллом попытки">Разделение</th><th>Время</th><th>Частый неверный</th><th>Отметки</th></tr>
+        ${rows.slice(0, shown).map(rowHtml).join('')}</table></div>${rows.length > shown ? `<div class="row"><button type="button" class="btn sm" id="qsMore">Показать ещё ${Math.min(100, rows.length - shown)}</button></div>` : ''}`
+        : `<div class="alert info">${S.items.length ? 'Под фильтр ничего не попало.' : 'Ответов на вопросы пока нет — данные появятся после первых сданных попыток.'}</div>`;
+      $$('#qsList tr.qs-row').forEach(tr => tr.onclick = () => {
+        const nx = tr.nextElementSibling; if (nx && nx.classList.contains('qs-det')) { nx.remove(); tr.classList.remove('open'); return; }
+        const it = S.items.find(x => x.id === Number(tr.dataset.id)); tr.insertAdjacentHTML('afterend', detail(it)); tr.classList.add('open');
+      });
+      const more = $('#qsMore'); if (more) more.onclick = () => { shown += 100; draw(); };
+    };
+    draw();
+  };
+  const sync = () => { const p = new URLSearchParams(Object.entries(F).filter(([k, v]) => v && !(k === 'sort' && v === 'n'))).toString(); history.replaceState(null, '', '#/lead/qstats' + (p ? '?' + p : '')); list(); };
+  $('#qsF').addEventListener('input', (e) => { const t = e.target; if (!t.name) return; F[t.name] = t.value; if (t.tagName === 'INPUT') { clearTimeout(sync._t); sync._t = setTimeout(sync, 200); } else sync(); });
+  $$('tr[data-doc]').forEach(tr => tr.onclick = () => { F.doc = tr.dataset.doc; F.q = tr.dataset.topic || ''; $('#qsF [name=doc]').value = F.doc; $('#qsF [name=q]').value = F.q; sync(); $('#qsF').scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+  $('#qsRe').onclick = async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Считаем…';
+    try { const d = await api('POST', '/api/lead/qstats'); cachePut('/api/lead/qstats', d); App.silent = true; try { qstatsPage(d); } finally { App.silent = false; } toast('Аналитика пересчитана'); }
+    catch (err) { toast(err.message, true); b.disabled = false; b.textContent = 'Пересчитать'; }
+  };
+  list();
+}

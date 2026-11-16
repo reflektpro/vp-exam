@@ -56,10 +56,10 @@ const MEMO = new Map();
 // sess — проверка токена (роль, бан, отзыв сессии видны другим изолятам не позже 30 с); u:<id>: — данные одного пользователя (15 с);
 // lead: — сводки руководства (15 с); cfg: — таблицы выплат и система повышения.
 const MEMO_TTL = { courses: 30000, settings: 30000, lectures: 30000, topics: 30000, exams: 30000, links: 30000, qcount: 30000, docs: 30000, bank: 60000,
-  cfg: 30000, sess: 30000, u: 15000, lead: 15000 };
+  cfg: 30000, sess: 30000, u: 15000, lead: 15000, quiz: 300000, qs: 300000 };
 globalThis[Symbol.for('vp-exam.memo')] = MEMO; // локальный тестовый обёрточный worker сбрасывает его после прямых правок БД
 // Частые записи пользователей, которые не трогают кэшируемые таблицы (прогресс лекций, попытки, отчёты, профиль, сессии, руководство, личные дела) — кэш не сбрасывают.
-const MEMO_KEEP_RE = /^\/(auth\/exchange|api\/(logout|me|lectures\/\d+\/heartbeat|exams\/\d+\/start|attempts\/\d+\/(answers|submit|upload)|reatt\/[a-z0-9_-]+\/start|reports|promo\/raports|lead\/(week|reports|staff|budget|violations|promo)(\/.*)?|people(\/.*)?))\/?$/;
+const MEMO_KEEP_RE = /^\/(auth\/exchange|api\/(logout|me|lectures\/\d+\/heartbeat|exams\/\d+\/start|attempts\/\d+\/(answers|submit|upload)|reatt\/[a-z0-9_-]+\/start|reports|promo\/raports|lead\/(week|reports|staff|budget|violations|promo|qstats)(\/.*)?|people(\/.*)?))\/?$/;
 // Самые частые записи: пульс лекции (прогресс в кэше обновляется на месте) и автосохранение ответов — пользовательский кэш не трогают.
 const MEMO_HOT_RE = /^\/api\/(lectures\/\d+\/heartbeat|attempts\/\d+\/(answers|upload))\/?$/;
 function memoClear() { MEMO.clear(); }
@@ -444,6 +444,7 @@ async function getLecture(env, user, id) {
   if (it.locked) throw new HttpError(403, 'Лекция пока недоступна: сначала просмотрите предыдущие');
   const o = lectureOut(it, true);
   if (it.lecture.has_body) o.body = (await env.DB.prepare('SELECT body FROM lectures WHERE id = ?1').bind(id).first()).body;
+  if (it.progress && it.progress.completed_at) o.quiz = await lectureQuiz(env, id);
   return json({ lecture: o });
 }
 async function heartbeat(request, env, user, id) {
@@ -482,7 +483,30 @@ async function heartbeat(request, env, user, id) {
   // кэш прогресса пользователя в этом изоляте обновляется на месте — без повторного чтения списка
   const pe = MEMO.get('u:' + user.id + ':prog');
   if (pe && row) pe.p = pe.p.then(list => { const i = list.findIndex(x => x.lecture_id === id); if (i >= 0) list[i] = row; else list.push(row); return list; });
-  return json({ accepted, reason, max_pos: maxPos, last_pos: lastPos, watched_sec: Math.round(watched), completed: !!completedAt, duration_sec: dur });
+  const out = { accepted, reason, max_pos: maxPos, last_pos: lastPos, watched_sec: Math.round(watched), completed: !!completedAt, duration_sec: dur };
+  if (completedAt && !p.completed_at) out.quiz = await lectureQuiz(env, id); // лекция засчитана этим пульсом — мини-проверка приходит сразу, без отдельного запроса
+  return json(out);
+}
+// Мини-проверка после лекции: 1–3 вопроса (lecture_quiz, миграция 0030). Все связки читаются одним запросом и живут в кэше изолята 5 минут.
+// На оценку не влияет: верный ответ и цитата уходят клиенту вместе с вопросом, ответы на сервер не отправляются.
+async function lectureQuiz(env, id) {
+  const all = await memo('quiz', async () => {
+    let rows = [];
+    try {
+      rows = (await env.DB.prepare(`SELECT lq.lecture_id, lq.quote AS lq_quote, q.id, q.type, q.text, q.options, q.correct, q.data, q.source_ref FROM lecture_quiz lq
+        JOIN questions q ON q.id = lq.question_id WHERE q.active = 1 AND q.type IN ('single', 'multi') ORDER BY lq.lecture_id, lq.position`).all()).results;
+    } catch (_) { rows = []; } // таблица ещё не создана
+    const m = {};
+    for (const r of rows) {
+      const d = parseJ(r.data, {}), meta = d.meta || {}, corr = parseJ(r.correct, []);
+      const opts = parseJ(r.options, []).map(o => ({ id: o.id, text: o.text, ...(o.media ? { media: o.media } : {}) }));
+      if (!opts.length || !corr.length) continue;
+      (m[r.lecture_id] = m[r.lecture_id] || []).push({ id: r.id, type: r.type, text: r.text, options: opts, correct: corr,
+        quote: String(r.lq_quote || meta.quote || '').trim(), ref: String(meta.article || r.source_ref || '').trim() });
+    }
+    return m;
+  });
+  return (all[id] || []).slice(0, 3);
 }
 
 // ---------- exams ----------
@@ -4045,6 +4069,131 @@ async function promoMy(env, user) {
     recent: results.map(r => ({ id: r.id, status: r.status, rank: r.rank, target: r.target, version: r.version, submitted_at: r.submitted_at, reviewed_at: r.reviewed_at, comment: r.comment || '' })) });
 }
 const promoName = (u) => u ? (u.ic_name || u.global_name || u.username || u.id) : '';
+// ---------- аналитика вопросов (руководство и администраторы) ----------
+// Тяжёлая агрегация answers/attempts — только по кнопке «Пересчитать» (или при открытии, если результату больше суток);
+// результат лежит в analytics (k = 'qstats'), страница читает одну строку через кэш изолята (5 минут, после пересчёта — сразу новый).
+const QS_MIN_N = 10, QS_DAY = 86400000;
+const QS_FLAGS = { low: 'Мало данных', easy: 'Слишком лёгкий', hard: 'Никто не решает', distractor: 'Подозрительный дистрактор', neg: 'Отрицательная разделяющая способность' };
+function qsTopicOf(q) { // тема: поле topic вопроса, иначе статья/глава из пункта («ВУ, п. 1.10» → «ВУ, п. 1»)
+  if (q.topic && !/^[a-z0-9:_-]+$/i.test(q.topic)) return q.topic;
+  const r = String(q.source_ref || '').trim();
+  if (r) { const a = /(?:ст\.|статья)\s*(\d+)/i.exec(r); if (a) return 'ст. ' + a[1]; const m = /^(.*?)(\d+)/.exec(r); return m ? (m[1] + m[2]).trim() : r.slice(0, 40); }
+  return q.topic || '';
+}
+function qsDocOf(q) { const d = q.source_doc && SOURCE_DOC_MAP.get(q.source_doc); return d ? d.short : (q.category || '(без документа)'); }
+function qsCorr(x, y) {
+  const n = x.length; if (n < 3) return null;
+  const mx = x.reduce((s, v) => s + v, 0) / n, my = y.reduce((s, v) => s + v, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < n; i++) { const a = x[i] - mx, b = y[i] - my; sxy += a * b; sxx += a * a; syy += b * b; }
+  return sxx > 1e-12 && syy > 1e-12 ? sxy / Math.sqrt(sxx * syy) : null;
+}
+const qsR = (v, k = 2) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** k) / 10 ** k);
+// answers: [{t: attempt_id, q: question_id, v: answer JSON, ap, mp, nr}], attempts: [{id, exam_id, reatt, started_at, submitted_at, title}],
+// questions: строки questions, exams: [{id, title}]. Чистая функция (юнит-тест: tests/qstats-unit.js).
+function qstatsBuild(answers, attempts, questions, exams, now) {
+  const qm = new Map(questions.map(q => [q.id, q])), am = new Map(attempts.map(a => [a.id, a]));
+  const exTitle = new Map(exams.map(e => [e.id, e.title]));
+  const exKey = (a) => a.reatt ? 'r:' + a.reatt : 'e:' + a.exam_id;
+  // попытка: набранная доля по каждому вопросу; итог попытки — из тех же ответов (чтобы вычесть сам вопрос)
+  const per = new Map(); // attempt_id → {got, max, n, rows:[{q, f, pts, v}]}
+  for (const r of answers) {
+    const q = qm.get(r.q), a = am.get(r.t); if (!q || !a || !(q.points > 0)) continue;
+    const got = r.mp ?? r.ap; if (got == null) continue; // ждёт ручной проверки
+    let A = per.get(r.t); if (!A) per.set(r.t, A = { got: 0, max: 0, rows: [] });
+    const f = Math.max(0, Math.min(1, got / q.points));
+    A.got += f * q.points; A.max += q.points; A.rows.push({ q, f, pts: q.points, v: parseJ(r.v, null) });
+  }
+  const st = new Map(); // question_id → накопители
+  const exSeen = new Map();
+  for (const [aid, A] of per) {
+    const a = am.get(aid); const k = exKey(a);
+    if (!exSeen.has(k)) exSeen.set(k, a.reatt ? (a.title || a.reatt) : (exTitle.get(a.exam_id) || a.title || 'Экзамен ' + a.exam_id));
+    const sec = a.submitted_at != null && a.started_at != null && A.rows.length ? (a.submitted_at - a.started_at) / 1000 / A.rows.length : null;
+    for (const x of A.rows) {
+      let S = st.get(x.q.id); if (!S) st.set(x.q.id, S = { f: [], rest: [], skip: 0, opt: new Map(), ex: new Set(), sec: [] });
+      const restMax = A.max - x.pts;
+      S.f.push(x.f); S.rest.push(restMax > 0 ? (A.got - x.f * x.pts) / restMax : 0); S.ex.add(k);
+      if (sec != null && sec < 3600) S.sec.push(sec);
+      if (x.v == null || (Array.isArray(x.v) && !x.v.length) || x.v === '') S.skip++;
+      else if (x.q.type === 'single' && typeof x.v === 'string') S.opt.set(x.v, (S.opt.get(x.v) || 0) + 1);
+      else if (x.q.type === 'multi' && Array.isArray(x.v)) for (const o of x.v) S.opt.set(o, (S.opt.get(o) || 0) + 1);
+    }
+  }
+  const items = [];
+  for (const [qid, S] of st) {
+    const q = qm.get(qid), n = S.f.length;
+    const p = S.f.reduce((s, v) => s + v, 0) / n;
+    const r = qsCorr(S.f, S.rest);
+    let d = null; const k3 = Math.floor(n / 3);
+    if (k3 >= 1) { const idx = S.rest.map((v, i) => i).sort((i, j) => S.rest[i] - S.rest[j]); const mean = (ids) => ids.reduce((s, i) => s + S.f[i], 0) / ids.length; d = mean(idx.slice(-k3)) - mean(idx.slice(0, k3)); }
+    let opts = null, wrong = null, distractor = false;
+    if (q.type === 'single' || q.type === 'multi') {
+      const corr = new Set(parseJ(q.correct, []));
+      opts = parseJ(q.options, []).map(o => ({ id: o.id, text: String(o.text || '').slice(0, 90), n: S.opt.get(o.id) || 0, ok: corr.has(o.id) }));
+      const w = opts.filter(o => !o.ok).sort((x, y) => y.n - x.n)[0];
+      const okMax = Math.max(0, ...opts.filter(o => o.ok).map(o => o.n));
+      if (w && w.n > 0) { wrong = { text: w.text, n: w.n }; distractor = w.n > okMax; }
+    }
+    const flags = [];
+    if (n < QS_MIN_N) flags.push('low');
+    else {
+      if (p >= 0.95) flags.push('easy');
+      if (p <= 0.1) flags.push('hard');
+      if (distractor) flags.push('distractor');
+      if (r != null && r < -0.05 && (d == null || d < 0)) flags.push('neg');
+    }
+    const sec = S.sec.length ? S.sec.reduce((s, v) => s + v, 0) / S.sec.length : null;
+    const doc = qsDocOf(q), tp = qsTopicOf(q);
+    items.push({ id: qid, ext: q.ext_id || '', exam_id: q.exam_id || 0, text: String(q.text || '').replace(/\s+/g, ' ').slice(0, 220), type: q.type,
+      doc, base: q.base || '', ref: q.source_ref || '', topic: tp.startsWith(doc + ', ') ? tp.slice(doc.length + 2) : tp, active: q.active !== 0,
+      ex: [...S.ex], n, skip: S.skip, p: qsR(p, 3), r: qsR(r), d: qsR(d), sec: sec == null ? null : Math.round(sec), opts, wrong, flags });
+  }
+  items.sort((a, b) => b.n - a.n || a.id - b.id);
+  const group = (keyFn) => {
+    const m = new Map();
+    for (const it of items) { const k = keyFn(it); let g = m.get(k); if (!g) m.set(k, g = { q: 0, n: 0, sum: 0, bad: 0 }); g.q++; g.n += it.n; g.sum += it.p * it.n; if (it.flags.some(f => f !== 'low')) g.bad++; }
+    return [...m].map(([k, g]) => ({ key: k, q: g.q, n: g.n, p: qsR(g.sum / Math.max(1, g.n), 3), bad: g.bad }));
+  };
+  const docs = group(it => it.doc).sort((a, b) => a.key.localeCompare(b.key, 'ru'));
+  const topics = group(it => it.doc + '\u0001' + (it.topic || '—')).map(g => { const [doc, topic] = g.key.split('\u0001'); return { doc, topic, q: g.q, n: g.n, p: g.p, bad: g.bad }; })
+    .filter(t => t.n >= QS_MIN_N).sort((a, b) => a.p - b.p || b.n - a.n);
+  return { at: now, attempts: per.size, answers: items.reduce((s, it) => s + it.n, 0), questions: items.length, min_n: QS_MIN_N, flags: QS_FLAGS, base_names: R6_BASES,
+    exams: [...exSeen].map(([key, title]) => ({ key, title })).sort((a, b) => a.title.localeCompare(b.title, 'ru')), docs, topics, items };
+}
+async function qstatsCompute(env, user) {
+  const done = "('passed', 'failed', 'pending_review')";
+  const [ans, atts, exams] = await Promise.all([
+    env.DB.prepare(`SELECT a.attempt_id AS t, a.question_id AS q, a.answer AS v, a.auto_points AS ap, a.manual_points AS mp FROM answers a JOIN attempts t ON t.id = a.attempt_id WHERE t.status IN ${done}`).all(),
+    env.DB.prepare(`SELECT id, exam_id, reatt, started_at, submitted_at, json_extract(meta, '$.title') AS title FROM attempts WHERE status IN ${done}`).all(),
+    env.DB.prepare('SELECT id, title FROM exams').all()]);
+  const ids = [...new Set(ans.results.map(r => r.q))]; const qs = [];
+  for (let i = 0; i < ids.length; i += 90) { // только вопросы, на которые отвечали
+    const part = ids.slice(i, i + 90);
+    qs.push(...(await env.DB.prepare(`SELECT id, exam_id, type, text, options, correct, points, category, base, source_doc, source_ref, topic, ext_id, active FROM questions WHERE id IN (${part.map((_, k) => '?' + (k + 1)).join(',')})`).bind(...part).all()).results);
+  }
+  const out = qstatsBuild(ans.results, atts.results, qs, exams.results, Date.now());
+  out.by = user ? (user.ic_name || user.global_name || user.username || '') : '';
+  let v = JSON.stringify(out);
+  if (v.length > 1800000) { for (const it of out.items) if (it.opts) it.opts.forEach(o => { o.text = o.text.slice(0, 30); }); v = JSON.stringify(out); } // предел строки D1 — 2 МБ
+  await env.DB.prepare('INSERT INTO analytics (k, v, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_by = excluded.updated_by, updated_at = excluded.updated_at')
+    .bind('qstats', v, user ? user.id : null, out.at).run();
+  MEMO.set('qs:data', { t: Date.now(), p: Promise.resolve(out) });
+  return out;
+}
+async function qstatsGet(env, user, url) {
+  let d = await memoP(env, 'qs:data', async () => { const r = await env.DB.prepare("SELECT v FROM analytics WHERE k = 'qstats'").first(); return r ? parseJ(r.v, null) : null; });
+  if (!d || Date.now() - d.at > QS_DAY) d = await qstatsCompute(env, user); // не чаще раза в сутки — сам при открытии
+  return json({ stats: d, can_edit: caps(user).admin });
+}
+async function qstatsRecompute(env, user) {
+  const row = await env.DB.prepare("SELECT v, updated_at FROM analytics WHERE k = 'qstats' AND updated_at > ?1").bind(Date.now() - 60000).first();
+  if (row) return json({ stats: parseJ(row.v, null), can_edit: caps(user).admin, fresh: true }); // повторное нажатие (в т.ч. из другой вкладки) — без нового пересчёта
+  await rateLimit(env, 'qs:' + user.id, 6, 3600);
+  const d = await qstatsCompute(env, user);
+  await audit(env, user, 'qstats_recompute', 'analytics', { questions: d.questions, answers: d.answers });
+  return json({ stats: d, can_edit: caps(user).admin });
+}
+
 async function leadPromoList(env, url) {
   const st = url.searchParams.get('status') || '';
   const { pc } = await promoCfgItems(env);
@@ -4398,6 +4547,8 @@ async function route(request, env, ctx) {
     if ((m = /^\/api\/lead\/reports\/(\d+)$/.exec(p)) && M === 'DELETE') return leadDeleteReport(request, env, user, idParam(m[1]));
     if (p === '/api/lead/deleted' && M === 'GET') return leadDeletedReports(env, url);
     if ((m = /^\/api\/lead\/reports\/(\d+)\/review$/.exec(p)) && M === 'POST') return leadReview(request, env, user, idParam(m[1]));
+    if (p === '/api/lead/qstats' && M === 'GET') return qstatsGet(env, user, url);
+    if (p === '/api/lead/qstats' && M === 'POST') return qstatsRecompute(env, user);
     if (p === '/api/lead/promo' && M === 'GET') return leadPromoList(env, url);
     if ((m = /^\/api\/lead\/promo\/(\d+)$/.exec(p)) && M === 'GET') return leadPromoGet(env, idParam(m[1]));
     if ((m = /^\/api\/lead\/promo\/(\d+)\/review$/.exec(p)) && M === 'POST') return leadPromoReview(request, env, user, idParam(m[1]));
