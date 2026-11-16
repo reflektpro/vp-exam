@@ -3610,11 +3610,14 @@ function dzUrl(v, name) {
 }
 function dzList(v, name, car) {
   if (v == null || v === '') return [];
-  if (!Array.isArray(v) || v.length > 15) throw new HttpError(400, `${name}: список до 15 записей`);
+  if (!Array.isArray(v) || v.length > 30) throw new HttpError(400, `${name}: список до 30 записей`);
   return v.map((x, i) => {
     const o = { model: str(x && x.model, 60, { name: `${name} ${i + 1}: модель` }), plate: str(x && x.plate, 20, { name: `${name} ${i + 1}: номер` }).toUpperCase() };
+    const region = str(x && x.region, 3, { name: `${name} ${i + 1}: регион` }), note = str(x && x.note, 40, { name: `${name} ${i + 1}: пометка` });
+    if (region && !/^\d{2,3}$/.test(region)) throw new HttpError(400, `${name} ${i + 1}: регион — 2–3 цифры`);
+    if (region) o.region = region; if (note) o.note = note;
     if (!o.model && !o.plate) return null;
-    if (!o.plate) throw new HttpError(400, `${name} ${i + 1}: укажите номер`);
+    if (!o.plate && !o.note) throw new HttpError(400, `${name} ${i + 1}: укажите номер или пометку`); // «Генезис — | ОСНОВНОЙ» — без номера
     if (car) o.main = !!(x.main === true || x.main === 1 || x.main === '1');
     return o;
   }).filter(Boolean);
@@ -3659,7 +3662,7 @@ async function peopleList(env, viewer) {
   const people = results.map(u => {
     const cars = parseJ(u.service_cars, []); const main = cars.find(c => c.main) || cars[0];
     return { ...personCard(env, u, dzPos(cfg, u)), status: u.status, archived: u.status === 'archived', archived_at: u.archived_at, archive_reason: u.status === 'archived' ? u.archive_reason || '' : '',
-      joined_on: u.joined_on, car: main ? main.model + ' · ' + main.plate : '', pen_active: u.pen_active, rewards: u.rewards, strikes: strikes.get(u.id) || 0 };
+      joined_on: u.joined_on, car: main ? main.model + (main.plate ? ' · ' + main.plate + (main.region ? ' ' + main.region : '') : '') : '', pen_active: u.pen_active, rewards: u.rewards, strikes: strikes.get(u.id) || 0 };
   });
   people.sort((a, b) => a.archived - b.archived || String(a.name).localeCompare(String(b.name), 'ru'));
   let candidates = [];

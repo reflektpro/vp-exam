@@ -818,3 +818,8 @@ button.chip{cursor:pointer;color:var(--txt);font:inherit;font-size:13px}.uf-bar{
 .qs-opt{display:grid;grid-template-columns:minmax(0,1fr) 160px 40px;gap:10px;align-items:center;font-size:14px}
 .qs-opt .bar{margin:0}.qs-opt.ok span{color:#9fe0a8}.qs-opt b{text-align:right;font-weight:500}
 .qs-bad{color:var(--err)}.qs-mid{color:var(--warn)}.qs-good{color:var(--ok)}
+/* транспорт в личном деле: регион в номере, поля региона/пометки, повтор */
+.plate .plate-rg{border-left:1px solid #888;padding-left:5px;margin-left:2px}
+.vrow .rg-in{flex:0 1 80px;min-width:64px}.vrow .note-in{flex:1 1 120px}
+.vrow.vdup .plate-in{border-color:var(--warn)}
+#vpaste textarea{width:100%}

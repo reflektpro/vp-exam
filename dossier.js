@@ -77,6 +77,7 @@ async function personPage(id) {
     <nav class="subnav dztabs">${tabs.map(t => `<a href="#/person/${p.id}?tab=${t[0]}" class="${t[0] === tab ? 'on' : ''}">${t[1]}</a>`).join('')}</nav>
     <div id="dzbody">${body(d)}</div>`);
   const arch = $('#arch'); if (arch) arch.onclick = async () => { const r = prompt('Перевести дело в архив (увольнение). Причина / основание:', ''); if (!r) return; try { await api('POST', `/api/people/${p.id}/archive`, { reason: r }); toast('Дело переведено в архив'); render(); } catch (e) { toast(e.message, true); } };
+  if (tab === 'cars') dzCarsBind(d);
   const un = $('#unarch'); if (un) un.onclick = async () => { const r = prompt('Вернуть дело из архива. Основание (необязательно):', ''); if (r === null) return; try { await api('POST', `/api/people/${p.id}/restore`, { reason: r }); toast('Дело возвращено из архива'); render(); } catch (e) { toast(e.message, true); } };
   const mk = $('#mkdz'); if (mk) mk.onclick = async () => { try { await api('POST', '/api/people/' + p.id, {}); location.hash = '#/person/' + p.id + '/edit'; } catch (e) { toast(e.message, true); } };
   $$('[data-lift]').forEach(b => b.onclick = async () => { const r = prompt('Основание снятия взыскания:', ''); if (!r) return; try { await api('POST', `/api/people/${p.id}/events/${b.dataset.lift}/lift`, { reason: r }); toast('Взыскание снято'); render(); } catch (e) { toast(e.message, true); } });
@@ -93,7 +94,7 @@ function dzMain(d) {
       ['В ГУ ВП с', z.joined_on ? dDay(z.joined_on) : '—'], ['Discord', esc(z.discord || p.discord || '—')],
       priv && ['Возраст (ИРЛ)', z.age ? z.age + ' ' + plural(z.age, 'год', 'года', 'лет') : '—'], priv && ['Часовой пояс', esc(z.timezone || '—')],
       ['Средний онлайн', z.online_hours != null ? String(z.online_hours).replace('.', ',') + ' ч/день' : '—'], ['Обычно в игре', esc(z.online_time || '—')],
-      ['Основной служебный автомобиль', main ? esc(main.model) + ' · <b class="plate">' + esc(main.plate) + '</b>' : '—']])}${lockNote(d)}</div>
+      ['Основной служебный автомобиль', main ? esc(main.model) + (main.plate ? ' · ' + plateHtml(main) : '') : '—']])}${lockNote(d)}</div>
     <div class="card flat"><h3>Знание законодательства</h3>
       ${kv([['По тестам (все)', d.law_auto.all ? `средний <b>${d.law_auto.all.avg}%</b>, лучший ${d.law_auto.all.best}%` : 'попыток нет'],
         ['Экзамены', d.law_auto.exams ? `${d.law_auto.exams.avg}% / лучший ${d.law_auto.exams.best}% · сдано ${d.law_auto.exams.passed} из ${d.law_auto.exams.n}` : '—'],
@@ -116,10 +117,47 @@ function dzTimeline(d) {
   const items = d.timeline.filter(t => !f || (f === 'dz' ? !!DZ_EV[t.type] : f === 'exam' ? (t.type === 'exam' || t.type === 'reatt') : t.type === f));
   return `<div class="card flat"><div class="chips">${kinds.map(k => `<a class="chip${k[0] === f ? ' on' : ''}" href="#/person/${d.person.id}?tab=timeline${k[0] ? '&f=' + k[0] : ''}">${k[1]}</a>`).join('')}</div>${tlList(items)}</div>`;
 }
+const plateHtml = (c) => c.plate ? `<b class="plate">${esc(c.plate)}${c.region ? ' <span class="plate-rg">' + esc(c.region) + '</span>' : ''}</b>` : '';
 function dzCars(d) {
   const z = d.dossier || {};
-  const tbl = (l, car) => l.length ? `<div class="dzrows">${l.map(c => `<div class="dzrow"><span>${car ? '🚓' : '🚗'}</span><div style="flex:1"><b>${esc(c.model || '—')}</b></div><b class="plate">${esc(c.plate)}</b>${car ? (c.main ? '<span class="badge ok">основной</span>' : '<span class="badge">доп.</span>') : ''}</div>`).join('')}</div>` : '<p class="mut">Не указаны.</p>';
-  return `<div class="grid two"><div class="card flat"><h3>Служебные автомобили ВП</h3>${tbl(z.service_cars || [], true)}</div><div class="card flat"><h3>Личные транспортные средства</h3>${tbl(z.vehicles || [], false)}</div></div>`;
+  const tbl = (l, car) => l.length ? `<div class="dzrows">${l.map(c => `<div class="dzrow"><span>${car ? '🚓' : '🚗'}</span><div style="flex:1"><b>${esc(c.model || '—')}</b></div>${plateHtml(c)}${c.note && !/^основн/i.test(c.note) ? `<span class="badge">${esc(c.note)}</span>` : ''}${car ? (c.main ? '<span class="badge ok">основной</span>' : '<span class="badge">доп.</span>') : c.note && /^основн/i.test(c.note) ? '<span class="badge ok">основной</span>' : ''}</div>`).join('')}</div>` : '<p class="mut">Не указаны.</p>';
+  return `<div class="grid two"><div class="card flat"><h3>Служебные автомобили ВП</h3>${tbl(z.service_cars || [], true)}</div><div class="card flat"><h3>Личные транспортные средства</h3>${tbl(z.vehicles || [], false)}</div></div>
+    ${d.can_edit && d.dossier ? `<div class="card flat" id="vpaste"><h3>Добавить транспорт списком</h3>
+      <textarea id="vtext" rows="3" placeholder="Тигр - 0372ОХ | 73 Служебный Патриот - 5647МТ | 08 …"></textarea>
+      <div class="row" style="margin-top:8px"><div class="seg" style="margin:0"><label><input type="radio" name="vto" value="service_cars" checked><span>Служебные ВП</span></label><label><input type="radio" name="vto" value="vehicles"><span>Личные</span></label></div>
+        <button type="button" class="btn sm gold" id="vparse">Разобрать</button></div><div id="vout"></div></div>` : ''}`;
+}
+// строка редактирования транспорта: модель, номер, регион, пометка (+ «основной» у служебных)
+const vrow = (c, car) => `<div class="vrow${c.count > 1 ? ' vdup' : ''}"><input name="model" placeholder="${car ? 'Модель (напр. УАЗ Патриот)' : 'Модель'}" maxlength="60" value="${esc(c.model || '')}"><input name="plate" placeholder="Номер" maxlength="20" value="${esc(c.plate || '')}" class="plate-in">
+  <input name="region" placeholder="Регион" maxlength="3" inputmode="numeric" value="${esc(c.region || '')}" class="rg-in"><input name="note" placeholder="Пометка" maxlength="40" value="${esc(c.note || '')}" class="note-in">
+  ${car ? `<label class="chk"><input type="checkbox" name="main" ${c.main ? 'checked' : ''}> основной</label>` : ''}${c.count > 1 ? `<span class="badge warn" title="Повтор в списке">×${c.count}</span>` : ''}<button type="button" class="btn sm danger vdel" title="Убрать">✕</button></div>`;
+const vrowsRead = (box, car) => [...box.querySelectorAll('.vrow')].map(r => ({ model: r.querySelector('[name=model]').value, plate: r.querySelector('[name=plate]').value, region: r.querySelector('[name=region]').value.trim(), note: r.querySelector('[name=note]').value.trim(),
+  ...(car ? { main: r.querySelector('[name=main]').checked } : {}) })).filter(x => x.model.trim() || x.plate.trim());
+// Вкладка «Транспорт»: вставить текст → разобрать → поправить строки → сохранить одним запросом (к уже записанным в деле)
+function dzCarsBind(d) {
+  const btn = $('#vparse'); if (!btn) return;
+  const out = $('#vout');
+  btn.onclick = () => {
+    const to = ($('[name=vto]:checked') || {}).value || 'service_cars', car = to === 'service_cars';
+    const r = window.VPVehicles.parseVehicles($('#vtext').value);
+    const have = new Set((d.dossier[to] || []).map(v => r.key({ model: v.model || '', plate: window.VPVehicles.normPlate(v.plate), region: v.region || '', note: v.note || '' })));
+    const fresh = r.items.filter(v => !have.has(r.key(v))), already = r.items.length - fresh.length;
+    out.innerHTML = `${fresh.length ? `<div id="vrows" style="margin-top:12px">${fresh.map(v => vrow(v, car)).join('')}</div>` : ''}
+      <p class="small mut">${r.items.length ? `Найдено: ${r.all.length}${r.dups.length ? `, повторы склеены (${r.dups.map(v => esc(v.model) + ' ' + esc(v.plate) + ' ×' + v.count).join(', ')})` : ''}${already ? `, уже есть в деле: ${already}` : ''}.` : 'Транспорт в тексте не найден.'}</p>
+      ${r.unparsed.length ? `<div class="alert warn">Не разобрано — добавьте вручную:<ul>${r.unparsed.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+      ${fresh.length ? `<div class="row"><button type="button" class="btn gold" id="vsave">Сохранить ${fresh.length}</button><button type="button" class="btn" id="vcancel">Отмена</button></div>` : ''}`;
+    const upd = () => { const n = $$('#vrows .vrow').length, b = $('#vsave'); if (b) { b.textContent = 'Сохранить ' + n; b.disabled = !n; } };
+    $$('#vrows .vdel').forEach(x => x.onclick = () => { x.closest('.vrow').remove(); upd(); });
+    const cancel = $('#vcancel'); if (cancel) cancel.onclick = () => { out.innerHTML = ''; };
+    const save = $('#vsave'); if (save) save.onclick = async () => {
+      const add = vrowsRead($('#vrows'), car); if (!add.length) return;
+      let list = (d.dossier[to] || []).concat(add);
+      if (car && add.some(v => v.main)) list = list.map((v, i) => ({ ...v, main: i >= list.length - add.length ? !!v.main : false })); // новый «основной» снимает отметку со старого
+      save.disabled = true;
+      try { await api('PUT', '/api/people/' + d.person.id, { [to]: list }); toast('Транспорт сохранён'); render(); }
+      catch (e) { toast(e.message, true); save.disabled = false; }
+    };
+  };
 }
 function dzReports(d) {
   const r = d.reports;
@@ -193,8 +231,6 @@ route('/person/:id/edit', async (id) => {
   if (!d.can_edit) { setView(`<div class="alert err">Личное дело заполняет только старший состав ГУ ВП${d.self ? ' (своё дело — другой сотрудник СС)' : ''}.</div><a class="btn" href="#/person/${esc(id)}">Назад</a>`); return; }
   if (!d.dossier) { location.hash = '#/person/' + id; return; }
   const p = d.person, z = d.dossier;
-  const vrow = (c, car) => `<div class="vrow"><input name="model" placeholder="${car ? 'Модель (напр. УАЗ Патриот)' : 'Модель'}" maxlength="60" value="${esc(c.model || '')}"><input name="plate" placeholder="Номер" maxlength="20" value="${esc(c.plate || '')}" class="plate-in">
-    ${car ? `<label class="chk"><input type="checkbox" name="main" ${c.main ? 'checked' : ''}> основной</label>` : ''}<button type="button" class="btn sm danger vdel" title="Убрать">✕</button></div>`;
   setView(`<p><a href="#/person/${p.id}">← ${esc(p.name)}</a></p><h1>Личное дело: редактирование</h1>
     <form id="dzf" class="dzform">
       <fieldset class="card"><legend>Основное</legend><div class="fgrid">
@@ -225,7 +261,7 @@ route('/person/:id/edit', async (id) => {
   $('#addcar').onclick = () => { $('#scars').insertAdjacentHTML('beforeend', vrow({ main: !$$('#scars .vrow').length }, true)); bindDel(); };
   $('#addveh').onclick = () => { $('#pcars').insertAdjacentHTML('beforeend', vrow({}, false)); bindDel(); };
   bindDel();
-  const rows = (sel, car) => $$(sel + ' .vrow').map(r => ({ model: r.querySelector('[name=model]').value, plate: r.querySelector('[name=plate]').value, ...(car ? { main: r.querySelector('[name=main]').checked } : {}) })).filter(x => x.model.trim() || x.plate.trim());
+  const rows = (sel, car) => vrowsRead($(sel), car);
   $('#dzf').onsubmit = async (ev) => {
     ev.preventDefault(); const f = ev.target;
     const b = {}; for (const k of ['ic_name', 'static_id', 'rank', 'position', 'joined_on', 'discord', 'age', 'timezone', 'online_hours', 'online_time', 'law_comment', 'notes']) b[k] = f[k].value;
