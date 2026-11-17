@@ -3625,7 +3625,7 @@ function dzList(v, name, car) {
 function dossierInput(b) {
   const o = {};
   if (b.joined_on !== undefined) o.joined_on = dzDate(b.joined_on, 'дата вступления в ГУ ВП');
-  if (b.age !== undefined) o.age = b.age === '' || b.age == null ? null : int(b.age, 14, 99, 'возраст');
+  if (b.age !== undefined) o.age = b.age === '' || b.age == null ? null : int(b.age, 12, 99, 'возраст');
   if (b.timezone !== undefined) o.timezone = str(b.timezone, 40, { name: 'часовой пояс' }) || null;
   if (b.online_hours !== undefined) {
     if (b.online_hours === '' || b.online_hours == null) o.online_hours = null;

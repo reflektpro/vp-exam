@@ -242,7 +242,7 @@ route('/person/:id/edit', async (id) => {
         <label class="f"><span>Discord</span><input name="discord" maxlength="60" value="${esc(z.discord || '')}"></label></div>
         <p class="small mut">Имя, статик, звание и должность — это поля профиля: они обновятся в профиле и в отчётах (с записью в журнал).</p></fieldset>
       <fieldset class="card"><legend>Онлайн и личное</legend><div class="fgrid">
-        <label class="f"><span>Возраст (ИРЛ)</span><input type="number" name="age" min="14" max="99" value="${z.age ?? ''}"></label>
+        <label class="f"><span>Возраст (ИРЛ)</span><input type="number" name="age" min="12" max="99" value="${z.age ?? ''}"></label>
         <label class="f"><span>Часовой пояс</span><input name="timezone" maxlength="40" list="tzList" value="${esc(z.timezone || '')}" placeholder="МСК, МСК+2, UTC+5…"></label>
         <label class="f"><span>Средний онлайн, часов в день</span><input type="number" name="online_hours" min="0" max="24" step="0.5" value="${z.online_hours ?? ''}"></label>
         <label class="f"><span>Обычное время в игре</span><input name="online_time" maxlength="80" value="${esc(z.online_time || '')}" placeholder="18:00–23:00 МСК, выходные днём"></label></div>

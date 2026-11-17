@@ -53,6 +53,8 @@ const today = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
   r = await call('PUT', '/api/people/' + U.vp, T.vp2, full); check('ВП не может править дело (403)', r.status === 403);
   r = await call('PUT', '/api/people/' + U.vp, T.vp, full); check('сотрудник не правит своё дело сам (403)', r.status === 403);
   r = await call('PUT', '/api/people/' + U.vp, T.ss, { ...full, age: 7 }); check('проверка на сервере: возраст 7 — 400', r.status === 400);
+  r = await call('PUT', '/api/people/' + U.vp, T.ss, { age: 11 }); check('возраст 11 — 400', r.status === 400);
+  r = await call('PUT', '/api/people/' + U.vp, T.ss, { age: 12 }); check('возраст 12 сохраняется', r.status === 200 && r.d && (r.d.dossier || r.d).age === 12, r.d);
   r = await call('PUT', '/api/people/' + U.vp, T.ss, { ...full, law_score: 6 }); check('оценка 6 — 400', r.status === 400);
   r = await call('PUT', '/api/people/' + U.vp, T.ss, { ...full, service_cars: [{ model: 'УАЗ' }] }); check('служебный авто без номера — 400', r.status === 400);
   r = await call('PUT', '/api/people/' + U.vp, T.ss, full);
