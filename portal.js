@@ -237,7 +237,7 @@ route('/promo', async () => {
   const C = d.config, names = new Map(d.items.map(i => [i.key, i.name]));
   const edit = hashQ().get('edit') === '1' && d.can_edit;
   const need = (n) => Object.entries(n).map(([k, v]) => `<span class="chip">${esc(names.get(k) || k)} × ${v}</span>`).join('') || '<span class="small mut">—</span>';
-  const ptsItems = d.items.filter(i => (C.pts[i.key] || 0) > 0);
+  const ptsItems = d.items.filter(i => i.direct || (C.pts[i.key] || 0) > 0);
   if (!edit) {
     setView(`<h1>Система повышения</h1>
       ${d.can_edit ? `<p><a class="btn gold" href="#/promo?edit=1">Изменить правила</a>${d.custom ? ' <span class="small mut">изменено ' + fmtDate(d.updated_at) + '</span>' : ''}</p>` : ''}
@@ -246,7 +246,7 @@ route('/promo', async () => {
       <div class="ladder">${C.ladder.map((st, i) => `<div class="lstep"><div class="lnum">${i + 1}</div><div style="flex:1"><div class="row between"><b>${esc(st.rank)} → ${esc(st.to)}</b><span class="badge gold">${st.points} баллов</span></div>
         <div class="chips">${(() => { const cc = req.all.map(id => promoCourseChip(cById.get(id), id)).join('') + (req.by_rank[st.rank] || []).map(id => promoCourseChip(cById.get(id), id, d.can_edit ? st.rank : undefined)).join('');
           const nn = Object.keys(st.need).length ? need(st.need) : ''; return (nn || cc ? nn + cc : need({})) + (d.can_edit ? promoCourseAdd(st.rank, req, courses) : ''); })()}</div></div></div>`).join('')}</div>
-      <div class="card flat"><h3>Баллы за действия</h3><table><tr><th>Действие</th><th>Раздел</th><th>Баллы</th></tr>${ptsItems.map(i => `<tr><td>${esc(i.name)}</td><td class="small mut">${GROUP_RU[i.group] || ''}</td><td class="num">${C.pts[i.key]}</td></tr>`).join('')}</table>
+      <div class="card flat"><h3>Баллы за действия</h3><table><tr><th>Действие</th><th>Раздел</th><th>Баллы</th></tr>${ptsItems.map(i => `<tr><td>${esc(i.name)}</td><td class="small mut">${GROUP_RU[i.group] || ''}</td><td class="num">${i.direct ? 'как выданы' : C.pts[i.key]}</td></tr>`).join('')}</table>
         <p class="small mut">Остальные пункты отчёта баллов для повышения не дают.</p></div>`);
     if (d.can_edit) bindPromoCourses(req);
     return;
@@ -261,7 +261,7 @@ route('/promo', async () => {
       ${d.missing_points === false ? '<p class="small mut">Сейчас недостающие пункты баллами не закрываются — включается в <a href="#/admin/settings">параметрах сайта</a>.</p>' : ''}
       <h3>Ступени</h3><div class="tscroll"><table id="ladT"><tr><th>Звание</th><th>Следующее</th><th>Баллы</th><th>Обязательные пункты</th><th></th></tr>${C.ladder.map(stepRow).join('')}</table></div>
       <button type="button" class="btn sm" id="addStep">+ ступень</button></div>
-    <div class="card"><h3>Баллы за действия</h3><div class="tscroll"><table id="ptsT"><tr><th>Действие</th><th>Баллы</th></tr>${d.items.map(i => `<tr><td>${esc(i.name)}<div class="small mut">${GROUP_RU[i.group] || ''}</div></td><td><input type="number" min="0" data-k="${esc(i.key)}" value="${C.pts[i.key] || 0}" style="width:90px"></td></tr>`).join('')}</table></div></div>
+    <div class="card"><h3>Баллы за действия</h3><div class="tscroll"><table id="ptsT"><tr><th>Действие</th><th>Баллы</th></tr>${d.items.map(i => `<tr><td>${esc(i.name)}<div class="small mut">${GROUP_RU[i.group] || ''}</div></td><td>${i.direct ? '<span class="small mut">как выданы</span>' : `<input type="number" min="0" data-k="${esc(i.key)}" value="${C.pts[i.key] || 0}" style="width:90px">`}</td></tr>`).join('')}</table></div></div>
     <div class="row"><button class="btn gold" id="saveP">Сохранить</button><button class="btn" id="resetP">Вернуть исходные правила</button><a class="btn" href="#/promo">Отмена</a></div><div id="perr" class="ferr"></div>`);
   const bindRow = (tr) => {
     tr.querySelector('.lx').onclick = () => tr.remove();

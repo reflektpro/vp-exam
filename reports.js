@@ -371,9 +371,9 @@ route('/lead/promo/:id', async (id) => {
   let d = await api('GET', path);
   const itemRow = (it) => { const rv = it.review || {};
     return `<div class="ritem ${rv.status === 'rejected' ? 'rej' : rv.status === 'ok' ? 'acc' : ''}" data-key="${esc(it.key)}">
-      <div class="row between"><div><b>${esc(it.name)}</b> — штук: <b>${it.n}</b>${it.custom ? ' <span class="badge">свой пункт, без баллов</span>' : ` <span class="small mut">${it.pts} баллов за 1</span>`}</div>
+      <div class="row between"><div><b>${esc(it.name)}</b> — ${it.direct ? 'баллов' : 'штук'}: <b>${it.n}</b>${it.custom ? ' <span class="badge">свой пункт, без баллов</span>' : it.direct ? ' <span class="small mut">идут в итог как есть</span>' : ` <span class="small mut">${it.pts} баллов за 1</span>`}</div>
         <div class="row">${rv.status ? `<span class="badge ${rv.status === 'ok' ? 'ok' : 'err'}">${rv.status === 'ok' ? 'засчитан' + (rv.n_ok != null ? ` (${rv.n_ok} из ${it.n})` : '') : 'отклонён'}</span>` : '<span class="badge">не проверен</span>'}
-          <input type="number" class="nok" min="0" max="${it.n}" value="${rv.n_ok != null ? rv.n_ok : it.n}" title="Засчитано штук" style="width:70px">
+          <input type="number" class="nok" min="0" max="${it.n}" value="${rv.n_ok != null ? rv.n_ok : it.n}" title="Засчитано ${it.direct ? 'баллов' : 'штук'}" style="width:${it.direct ? 90 : 70}px">
           <button class="btn sm i-ok">Засчитать</button><button class="btn sm danger i-rej">Отклонить</button>${rv.status ? '<button class="btn sm i-clr" title="Снять отметку">↺</button>' : ''}</div></div>
       ${it.links && it.links.length ? `<ol class="links">${it.links.map(u => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a></li>`).join('')}</ol>` : '<div class="small neg">ссылок нет</div>'}
       <input class="icom" placeholder="комментарий к пункту" value="${esc(rv.comment || '')}"></div>`; };

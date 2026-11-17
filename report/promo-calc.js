@@ -14,6 +14,7 @@
       var a = P.acts.find(function (x) { return x.key === i.key; });
       if (!a) P.acts.push({ key: i.key, name: i.name || i.key, group: i.group || "extra", pts: 0 });
       else { if (i.name) a.name = i.name; if (i.group) a.group = i.group; }
+      if (i.direct) (a || P.acts[P.acts.length - 1]).direct = true;
     });
     if (c.pts) P.acts.forEach(function (a) { a.pts = has(c.pts, a.key) ? Number(c.pts[a.key]) || 0 : 0; });
     if (c.points_per_item) P.pointsPerItem = c.points_per_item;
@@ -28,12 +29,12 @@
     var r = String(rank || "").trim().toLowerCase();
     return Object.keys(P.ladder || {}).find(function (k) { return k.toLowerCase() === r; }) || null;
   }
-  // counts — {ключ пункта: штук}; opt.missingPoints — закрывать ли недостающий пункт баллами сверх нормы
+  // counts — {ключ пункта: штук}; у пунктов direct (благодарность от руководства) — баллы, идут в итог как есть; opt.missingPoints — закрывать ли недостающий пункт баллами сверх нормы
   // (по умолчанию P.missingPoints); opt.courses — обязательные курсы [{id, title, done}].
   function calc(P, rank, counts, opt) {
     opt = opt || {};
     counts = counts || {};
-    var pts = {}; (P.acts || []).forEach(function (a) { pts[a.key] = a.pts || 0; });
+    var pts = {}; (P.acts || []).forEach(function (a) { pts[a.key] = a.direct ? 1 : a.pts || 0; });
     var total = 0; Object.keys(counts).forEach(function (k) { total += (pts[k] || 0) * (counts[k] || 0); });
     var swap = has(opt, "missingPoints") ? opt.missingPoints !== false : P.missingPoints !== false;
     var ppi = P.pointsPerItem || 100;

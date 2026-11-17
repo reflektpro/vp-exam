@@ -3,7 +3,7 @@
 // и promo-rules.js в обоих репозиториях совпадают, а значения по умолчанию в promo-rules.js = снимок прода.
 const fs = require('fs'), path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '../worker/worker.js'), 'utf8').replace(/^import .*$/mg, '').replace(/^export default/m, 'const __default =');
-const W = new Function(src + '\nreturn { promoSummary, PROMO_DEFAULT };')();
+const W = new Function(src + '\nreturn { promoSummary, PROMO_DEFAULT, promoRaportInput, PREM_DEFAULT };')();
 const PC = require('../report/promo-calc.js');
 const loadRules = () => { const g = {}; new Function('window', fs.readFileSync(path.join(__dirname, '../report/promo-rules.js'), 'utf8'))(g); return g.PROMO; };
 const PROD = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/promo-prod.json'), 'utf8'));
@@ -42,6 +42,8 @@ for (const c of cfgs) {
         if (step) for (const [k, need] of Object.entries(step.need)) { const x = rnd(need + 3) - 1; if (x > 0) counts[k] = x; }
         const extra = rnd(6); for (let i = 0; i < extra; i++) { const k = keys[rnd(keys.length)]; counts[k] = (counts[k] || 0) + 1 + rnd(t % 3 ? 4 : 25); }
         const courses = t % 5 === 0 ? [{ id: 1, title: 'Курс', done: t % 10 === 0 }] : [];
+        // благодарность от руководства — баллы (direct): иногда крупные, как в жизни (1500)
+        if (t % 7 === 0 && keys.includes('thanks')) counts.thanks = 50 * (1 + rnd(40));
         const items = Object.entries(counts).map(([key, n]) => ({ key, n }));
         const review = {}; items.forEach(i => { review[i.key] = { status: 'ok' }; });
         const s = W.promoSummary(pc, rank.toUpperCase(), items, review, courses);
@@ -60,6 +62,29 @@ ok('проверено случаев (все ступени, оба режим�
   const P = loadRules(); PC.applyConfig(P, { config: PROD.config, items: PROD.items, missing_points: false });
   const r = PC.calc(P, 'Старший лейтенант', { prof: 6, vygovor: 5, prizyv: 3, proc: 3, kraz_otbitie: 4, postavka: 10 }, {});
   ok('пример: 180+250+90+150+140+250 = 1060 из 1500, не хватает 440 баллов', r.total === 1060 && !r.met && r.left.pts === 440 && r.left.swap === 0, r);
+}
+// благодарность от руководства: баллы идут в итог как есть, без деления на 50 (настройка pts.thanks = 0 не мешает)
+{
+  ok('правила: благодарность — пункт с баллами (direct), pts в проде 0', (R0.acts.find(a => a.key === 'thanks') || {}).direct === true && PROD.config.pts.thanks === 0);
+  const P = loadRules(); PC.applyConfig(P, { config: PROD.config, items: PROD.items, missing_points: true });
+  const counts = { patrol: 1, thanks: 1500, prof: 3, prizyv: 2 };
+  const r = PC.calc(P, 'Младший лейтенант', counts, {});
+  ok('бланк: 1500 баллов благодарностей идут в итог (по снимку правил: 25 + 1500 + 90 + 60 = 1675 из 1000, критерии выполнены)', r.total === 1675 && r.met, r);
+  ok('бланк: только благодарности 1500 → 1500 баллов', PC.calc(P, 'Рядовой', { thanks: 1500 }, {}).total === 1500);
+  const pc = { config: PROD.config, items: PROD.items, missing_points: true };
+  const items = Object.entries(counts).map(([key, n]) => ({ key, n })), review = {}; items.forEach(i => { review[i.key] = { status: 'ok' }; });
+  const s = W.promoSummary(pc, 'Младший лейтенант', items, review, []);
+  ok('сервер: 1500 баллов благодарностей засчитаны (1675, выполнено)', s.points === 1675 && s.claimed === 1675 && s.met, s);
+  const s2 = W.promoSummary(pc, 'Младший лейтенант', items, { ...review, thanks: { status: 'ok', n_ok: 1000 } }, []);
+  ok('сервер: засчитано меньше баллов благодарностей (1000 из 1500) → 1175', s2.points === 1175 && s2.claimed === 1675, s2);
+  const cfg = JSON.parse(JSON.stringify(W.PREM_DEFAULT));
+  const hdr = { rank: 'Младший лейтенант', name: 'Тест Тестов', static_id: '1', target: 'Лейтенант' };
+  const inNew = W.promoRaportInput(cfg, { header: hdr, items: [{ key: 'thanks', n: 1500, points: 1500 }, { key: 'prof', n: 3 }] });
+  ok('приём рапорта: баллы благодарностей сохраняются как есть (1500)', inNew.items[0].n === 1500 && inNew.items[0].points === 1500 && inNew.items[1].n === 3, inNew.items);
+  const inOld = W.promoRaportInput(cfg, { header: hdr, items: [{ key: 'thanks', n: 30 }] });
+  ok('приём рапорта со старой формы: 30 благодарностей → 1500 баллов', inOld.items[0].n === 1500 && inOld.items[0].points === 1500, inOld.items);
+  let big = null; try { W.promoRaportInput(cfg, { header: hdr, items: [{ key: 'thanks', points: 100001 }] }); } catch (e) { big = e.status || e.code || e.message; }
+  ok('приём рапорта: больше 100000 баллов — ошибка', big !== null, big);
 }
 console.log(fail ? `FAILED ${fail} (passed ${pass})` : `ALL OK ${pass} (случаев ${cases})`);
 process.exit(fail ? 1 : 0);

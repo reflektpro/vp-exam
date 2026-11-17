@@ -241,7 +241,7 @@ function promoMineHtml(d) {
     <p class="small mut">Версия ${r.version} от ${fmtDate(r.submitted_at)}${r.reviewed_at ? ' · проверен ' + fmtDate(r.reviewed_at) : ''} · засчитано баллов: <b>${s.points}</b> из заявленных ${s.claimed}${s.step ? ` (нужно ${s.step.points})` : ''}</p>
     ${r.comment ? `<div class="alert ${r.status === 'rejected' ? 'err' : 'info'} small">${esc(r.comment)}</div>` : ''}
     <div class="tscroll"><table><tr><th>Пункт</th><th>Штук</th><th>Проверка</th><th>Комментарий</th></tr>${r.items.map(i => { const rv = i.review || {};
-      return `<tr><td>${esc(i.name)}</td><td class="num">${i.n}</td><td>${rv.status === 'ok' ? `<span class="badge ok">засчитан${rv.n_ok != null ? ` ${rv.n_ok} из ${i.n}` : ''}</span>` : rv.status === 'rejected' ? '<span class="badge err">отклонён</span>' : '<span class="badge">не проверен</span>'}</td><td class="small">${esc(rv.comment || '')}</td></tr>`; }).join('')}</table></div>
+      return `<tr><td>${esc(i.name)}</td><td class="num">${i.n}${i.direct ? ' баллов' : ''}</td><td>${rv.status === 'ok' ? `<span class="badge ok">засчитан${rv.n_ok != null ? ` ${rv.n_ok} из ${i.n}` : ''}</span>` : rv.status === 'rejected' ? '<span class="badge err">отклонён</span>' : '<span class="badge">не проверен</span>'}</td><td class="small">${esc(rv.comment || '')}</td></tr>`; }).join('')}</table></div>
     ${r.status === 'submitted' || r.status === 'review' ? '<p class="small mut">Повторная отправка обновит этот рапорт: отметки по неизменённым пунктам сохранятся.</p>' : ''}</div>`;
 }
 route('/promo/raport', async () => {
@@ -280,7 +280,7 @@ route('/promo/raport', async () => {
     const V = window.__vp, D = window.VPDOC, val = (id) => (document.getElementById(id) || {}).value || '';
     if (!gate.allowed) { st.innerHTML = '<div class="send-err">Отправить рапорт можно после обязательных курсов учёбы.</div>'; return; }
     if (D && D.check && !D.check(['date', 'fromRank', 'fromStatic', 'fromName', 'fromUnit', 'fromPos', 'target', 'toDate'])) { st.innerHTML = '<div class="send-err">Заполни подсвеченные красным поля.</div>'; return; }
-    const items = V.crit.items().map(i => ({ key: i.key, name: i.text, group: i.group, n: i.n, links: i.links, custom: !!i.custom }));
+    const items = V.crit.items().map(i => ({ key: i.key, name: i.text, group: i.group, n: i.n, links: i.links, custom: !!i.custom, ...(i.direct ? { points: i.n } : {}) }));
     if (!items.length) { st.innerHTML = '<div class="send-err">Отметь выполненные пункты.</div>'; return; }
     const c = V.compute(); if (c.step && !c.met && !confirm('Критерии повышения пока не выполнены. Всё равно отправить рапорт на проверку?')) return;
     sendBtn.disabled = true; App.busy = true; st.textContent = 'Отправка…';

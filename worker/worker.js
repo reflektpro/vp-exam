@@ -3971,6 +3971,9 @@ function promoInput(cfg, b) {
 // Проверяющий засчитывает или отклоняет каждый пункт (можно засчитать меньше штук), решения сохраняются сразу.
 // Итог считается по засчитанному: баллы ступени, обязательные пункты (с заменой баллами, если включено), обязательные курсы.
 const PROMO_STATUS = ['submitted', 'review', 'approved', 'rejected'];
+// Пункты, которые в рапорте на повышение вписываются баллами: n = баллы, в итог идут как есть (1 балл = 1 балл), настройка pts на них не влияет.
+const PROMO_DIRECT = new Set(['thanks']);
+const promoUnit = (pts, key) => PROMO_DIRECT.has(key) ? 1 : (pts[key] || 0);
 function promoStep(pc, rank) { const r = String(rank || '').trim().toLowerCase(); return (pc.config.ladder || []).find(s => s.rank.toLowerCase() === r) || null; }
 function promoRaportInput(cfg, b) {
   const h = b.header || {};
@@ -3992,7 +3995,12 @@ function promoRaportInput(cfg, b) {
     if (!custom && !known.has(key)) throw new HttpError(400, `Неизвестный пункт рапорта: ${key}`);
     const k = known.get(key);
     const o = { key, name: custom ? str(x.name, 200, { required: true, name: 'свой пункт' }) : k.name, group: custom ? (['main', 'extra', 'gu'].includes(x.group) ? x.group : 'extra') : k.group,
-      n: int(x.n, 0, 1000, `количество «${custom ? x.name : k.name}»`), links: cleanLinks(x.links) };
+      n: 0, links: cleanLinks(x.links) };
+    if (!custom && PROMO_DIRECT.has(key)) {
+      // баллы благодарностей; старая форма присылала количество благодарностей (баллы ÷ thanks_points) без points
+      o.n = x.points != null && x.points !== '' ? int(x.points, 0, 100000, `баллы «${k.name}»`) : int(x.n, 0, 1000, `количество «${k.name}»`) * ((cfg.rules && cfg.rules.thanks_points) || 50);
+      o.points = o.n;
+    } else o.n = int(x.n, 0, 1000, `количество «${custom ? x.name : k.name}»`);
     if (custom) o.custom = true;
     return o;
   }).filter(x => x.n > 0);
@@ -4007,7 +4015,7 @@ function promoSummary(pc, rank, items, review, courses) {
     const rv = (review || {})[it.key] || {};
     if (!rv.status) pending++; else if (rv.status === 'rejected') rejected++;
     if (it.custom) continue;
-    const p = pts[it.key] || 0; claimed += p * it.n;
+    const p = promoUnit(pts, it.key); claimed += p * it.n;
     if (rv.status !== 'ok') continue;
     const n = rv.n_ok != null ? Math.min(rv.n_ok, it.n) : it.n;
     acc[it.key] = (acc[it.key] || 0) + n; points += p * n;
@@ -4027,13 +4035,13 @@ function promoSummary(pc, rank, items, review, courses) {
   out.met = points >= step.points && lack <= canCover && !cLeft.length;
   return out;
 }
-async function promoCfgItems(env) { const pc = await promoConfig(env); const cfg = await premConfig(env); pc.items = cfg.items.map(i => ({ key: i.key, name: i.name, group: i.group })); return { pc, cfg }; }
+async function promoCfgItems(env) { const pc = await promoConfig(env); const cfg = await premConfig(env); pc.items = cfg.items.map(i => ({ key: i.key, name: i.name, group: i.group, ...(PROMO_DIRECT.has(i.key) ? { direct: true } : {}) })); return { pc, cfg }; }
 function promoRaportPublic(pc, row, courses) {
   if (!row) return null;
   const d = parseJ(row.data, {}), review = parseJ(row.item_review, {});
   const pts = pc.config.pts || {};
   return { id: row.id, user_id: row.user_id, status: row.status, rank: row.rank, target: row.target, header: d.header || {},
-    items: (d.items || []).map(i => ({ ...i, pts: i.custom ? 0 : (pts[i.key] || 0), review: review[i.key] || null })),
+    items: (d.items || []).map(i => ({ ...i, pts: i.custom ? 0 : promoUnit(pts, i.key), direct: !i.custom && PROMO_DIRECT.has(i.key) || undefined, review: review[i.key] || null })),
     comment: row.comment || '', version: row.version, first_submitted_at: row.first_submitted_at, submitted_at: row.submitted_at, reviewed_at: row.reviewed_at, reviewed_by: row.reviewed_by,
     summary: promoSummary(pc, row.rank, d.items, review, courses) };
 }
@@ -4457,7 +4465,7 @@ async function route(request, env, ctx) {
 
   if (p === '/api/report-config' && M === 'GET') return json(premConfigPublic(await premConfig(env)));
   // правила системы повышения — открыты (по ним считает калькулятор рапорта на повышение на сайте бланков)
-  if (p === '/api/promo-config' && M === 'GET') { const pc = await promoConfig(env); return json({ ...pc, items: (await premConfig(env)).items.map(i => ({ key: i.key, name: i.name, group: i.group })) }); }
+  if (p === '/api/promo-config' && M === 'GET') { const pc = await promoConfig(env); return json({ ...pc, items: (await premConfig(env)).items.map(i => ({ key: i.key, name: i.name, group: i.group, ...(PROMO_DIRECT.has(i.key) ? { direct: true } : {}) })) }); }
 
   let m;
   if ((m = /^\/media\/([A-Za-z0-9_-]{16,48})$/.exec(p)) && M === 'GET') return serveMedia(env, m[1]);
@@ -4507,7 +4515,7 @@ async function route(request, env, ctx) {
   if (p === '/api/courses' && M === 'GET') return listCourses(env, user);
   if ((m = /^\/api\/topics\/(\d+)$/.exec(p)) && M === 'GET') return getTopic(env, user, idParam(m[1]));
   if (p === '/api/premiums' && M === 'GET') return publicPremiums(env, user, url);
-  if (p === '/api/promo' && M === 'GET') { const pc = await promoConfig(env); const cfg = await premConfig(env); return json({ ...pc, defaults: PROMO_DEFAULT, items: cfg.items.map(i => ({ key: i.key, name: i.name, group: i.group })), can_edit: C.admin }); }
+  if (p === '/api/promo' && M === 'GET') { const pc = await promoConfig(env); const cfg = await premConfig(env); return json({ ...pc, defaults: PROMO_DEFAULT, items: cfg.items.map(i => ({ key: i.key, name: i.name, group: i.group, ...(PROMO_DIRECT.has(i.key) ? { direct: true } : {}) })), can_edit: C.admin }); }
   if (p === '/api/promo' && M === 'PUT') {
     requireCap(user, 'admin');
     const v = promoInput(await premConfig(env), await readJson(request, 200000));

@@ -27,11 +27,19 @@
       if (l) state.links[to] = [String(state.links[to] || "").trim(), l].filter(Boolean).join("\n");
       if (from in state.n || from in state.links || from in state.vp) { delete state.n[from]; delete state.links[from]; delete state.vp[from]; migrated = true; }
     });
+    // рапорт на повышение: пункты direct (благодарность от руководства) хранятся баллами; старые черновики хранили
+    // количество благодарностей (баллы ÷ perPoints) — переводим один раз (state.dv)
+    if (!opt.weekly && !state.dv) {
+      acts.forEach(a => { if (!a.direct) return; const t = parseInt(state.tp[a.key]) || 0, k = state.n[a.key] || 0;
+        if (t > 0) state.n[a.key] = t; else if (k > 0 && a.perPoints) state.n[a.key] = k * a.perPoints; delete state.tp[a.key]; });
+      state.dv = 1; migrated = true;
+    }
     if (migrated) try { localStorage.setItem(opt.storeKey, JSON.stringify(state)); } catch (e) {}
     // weekly: true — баллы еженедельного отчёта (поле wk, только «Основная отчётность»); иначе — pts (повышение).
     const weekly = !!opt.weekly;
     const isVar = a => weekly && grpOf(a.group) === "main" && a.wk === "n";
-    const unit = a => weekly ? (grpOf(a.group) === "main" && typeof a.wk === "number" ? a.wk : 0) : (a.pts || 0);
+    const isDir = a => !weekly && !!a.direct; // баллы вписываются как есть
+    const unit = a => isDir(a) ? 1 : weekly ? (grpOf(a.group) === "main" && typeof a.wk === "number" ? a.wk : 0) : (a.pts || 0);
     const sumOf = a => isVar(a) ? (n(a.key) > 0 ? Math.max(0, parseInt(state.vp[a.key]) || 0) : 0) : n(a.key) * unit(a);
     const save = () => localStorage.setItem(opt.storeKey, JSON.stringify(state));
     const box = opt.box;
@@ -42,11 +50,12 @@
       return `<div class="act${n > 0 ? " done" : ""}" data-key="${esc(key)}"${custom ? ' data-custom="1"' : ""}>
         <div class="act-top">
           ${custom ? `<input class="cust-name" data-cname placeholder="свой пункт: что сделано" value="${esc(custom.name)}">` : `<div class="act-name"${hint ? ` title="${esc(hint)}"` : ""}>${esc(name)}${pts ? `<span class="pts">+${pts}</span>` : ""}</div>`}
-          <div class="ctr"><button type="button" data-d="-1">−</button><input type="number" min="0" value="${n}" data-n><button type="button" data-d="1">+</button></div>
+          ${a && isDir(a) ? "" : `<div class="ctr"><button type="button" data-d="-1">−</button><input type="number" min="0" value="${n}" data-n><button type="button" data-d="1">+</button></div>`}
           ${custom ? `<button type="button" class="ev-x" data-cdel title="Убрать">×</button>` : ""}
         </div>
         ${a && isVar(a) ? `<div class="act-vp"><label>баллы (сумма за все) <input type="number" min="0" data-vp value="${esc(state.vp[key] || "")}" placeholder="0"></label><span class="act-note">баллы зависят от мероприятия</span></div>` : ""}
-        ${a && a.perPoints ? `<div class="act-vp"><label>баллы от руководства <input type="number" min="0" data-tp value="${esc(state.tp[key] || "")}" placeholder="0"></label><span class="act-note">каждые ${a.perPoints} баллов = 1 благодарность</span></div>` : ""}
+        ${a && isDir(a) ? `<div class="act-vp"><label>баллы от руководства <input type="number" min="0" data-n value="${n || ""}" placeholder="0"></label><span class="act-note">идут в итог как есть</span></div>` : ""}
+        ${a && a.perPoints && !isDir(a) ? `<div class="act-vp"><label>баллы от руководства <input type="number" min="0" data-tp value="${esc(state.tp[key] || "")}" placeholder="0"></label><span class="act-note">каждые ${a.perPoints} баллов = 1 благодарность</span></div>` : ""}
         ${a && weekly && a.wkNote ? `<div class="act-note">${esc(a.wkNote)}</div>` : ""}
         ${custom ? `<div class="cust-grp">${GKEYS.map(g => `<label><input type="radio" name="g_${esc(key)}" value="${g}"${grpOf(custom.group) === g ? " checked" : ""} data-cgrp> ${esc(SHORT[g] || GROUPS[g])}</label>`).join("")}</div>` : ""}
         <details${links ? " open" : ""}><summary>ссылки (<span data-lc>${linksOf(links).length}</span>)</summary><textarea data-links rows="2" placeholder="по одной ссылке на строку">${esc(links)}</textarea></details>
@@ -56,7 +65,7 @@
       let html = "";
       GKEYS.forEach(g => {
         html += `<h3>${GROUPS[g]}</h3>`;
-        acts.filter(a => grpOf(a.group) === g).forEach(a => { html += card(a.key, a.name, isVar(a) ? 0 : unit(a), null, a.hint, a); });
+        acts.filter(a => grpOf(a.group) === g).forEach(a => { html += card(a.key, a.name, isVar(a) || isDir(a) ? 0 : unit(a), null, a.hint, a); });
         state.custom.filter(c => grpOf(c.group) === g).forEach(c => { html += card(c.id, "", 0, c); });
       });
       html += `<button type="button" class="btn ghost" data-cadd>+ свой пункт</button>`;
@@ -92,7 +101,8 @@
       if (e.target.matches("[data-links]")) {
         if (c) c.links = e.target.value; else state.links[row.dataset.key] = e.target.value;
         const got = linksOf(e.target.value).length;
-        if (got > getN(row)) setN(row, got);
+        const a0 = c ? null : acts.find(x => x.key === row.dataset.key);
+        if (got > getN(row) && !(a0 && isDir(a0))) setN(row, got);
       }
       changed();
     });
@@ -107,27 +117,27 @@
     // Пункты для документа: {group, text, n, pts, sum, links}; sum — баллы за пункт в текущем режиме
     function items() {
       const out = [];
-      acts.forEach(a => { const k = n(a.key); if (k > 0) out.push({ key: a.key, group: grpOf(a.group), text: a.doc || a.name, n: k, pts: unit(a), sum: sumOf(a), links: linksOf(state.links[a.key]), vp: isVar(a) ? Math.max(0, parseInt(state.vp[a.key]) || 0) : undefined, points: a.perPoints && state.tp[a.key] ? state.tp[a.key] : undefined }); });
+      acts.forEach(a => { const k = n(a.key); if (k > 0) out.push({ key: a.key, group: grpOf(a.group), text: a.doc || a.name, n: k, pts: unit(a), sum: sumOf(a), links: linksOf(state.links[a.key]), vp: isVar(a) ? Math.max(0, parseInt(state.vp[a.key]) || 0) : undefined, points: isDir(a) ? k : a.perPoints && state.tp[a.key] ? state.tp[a.key] : undefined, direct: isDir(a) || undefined }); });
       state.custom.forEach(c => { if (c.n > 0 && String(c.name || "").trim()) out.push({ key: c.id, group: grpOf(c.group), text: c.name.trim(), n: c.n, pts: 0, sum: 0, links: linksOf(c.links), custom: true }); });
       return out;
     }
     function total() { return acts.reduce((s, a) => s + sumOf(a), 0); }
-    function reset() { state = { n: {}, links: {}, custom: [], vp: {}, tp: {} }; save(); draw(); opt.onChange && opt.onChange(); }
+    function reset() { state = { n: {}, links: {}, custom: [], vp: {}, tp: {}, dv: 1 }; save(); draw(); opt.onChange && opt.onChange(); }
     // Строки пункта документа. att — общий счётчик приложений {n}.
     // «Вид работы — штук: N (… баллов);», под ним каждая ссылка с новой строки: «а) адрес» (в PNG — «а) Приложение №N»).
     // Каждое действие заканчивается «;», последнее в разделе — «.»; свой «.», «,» или «;» в конце названия убирается.
     function docList(group, att, showPts) {
       const list = items().filter(i => i.group === group);
       return list.map((i, idx) => {
-        const r = [`${String(i.text).replace(/[\s.,;]+$/, "")} — штук: `, { t: String(i.n), b: true }];
-        if (showPts && i.sum) r.push(` (${i.sum} ${ballov(i.sum)})`);
+        const r = [`${String(i.text).replace(/[\s.,;]+$/, "")} — ${i.direct ? "баллов" : "штук"}: `, { t: String(i.n), b: true }];
+        if (showPts && i.sum && !i.direct) r.push(` (${i.sum} ${ballov(i.sum)})`);
         r.push(idx === list.length - 1 ? "." : ";");
         const links = i.links.map(u => ({ url: u, alt: `Приложение №${++att.n}` }));
         return links.length ? { r, links } : r;
       });
     }
-    // всего выполнено мероприятий и служебных действий (сумма «штук» по всем отмеченным пунктам)
-    function count() { return items().reduce((s, i) => s + i.n, 0); }
+    // всего выполнено мероприятий и служебных действий (сумма «штук» по всем отмеченным пунктам; баллы благодарностей не штуки)
+    function count() { return items().reduce((s, i) => s + (i.direct ? 0 : i.n), 0); }
     draw();
     return { items, total, count, n, reset, docList, groups: GLIST, redraw: draw, state: () => state };
   };
