@@ -286,6 +286,7 @@ route('/promo\\?.*', () => App.routes.find(r => r.p === '/promo').fn(), { cap: '
 
 // ---------- база данных (документация) ----------
 // Разметка статей: # заголовок, ## подзаголовок, - список, 1. нумерованный, **жирный**, `код`, [текст](https://ссылка), пустая строка — новый абзац.
+// Картинка: строка «![описание](assets/lectures/<тема>/<файл>.webp)» — файл из репозитория (tools/content/fetch-images.py), ленивая загрузка, без подписи.
 // Схема: строка «```схема Подпись», затем разметка <svg>…</svg>, затем строка «```». SVG встраивается в текст (без загрузок) после очистки safeSvg.
 function mdInline(t) {
   return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[\s(«])\*([^*\s][^*]*?)\*(?=[\s.,;:!?)»]|$)/g, '$1<i>$2</i>')
@@ -328,6 +329,7 @@ function md(src) {
     if (/^\s*\|.*\|\s*$/.test(line)) { flushP(); flushL(); (table = table || []).push(line); continue; } else flushT();
     if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { flushP(); flushL(); out.push('<hr>'); continue; }
     if (!line.trim()) { flushP(); flushL(); continue; }
+    if ((m = /^\s*!\[([^\]]*)\]\((assets\/lectures\/[a-z0-9_\/-]+\.(?:webp|jpe?g|png))\)\s*$/.exec(line))) { flushP(); flushL(); out.push(`<figure class="lec-img"><img src="${m[2]}" alt="${esc(m[1])}" loading="lazy" decoding="async"></figure>`); continue; }
     if ((m = /^(#{1,3})\s+(.*)$/.exec(line))) { flushP(); flushL(); const h = m[1].length + 1; out.push(`<h${h}>${mdInline(m[2])}</h${h}>`); continue; }
     if ((m = /^\s*[-*•]\s+(.*)$/.exec(line))) { flushP(); if (!list || list.t !== 'ul') { flushL(); list = { t: 'ul', items: [] }; } list.items.push(m[1]); continue; }
     if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { flushP(); if (!list || list.t !== 'ol') { flushL(); list = { t: 'ol', items: [] }; } list.items.push(m[1]); continue; }

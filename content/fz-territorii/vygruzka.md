@@ -205,63 +205,63 @@
 
 ## Сообщение 2 — Fantar 🚀 (post-77427, 20.01.2024 в 12:56, ред. 15.10.2026 в 16:27)
 
-[https://forum.rmrp.ru/attachments/6496-34afec55c1f3f801aa774b4497f966b8-png.17868/]
+![](assets/lectures/fz-territorii/17868.webp)
 
 ПРИЛОЖЕНИЕ К ФЕДЕРАЛЬНОМУ ЗАКОНУ
 
-[https://forum.rmrp.ru/attachments/lldxvgv-png.17869/]
+![](assets/lectures/fz-territorii/17869.webp)
 
-[https://forum.rmrp.ru/attachments/1787220425483-png.320886/]
+![территория Московского Кремля](assets/lectures/fz-territorii/320886.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_20-57-47-89-png.17877/]
+![холл ФСО](assets/lectures/fz-territorii/17877.webp)
 
-[https://forum.rmrp.ru/attachments/24-05-2024_151ucu711-png.17870/]
+![территория УФСБ](assets/lectures/fz-territorii/17870.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_20-59-12-12-png.17875/]
+![холл УФСБ](assets/lectures/fz-territorii/17875.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_20-59-01-21-png.17876/]
+![холл УФСБ](assets/lectures/fz-territorii/17876.webp)
 
-[https://forum.rmrp.ru/attachments/1791627146776-png.363450/]
+![территория УВД по ЦАО](assets/lectures/fz-territorii/363450.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_21-02-01-25-png.17878/]
+![холл УВД по ЦАО](assets/lectures/fz-territorii/17878.webp)
 
-[https://forum.rmrp.ru/attachments/1723739321802-png.23293/]
+![территория УГИБДД](assets/lectures/fz-territorii/23293.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_21-35-49-10-png.17879/]
+![холл УГИБДД](assets/lectures/fz-territorii/17879.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_21-08-19-76-png.17881/]
+![территория ВГТРК "Москва Live](assets/lectures/fz-territorii/17881.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_21-08-15-91-png.17882/]
+![территория ВГТРК "Москва Live](assets/lectures/fz-territorii/17882.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_21-08-38-48-png.17880/]
+![холл ВГТРК "Москва Live"](assets/lectures/fz-territorii/17880.webp)
 
-[https://forum.rmrp.ru/attachments/1789234670094-png.340943/]
+![территория УФСВНГ](assets/lectures/fz-territorii/340943.webp)
 
 ## Сообщение 3 — Fantar 🚀 (post-77428, 20.01.2024 в 12:56, ред. 15.10.2026 в 17:13)
 
-[https://forum.rmrp.ru/attachments/6496-34afec55c1f3f801aa774b4497f966b8-png.17883/]
+![](assets/lectures/fz-territorii/17883.webp)
 
 ПРИЛОЖЕНИЕ К ФЕДЕРАЛЬНОМУ ЗАКОНУ
 
-[https://forum.rmrp.ru/attachments/lldxvgv-png.17884/]
+![](assets/lectures/fz-territorii/17884.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_20-58-20-42-png.17889/]
+![территория ГБУЗ ЦГБ № 3](assets/lectures/fz-territorii/17889.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_20-58-30-01-png.17888/]
+![холл ГБУЗ ЦГБ № 3](assets/lectures/fz-territorii/17888.webp)
 
-[https://forum.rmrp.ru/attachments/24-05-2024_1521132-png.17886/]
+![территория ГБУЗ ЦГБ № 7](assets/lectures/fz-territorii/17886.webp)
 
-[https://forum.rmrp.ru/attachments/grand_theft_auto_v_screenshot_2024-05-24_-_21-02-49-35-png.17887/]
+![холл ГБУЗ ЦГБ № 7](assets/lectures/fz-territorii/17887.webp)
 
-[https://forum.rmrp.ru/attachments/1791625262519-png.363429/]
+![территория Вооруженных Сил Российской Федерации](assets/lectures/fz-territorii/363429.webp)
 
-[https://forum.rmrp.ru/attachments/1787220584722-png.320890/]
+![территория Прокуратуры](assets/lectures/fz-territorii/320890.webp)
 
-[https://forum.rmrp.ru/attachments/1787220620336-png.320891/]
+![территория Следственного комитета](assets/lectures/fz-territorii/320891.webp)
 
-[https://forum.rmrp.ru/attachments/1787220648084-png.320892/]
+![территория Государственной думы](assets/lectures/fz-territorii/320892.webp)
 
-[https://forum.rmrp.ru/attachments/1792073621699-png.367770/]
+![территория Правительства](assets/lectures/fz-territorii/367770.webp)
 
 ## Сообщение 4 — Fantar 🚀 (post-479503, 27.10.2025 в 01:46)
 

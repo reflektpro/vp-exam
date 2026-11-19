@@ -240,19 +240,19 @@
 
 Прилегающая территория фракции ЧОП 'Синдикат'
 
-[https://forum.rmrp.ru/attachments/chop-jpg.40038/]
+![Прилегающие территории фракций](assets/lectures/ooc-poip/40038.webp)
 
 Прилегающая территория фракции Кафе 'Бакшиш'
 
-[https://forum.rmrp.ru/attachments/bakshish-jpg.40039/]
+![Прилегающие территории фракций](assets/lectures/ooc-poip/40039.webp)
 
 Прилегающая территория фракции СТО 'Белозёрские'
 
-[https://forum.rmrp.ru/attachments/sto-jpg.40040/]
+![Прилегающие территории фракций](assets/lectures/ooc-poip/40040.webp)
 
 Прилегающая территория фракции Бар 'Ночные волки'
 
-[https://forum.rmrp.ru/attachments/volki-jpg.40041/]
+![Прилегающие территории фракций](assets/lectures/ooc-poip/40041.webp)
 
 > Примечание: титулом семьи является территория, которая указана в регистрации семьи.
 

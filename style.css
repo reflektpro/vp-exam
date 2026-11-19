@@ -745,6 +745,8 @@ button.chip{cursor:pointer;color:var(--txt);font:inherit;font-size:13px}.uf-bar{
 .users-t tr[hidden]{display:none!important}
 .lec-fig{margin:16px auto 20px;max-width:560px}
 .lec-svg svg{display:block;width:100%;height:auto;border-radius:6px}
+.lec-img{margin:16px auto 20px;max-width:560px}
+.lec-img img{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:6px}
 .lec-fig figcaption{font-size:.85em;line-height:1.45;color:var(--mut);margin-top:7px;text-align:center}
 /* ===== Рапорт на повышение — синяя стилистика бланков сайта vp-raport-offline (форма, «Мой рапорт», проверка руководством).
    Только в области .rep-blue / .promo-doc; еженедельный отчёт и остальная консоль не меняются. ===== */
