@@ -80,7 +80,7 @@
 "du-011":{"ext_id":"r6-du-011","hash":"d622184b87d7","base":"full","v":1},
 "du-012":{"ext_id":"r6-du-012","hash":"dee8fc9b6269","base":"medium","v":1},
 "du-013":{"ext_id":"r6-du-013","hash":"8963f8cb3a2e","base":"full","v":1},
-"du-014":{"ext_id":"r6-du-014","hash":"43a734ef4cbf","base":"simple","v":1},
+"du-014":{"ext_id":"r6-du-014~v2","hash":"78a6ea98d63f","base":"medium","v":2},
 "du-015":{"ext_id":"r6-du-015","hash":"d1305f94a9fa","base":"simple","v":1},
 "du-016":{"ext_id":"r6-du-016","hash":"af15c3c4f408","base":"medium","v":1},
 "du-017":{"ext_id":"r6-du-017","hash":"7651e788d574","base":"simple","v":1},
