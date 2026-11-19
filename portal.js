@@ -254,7 +254,7 @@ route('/promo', async () => {
   const opts = (sel) => d.items.map(i => `<option value="${esc(i.key)}" ${i.key === sel ? 'selected' : ''}>${esc(i.name)}</option>`).join('');
   const needRow = (k, v) => `<div class="needrow"><select class="nk">${opts(k)}</select><input type="number" class="nv" min="1" value="${v}" style="width:70px"><button type="button" class="btn sm danger nx">✕</button></div>`;
   const stepRow = (st) => `<tr class="lrow"><td><input class="lr" value="${esc(st.rank)}" list="rankList"></td><td><input class="lt" value="${esc(st.to)}" list="rankList"></td><td><input class="lp" type="number" min="0" value="${st.points}" style="width:90px"></td>
-    <td class="needs">${Object.entries(st.need).map(([k, v]) => needRow(k, v)).join('')}<button type="button" class="btn sm na">+ пункт</button></td><td><button type="button" class="btn sm danger lx">Удалить</button></td></tr>`;
+    <td class="needs">${Object.entries(st.need).map(([k, v]) => needRow(k, v)).join('')}<button type="button" class="btn sm na">+ пункт</button></td><td style="white-space:nowrap"><button type="button" class="btn sm lu" title="Выше">↑</button> <button type="button" class="btn sm ld" title="Ниже">↓</button> <button type="button" class="btn sm danger lx">Удалить</button></td></tr>`;
   setView(`<p><a href="#/promo">← Система повышения</a></p><h1>Правила повышения</h1>
     <datalist id="rankList">${RANKS.map(r => `<option>${r}</option>`).join('')}</datalist>
     <div class="card"><label class="f" style="max-width:320px"><span>Баллов за один недостающий пункт</span><input id="ppi" type="number" min="1" value="${C.points_per_item}"></label>
@@ -265,6 +265,9 @@ route('/promo', async () => {
     <div class="row"><button class="btn gold" id="saveP">Сохранить</button><button class="btn" id="resetP">Вернуть исходные правила</button><a class="btn" href="#/promo">Отмена</a></div><div id="perr" class="ferr"></div>`);
   const bindRow = (tr) => {
     tr.querySelector('.lx').onclick = () => tr.remove();
+    // порядок ступеней: перестановка на месте, сохраняется общей кнопкой «Сохранить» (одним запросом)
+    tr.querySelector('.lu').onclick = () => { const p = tr.previousElementSibling; if (p && p.classList.contains('lrow')) p.before(tr); };
+    tr.querySelector('.ld').onclick = () => { const n = tr.nextElementSibling; if (n && n.classList.contains('lrow')) n.after(tr); };
     tr.querySelector('.na').onclick = (e) => { e.target.insertAdjacentHTML('beforebegin', needRow(d.items[0].key, 1)); bindNeeds(tr); };
     bindNeeds(tr);
   };

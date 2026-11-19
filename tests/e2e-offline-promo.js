@@ -139,14 +139,14 @@ const sql = async (q, a) => (await (await fetch(API + '/__test/sql', { method: '
   const setN = async (key, n) => { await s.p.fill(`.act[data-key=${key}] [data-n]`, String(n)); await s.p.dispatchEvent(`.act[data-key=${key}] [data-n]`, 'input'); };
   for (const [k, n] of Object.entries({ prof: 6, vygovor: 5, prizyv: 3, proc: 3, kraz_otbitie: 4, postavka: 10 })) await setN(k, n);
   const pr = await s.p.evaluate(() => { const r = window.__vp.compute(); return { total: r.total, left: r.left, met: r.met, bar: document.getElementById('barText').textContent, note: document.getElementById('critNote').textContent }; });
-  check('бланк: ст. лейтенант → капитан: 1060 / 1500, не хватает 440 баллов (как на сервере)', pr.total === 1060 && !pr.met && pr.left.pts === 440 && /1060 \/ 1500/.test(pr.bar) && /440 баллов/.test(pr.note), pr);
+  check('бланк: ст. лейтенант → капитан: 940 / 1500, не хватает 560 баллов (как на сервере)', pr.total === 940 && !pr.met && pr.left.pts === 560 && /940 \/ 1500/.test(pr.bar) && /560 баллов/.test(pr.note), pr);
   await s.ctx.close();
   // без сети: копия правил из браузера применяется до первой отрисовки
   s = await open(A, { offlinePromo: true });
   await s.p.goto(OFF + 'povyshenie.html', { waitUntil: 'domcontentloaded' });
   await readyPromo(s.p);
   const labOff = await s.p.evaluate(() => ({ postavka: (document.querySelector('.act[data-key=postavka] .pts') || {}).textContent, ladder: Object.keys(window.PROMO.ladder)[0] }));
-  check('без сети: подписи и ступени из сохранённой копии', labOff.postavka === '+25' && labOff.ladder === 'Старший сержант', labOff);
+  check('без сети: подписи и ступени из сохранённой копии', labOff.postavka === '+25' && labOff.ladder === 'Сержант', labOff);
   check('новые проверки: ошибок нет', s.st.errs.length === 0, s.st.errs);
   await s.ctx.close();
   await call('POST', '/api/promo/reset', A);

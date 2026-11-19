@@ -1,8 +1,9 @@
 {
- "_note": "Снимок prem_config promo/items и promo_missing_points с прода (16.11.2026) — только правила, без персональных данных",
+ "_note": "Снимок prem_config promo/items и promo_missing_points с прода (19.11.2026, ступень «Сержант» первой) — только правила, без персональных данных",
  "config": {
   "points_per_item": 100,
   "pts": {
+   "thanks": 0,
    "postavka": 25,
    "otbitie": 25,
    "training": 30,
@@ -29,12 +30,11 @@
    "patrol": 25,
    "lecture_va": 30,
    "exam_va": 50,
-   "thanks": 0,
    "city": 25,
    "reattest": 50,
    "vzysk": 35,
    "vygovor": 50,
-   "prof": 30,
+   "prof": 10,
    "prizyv": 30,
    "guardhouse": 75,
    "convoy": 20,
@@ -48,6 +48,15 @@
    "soch": 75
   },
   "ladder": [
+   {
+    "rank": "Сержант",
+    "to": "Старший сержант",
+    "points": 200,
+    "need": {
+     "naryad": 1,
+     "postavka": 5
+    }
+   },
    {
     "rank": "Старший сержант",
     "to": "Старшина",

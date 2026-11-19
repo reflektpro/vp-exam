@@ -61,7 +61,7 @@ ok('проверено случаев (все ступени, оба режим�
 {
   const P = loadRules(); PC.applyConfig(P, { config: PROD.config, items: PROD.items, missing_points: false });
   const r = PC.calc(P, 'Старший лейтенант', { prof: 6, vygovor: 5, prizyv: 3, proc: 3, kraz_otbitie: 4, postavka: 10 }, {});
-  ok('пример: 180+250+90+150+140+250 = 1060 из 1500, не хватает 440 баллов', r.total === 1060 && !r.met && r.left.pts === 440 && r.left.swap === 0, r);
+  ok('пример: 60+250+90+150+140+250 = 940 из 1500, не хватает 560 баллов', r.total === 940 && !r.met && r.left.pts === 560 && r.left.swap === 0, r);
 }
 // благодарность от руководства: баллы идут в итог как есть, без деления на 50 (настройка pts.thanks = 0 не мешает)
 {
@@ -69,14 +69,14 @@ ok('проверено случаев (все ступени, оба режим�
   const P = loadRules(); PC.applyConfig(P, { config: PROD.config, items: PROD.items, missing_points: true });
   const counts = { patrol: 1, thanks: 1500, prof: 3, prizyv: 2 };
   const r = PC.calc(P, 'Младший лейтенант', counts, {});
-  ok('бланк: 1500 баллов благодарностей идут в итог (по снимку правил: 25 + 1500 + 90 + 60 = 1675 из 1000, критерии выполнены)', r.total === 1675 && r.met, r);
+  ok('бланк: 1500 баллов благодарностей идут в итог (по снимку правил: 25 + 1500 + 30 + 60 = 1615 из 1000, критерии выполнены)', r.total === 1615 && r.met, r);
   ok('бланк: только благодарности 1500 → 1500 баллов', PC.calc(P, 'Рядовой', { thanks: 1500 }, {}).total === 1500);
   const pc = { config: PROD.config, items: PROD.items, missing_points: true };
   const items = Object.entries(counts).map(([key, n]) => ({ key, n })), review = {}; items.forEach(i => { review[i.key] = { status: 'ok' }; });
   const s = W.promoSummary(pc, 'Младший лейтенант', items, review, []);
-  ok('сервер: 1500 баллов благодарностей засчитаны (1675, выполнено)', s.points === 1675 && s.claimed === 1675 && s.met, s);
+  ok('сервер: 1500 баллов благодарностей засчитаны (1615, выполнено)', s.points === 1615 && s.claimed === 1615 && s.met, s);
   const s2 = W.promoSummary(pc, 'Младший лейтенант', items, { ...review, thanks: { status: 'ok', n_ok: 1000 } }, []);
-  ok('сервер: засчитано меньше баллов благодарностей (1000 из 1500) → 1175', s2.points === 1175 && s2.claimed === 1675, s2);
+  ok('сервер: засчитано меньше баллов благодарностей (1000 из 1500) → 1115', s2.points === 1115 && s2.claimed === 1615, s2);
   const cfg = JSON.parse(JSON.stringify(W.PREM_DEFAULT));
   const hdr = { rank: 'Младший лейтенант', name: 'Тест Тестов', static_id: '1', target: 'Лейтенант' };
   const inNew = W.promoRaportInput(cfg, { header: hdr, items: [{ key: 'thanks', n: 1500, points: 1500 }, { key: 'prof', n: 3 }] });
