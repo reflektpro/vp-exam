@@ -7,7 +7,7 @@ const cfg = JSON.parse(JSON.stringify(W.PREM_DEFAULT));
 const rub = n => n.toLocaleString('ru-RU') + ' ₽';
 
 // --- таблицы как в приказе ---
-ok('39 оплачиваемых пунктов (Таблицы 1–2)', cfg.items.filter(i => i.pay > 0).length === 39);
+ok('40 оплачиваемых пунктов (Таблицы 1–2 + «Проверка рапортов на взыскание»)', cfg.items.filter(i => i.pay > 0).length === 40);
 ok('7 должностей, максимальная выплата = 2,5 × средний оклад', cfg.positions.length === 7 && cfg.positions.every(p => p.max === p.avg * 2.5 && p.avg === p.min * 2 && p.min === p.zero * 2));
 ok('Инспектор ВП: 55 000 / 110 000 / 220 000 / 550 000', JSON.stringify(cfg.positions.find(p => p.key === 'insp')) === JSON.stringify({ key: 'insp', name: 'Инспектор ВП', zero: 55000, min: 110000, avg: 220000, max: 550000 }));
 ok('план: ровно две строки — баллы отчёта и действия ГУ ВП; пороги 200/400 и 5/10', cfg.plan.map(l => `${l.key}:${l.min}/${l.normal}`).join() === 'points:200/400,gu:5/10', cfg.plan);
